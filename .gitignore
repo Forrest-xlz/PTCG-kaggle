@@ -13,3 +13,5 @@ outputs/
 __pycache__/
 *.py[cod]
 
+# wandb logs
+wandb/

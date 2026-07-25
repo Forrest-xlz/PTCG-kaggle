@@ -5,7 +5,7 @@ train:
   data: data/training-cache
   output: outputs/${version_name}
   epochs: 3
-  batch_size: 2048
+  batch_size: 4096
   learning_rate: 0.0003
   weight_decay: 0.01
   beta1: 0.9
