@@ -41,6 +41,10 @@ to 64 and invalid candidates are masked out of the policy loss. Because replay
 datasets can contain millions of samples, use `train.max_samples` for bounded
 trials before setting it to `null` for all samples.
 
+`train.cg_path` must point to the parent directory containing the competition
+`cg` package. The default repository layout uses
+`../pokemon_tcg_ai_battle/sample_submission`.
+
 The root `version_name` can be reused as `${version_name}` in values such as
 `train.output` and `wandb.name`. The AdamW optimizer supports configurable
 `beta1`/`beta2`; its learning rate warms up linearly for `warmup_ratio` of all

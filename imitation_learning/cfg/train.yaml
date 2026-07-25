@@ -1,6 +1,7 @@
 version_name: pure-bc-e4-d4-v1
 
 train:
+  cg_path: ../pokemon_tcg_ai_battle/sample_submission
   data: data/training
   output: outputs/${version_name}
   epochs: 3

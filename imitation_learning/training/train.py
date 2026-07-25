@@ -15,23 +15,47 @@ from pathlib import Path
 
 import torch
 import yaml
-from cg.api import SelectContext, all_attack, all_card_data, to_observation_class
 
-# Support both `python -m training.train` and direct script execution.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH = PROJECT_ROOT / "cfg" / "train.yaml"
+
+# Configure local project imports before importing cg/model modules. `cg_path`
+# must point to the parent directory containing the `cg` package.
+if not CONFIG_PATH.exists():
+    raise FileNotFoundError(f"Training config not found: {CONFIG_PATH}")
+with CONFIG_PATH.open("r", encoding="utf-8") as _config_handle:
+    _bootstrap_config = yaml.safe_load(_config_handle)
+_cg_value = (_bootstrap_config or {}).get("train", {}).get("cg_path")
+if not _cg_value:
+    raise ValueError("train.cg_path is required in cfg/train.yaml")
+_cg_path = Path(_cg_value)
+if not _cg_path.is_absolute():
+    _cg_path = PROJECT_ROOT / _cg_path
+_cg_path = _cg_path.resolve()
+if _cg_path.name == "cg":
+    _cg_path = _cg_path.parent
+if not (_cg_path / "cg" / "__init__.py").exists():
+    raise FileNotFoundError(
+        f"train.cg_path must contain the cg package; not found under: {_cg_path}"
+    )
+
+# Support both module execution and direct script execution.
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+if str(_cg_path) not in sys.path:
+    sys.path.insert(0, str(_cg_path))
 
+from cg.api import SelectContext, all_attack, all_card_data, to_observation_class
 from model.features import decoder_features, encoder_features, enumerate_actions
 from model.network import ModelConfig, PTCGTransformer
 
 
 MAX_ACTIONS = 64
-CONFIG_PATH = PROJECT_ROOT / "cfg" / "train.yaml"
 
 
 @dataclass(frozen=True)
 class TrainSettings:
+    cg_path: str
     data: str
     output: str
     epochs: int
