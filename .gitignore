@@ -1,0 +1,15 @@
+# Local agent/runtime metadata
+.agents/
+
+# Large generated datasets and replay archives
+data/
+replay_episodes/
+
+# Training outputs and checkpoints
+output/
+outputs/
+
+# Python caches
+__pycache__/
+*.py[cod]
+

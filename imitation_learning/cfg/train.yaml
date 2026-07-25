@@ -1,0 +1,35 @@
+version_name: pure-bc-e4-d4-v1
+
+train:
+  data: data/training
+  output: outputs/${version_name}
+  epochs: 3
+  batch_size: 2048
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  beta1: 0.9
+  beta2: 0.999
+  warmup_ratio: 0.01 # 1% of all optimizer steps; 0.1 would mean 10%.
+  max_samples: null  # Use null for every extracted sample.
+  seed: 42
+  device: cuda         # auto, cpu, cuda, or cuda:0
+  preload: true
+  preload_workers: 4
+  preload_chunk_size: 1000
+  shuffle_buffer: 10000 # Used only when preload is false.
+  log_every_steps: 10
+  grad_clip_norm: 1.0
+
+model:
+  d_model: 128
+  ffn_multiplier: 2     # d_feedforward = d_model * ffn_multiplier
+  num_heads: 2          # d_model must be divisible by num_heads.
+  encoder_layers: 1
+  decoder_layers: 1
+
+wandb:
+  enabled: true
+  project: ptcg_bc
+  group: pure_bc
+  name: ${version_name}
+  mode: online          # online, offline, or disabled
