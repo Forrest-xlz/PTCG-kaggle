@@ -7,6 +7,7 @@ import math
 import multiprocessing as mp
 import queue
 import random
+import sys
 import time
 import traceback
 from dataclasses import asdict, dataclass
@@ -16,12 +17,16 @@ import torch
 import yaml
 from cg.api import SelectContext, all_attack, all_card_data, to_observation_class
 
+# Support both `python -m training.train` and direct script execution.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from model.features import decoder_features, encoder_features, enumerate_actions
 from model.network import ModelConfig, PTCGTransformer
 
 
 MAX_ACTIONS = 64
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "cfg" / "train.yaml"
 
 

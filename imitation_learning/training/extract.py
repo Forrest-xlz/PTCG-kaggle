@@ -5,6 +5,7 @@ import gzip
 import io
 import json
 import os
+import sys
 import tempfile
 import zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -13,10 +14,14 @@ from pathlib import Path
 
 import yaml
 
+# Support both `python -m training.extract` and direct script execution.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from deck.extract import extract_decks
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "cfg" / "extract.yaml"
 
 
@@ -178,4 +183,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
