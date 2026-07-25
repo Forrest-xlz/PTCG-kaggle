@@ -1,0 +1,7 @@
+extract:
+  input: ../replay_episodes
+  output: data/training
+  workers: 4
+  limit_members: null # Use a small number such as 20 for a smoke test.
+  force: false        # true rebuilds existing completed shards.
+

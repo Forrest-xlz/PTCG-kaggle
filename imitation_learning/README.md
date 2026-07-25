@@ -23,15 +23,16 @@ sample-submission directory to `PYTHONPATH`).
 ```bash
 pip install -r requirements.txt
 python -m deck.extract --input "../replay episodes" --output data/decks
-python -m training.extract --input "../replay episodes" --output data/training
+python -m training.extract
 python -m training.train
 ```
 
 Both extractors create one output shard and one metadata file per ZIP. Existing
-valid shards are skipped, so interrupted runs are resumable. `--workers` sets
-the number of archive worker processes; keep it modest because ZIP decompression
-and JSON parsing are both CPU- and memory-intensive. Use `--limit-members 20`
-for a smoke test.
+valid shards are skipped, so interrupted runs are resumable. Training extraction
+has no command-line parameters and always reads `cfg/extract.yaml`; its
+`workers`, `limit_members`, and `force` fields control parallelism, smoke tests,
+and rebuilding. Keep the worker count modest because ZIP decompression and JSON
+parsing are both CPU- and memory-intensive.
 
 Training has no command-line parameters. It always reads `cfg/train.yaml`, whose
 `train`, `model`, and `wandb` sections control data paths, batching/preloading,
