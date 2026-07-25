@@ -1,7 +1,7 @@
 extract:
   input: ../replay_episodes
   output: data/training
-  workers: 12
-  limit_members: 20 # Use a small number such as 20 for a smoke test.
+  workers: 16
+  winner_only: true
+  limit_members: 100 # Set a small number such as 20 only for a smoke test.
   force: false        # true rebuilds existing completed shards.
-

@@ -60,6 +60,7 @@ cache:
   input: data/training
   output: data/training-cache
   workers: 4
+  samples_per_shard: 250000
   force: false
 ```
 
@@ -76,6 +77,7 @@ Update `cfg/train.yaml`:
 train:
   data: data/training-cache
   precision: bf16  # fp32, fp16, or bf16
+  shuffle_mode: global  # global or shard
 ```
 
 The existing JSONL preload settings are removed because mmap training neither
@@ -90,22 +92,26 @@ preloads all samples nor streams raw JSON:
 
 ## Cache Shard Layout
 
-Each source `<date>.jsonl.gz` produces one atomic cache directory named
-`<date>.cache`. A cache directory contains:
+Each source `<date>.jsonl.gz` produces one or more atomic cache directories,
+with no directory exceeding `cache.samples_per_shard` representable samples.
+A cache directory contains one `data.bin` with aligned array sections and one
+`meta.json` describing each section's byte offset, dtype, shape, and byte
+length. Packing the arrays into one binary file keeps the number of open mmap
+file descriptors proportional to the number of active shards rather than the
+number of arrays. The logical sections are:
 
-| File | Type | Meaning |
+| Section | Type | Meaning |
 |---|---|---|
-| `encoder_index.bin` | uint16 | Flat encoder feature indices |
-| `encoder_value.bin` | float16 | Flat encoder per-sample weights |
-| `encoder_ptr.bin` | uint32 | Per-sample boundaries into encoder arrays |
-| `encoder_offset.bin` | uint16 | 24 local EmbeddingBag word offsets per sample |
-| `decoder_index.bin` | uint32 | Flat decoder feature indices |
-| `decoder_ptr.bin` | uint32 | Per-sample boundaries into decoder indices |
-| `decoder_offset.bin` | uint16 | Flat local decoder word offsets |
-| `decoder_offset_ptr.bin` | uint32 | Per-sample boundaries into decoder offsets |
-| `target.bin` | uint8 | Selected candidate index |
-| `action_count.bin` | uint8 | Number of valid candidate actions |
-| `meta.json` | JSON | Schema, counts, shapes, source identity, feature constants |
+| `encoder_index` | uint16 | Flat encoder feature indices |
+| `encoder_value` | float16 | Flat encoder per-sample weights |
+| `encoder_ptr` | uint32 | Per-sample boundaries into encoder arrays |
+| `encoder_offset` | uint16 | 24 local EmbeddingBag word offsets per sample |
+| `decoder_index` | uint32 | Flat decoder feature indices |
+| `decoder_ptr` | uint32 | Per-sample boundaries into decoder indices |
+| `decoder_offset` | uint16 | Flat local decoder word offsets |
+| `decoder_offset_ptr` | uint32 | Per-sample boundaries into decoder offsets |
+| `target` | uint8 | Selected candidate index |
+| `action_count` | uint8 | Number of valid candidate actions |
 
 The decoder value array is omitted. The current decoder feature builder emits
 only weight `1`, so `EmbeddingBag` receives `per_sample_weights=None`.
@@ -130,9 +136,10 @@ use NumPy dtypes and buffers.
 
 ## Atomicity and Resumability
 
-Workers build different source shards independently. Each worker writes to a
-temporary sibling directory, flushes and closes all files, writes `meta.json`
-last, and atomically renames the directory to its final name.
+Workers process different source JSONL shards independently. Each worker splits
+its output at `cache.samples_per_shard`, writes each part to a temporary sibling
+directory, flushes and closes all files, writes `meta.json` last, and atomically
+renames the directory to its final name.
 
 A completed shard is skipped only when all of these match:
 
@@ -151,18 +158,23 @@ Training discovers and validates all cache shards before creating the model.
 It memory-maps arrays read-only. It does not create a `PreparedSample` for every
 record.
 
-For each epoch:
+For `shuffle_mode: global`, each epoch creates a compact uint32 global sample
+permutation when the total sample count is below 2^32, maps each global ID to a
+physical shard and local ID, and assembles batches from those locations. For
+30 million samples the permutation occupies about 120 MB. Larger datasets use
+uint64 IDs. This gives a true global shuffle while retaining physical shards
+for resumability and bounded cache construction.
 
-1. Shuffle shard order with the configured training seed.
-2. Create a uint32 permutation only for the current shard.
-3. Read samples in that order and assemble batches.
-4. Concatenate the selected mmap slices into bounded batch arrays.
-5. Convert indices and offsets to matching int32 tensors.
-6. Convert encoder weights to the selected floating compute dtype.
-7. Transfer the batch to the configured device.
+For `shuffle_mode: shard`, each epoch shuffles shard order and creates a uint32
+permutation only for the current shard. Every shard is consumed exactly once
+per global epoch. Optimizer state, scheduler state, and global step continue
+across shard boundaries.
 
-This is a shard-level approximation to a global shuffle. It avoids a Python
-list or a full-dataset permutation containing tens of millions of entries.
+Both modes concatenate selected mmap slices into bounded batch arrays, convert
+indices and offsets to matching int32 tensors, convert encoder weights to the
+selected floating compute dtype, and transfer only the batch to the configured
+device. Global shuffle is the default; shard shuffle is the fallback when
+random mmap access limits storage throughput.
 
 The scheduler's total step count uses the validated cache metadata, capped by
 `max_samples` when configured.
@@ -229,10 +241,13 @@ Tests use a small synthetic cache and representative real replay records:
    output as explicit all-one weights.
 5. Verify dtype overflow and stale metadata fail with clear errors.
 6. Verify shard resume and force-rebuild behavior.
-7. Run one optimizer step in FP32.
-8. Run CUDA FP16 and BF16 smoke tests when the current device supports them;
+7. Verify `samples_per_shard` bounds every completed cache part.
+8. Verify global shuffle visits every sample exactly once and shard shuffle
+   visits every shard exactly once per global epoch.
+9. Run one optimizer step in FP32.
+10. Run CUDA FP16 and BF16 smoke tests when the current device supports them;
    otherwise assert the documented validation behavior.
-9. Verify scheduler advancement is skipped together with an overflowed FP16
+11. Verify scheduler advancement is skipped together with an overflowed FP16
    optimizer step.
 
 ## Expected Resource Impact

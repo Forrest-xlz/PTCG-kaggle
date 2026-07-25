@@ -1,0 +1,36 @@
+epoch=1 samples=20,480 loss=1.7018 acc=0.385 lr=2.998e-04 scale=1 samples/s=23150.7
+epoch=1 samples=40,960 loss=1.6297 acc=0.426 lr=2.983e-04 scale=1 samples/s=32052.9
+epoch=1 samples=61,440 loss=1.5809 acc=0.450 lr=2.955e-04 scale=1 samples/s=36912.3
+epoch=1 samples=81,920 loss=1.5433 acc=0.467 lr=2.914e-04 scale=1 samples/s=39981.2
+epoch=1 samples=102,400 loss=1.5142 acc=0.482 lr=2.861e-04 scale=1 samples/s=42127.7
+epoch=1 samples=122,880 loss=1.4905 acc=0.493 lr=2.795e-04 scale=1 samples/s=43663.9
+epoch=1 samples=143,360 loss=1.4710 acc=0.502 lr=2.718e-04 scale=1 samples/s=44826.8
+epoch=1 samples=163,840 loss=1.4541 acc=0.510 lr=2.631e-04 scale=1 samples/s=45739.3
+epoch=1 samples=184,320 loss=1.4392 acc=0.517 lr=2.533e-04 scale=1 samples/s=46508.8
+epoch=1 samples=204,800 loss=1.4264 acc=0.523 lr=2.426e-04 scale=1 samples/s=47085.2
+epoch=1 samples=225,280 loss=1.4145 acc=0.529 lr=2.310e-04 scale=1 samples/s=47608.4
+{'epoch': 1, 'samples': 227660, 'batch_size': 2048, 'loss': 1.4134230506720697, 'accuracy': 0.5294649916542212, 'seconds': 4.794712599999912, 'samples_per_second': 47481.4694836984, 'optimizer_step': 112, 'skipped_optimizer_steps': 0}
+epoch=2 samples=16,384 loss=1.2788 acc=0.593 lr=2.188e-04 scale=1 samples/s=53389.4
+epoch=2 samples=36,864 loss=1.2756 acc=0.596 lr=2.059e-04 scale=1 samples/s=53355.4
+epoch=2 samples=57,344 loss=1.2709 acc=0.597 lr=1.926e-04 scale=1 samples/s=53420.8
+epoch=2 samples=77,824 loss=1.2658 acc=0.600 lr=1.788e-04 scale=1 samples/s=53399.1
+epoch=2 samples=98,304 loss=1.2648 acc=0.600 lr=1.648e-04 scale=1 samples/s=53339.5
+epoch=2 samples=118,784 loss=1.2617 acc=0.601 lr=1.507e-04 scale=1 samples/s=53379.0
+epoch=2 samples=139,264 loss=1.2589 acc=0.603 lr=1.366e-04 scale=1 samples/s=53456.8
+epoch=2 samples=159,744 loss=1.2563 acc=0.604 lr=1.226e-04 scale=1 samples/s=53504.4
+epoch=2 samples=180,224 loss=1.2533 acc=0.605 lr=1.088e-04 scale=1 samples/s=53424.8
+epoch=2 samples=200,704 loss=1.2518 acc=0.606 lr=9.539e-05 scale=1 samples/s=52938.4
+epoch=2 samples=221,184 loss=1.2498 acc=0.606 lr=8.247e-05 scale=1 samples/s=52522.3
+{'epoch': 2, 'samples': 227660, 'batch_size': 2048, 'loss': 1.2492933583869086, 'accuracy': 0.6064965299130282, 'seconds': 4.349164400000518, 'samples_per_second': 52345.687369273255, 'optimizer_step': 224, 'skipped_optimizer_steps': 0}
+epoch=3 samples=12,288 loss=1.2173 acc=0.619 lr=7.015e-05 scale=1 samples/s=52021.5
+epoch=3 samples=32,768 loss=1.2128 acc=0.621 lr=5.855e-05 scale=1 samples/s=51839.6
+epoch=3 samples=53,248 loss=1.2188 acc=0.619 lr=4.775e-05 scale=1 samples/s=52150.3
+epoch=3 samples=73,728 loss=1.2202 acc=0.620 lr=3.787e-05 scale=1 samples/s=52175.8
+epoch=3 samples=94,208 loss=1.2175 acc=0.621 lr=2.898e-05 scale=1 samples/s=51990.0
+epoch=3 samples=114,688 loss=1.2154 acc=0.622 lr=2.117e-05 scale=1 samples/s=52209.4
+epoch=3 samples=135,168 loss=1.2150 acc=0.621 lr=1.451e-05 scale=1 samples/s=52440.9
+epoch=3 samples=155,648 loss=1.2150 acc=0.622 lr=9.046e-06 scale=1 samples/s=52587.9
+epoch=3 samples=176,128 loss=1.2139 acc=0.622 lr=4.840e-06 scale=1 samples/s=52724.1
+epoch=3 samples=196,608 loss=1.2152 acc=0.621 lr=1.925e-06 scale=1 samples/s=52796.9
+epoch=3 samples=217,088 loss=1.2148 acc=0.621 lr=3.270e-07 scale=1 samples/s=52894.9
+{'epoch': 3, 'samples': 227660, 'batch_size': 2048, 'loss': 1.2150213200294269, 'accuracy': 0.6212378107704472, 'seconds': 4.307012799999939, 'samples_per_second': 52857.98082606192, 'optimizer_step': 336, 'skipped_optimizer_steps': 0}

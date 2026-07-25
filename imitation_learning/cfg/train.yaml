@@ -2,7 +2,7 @@ version_name: pure-bc-e4-d4-v1
 
 train:
   cg_path: ../pokemon_tcg_ai_battle/sample_submission
-  data: data/training
+  data: data/training-cache
   output: outputs/${version_name}
   epochs: 3
   batch_size: 2048
@@ -14,10 +14,8 @@ train:
   max_samples: null  # Use null for every extracted sample.
   seed: 42
   device: cuda         # auto, cpu, cuda, or cuda:0
-  preload: true
-  preload_workers: 4
-  preload_chunk_size: 1000
-  shuffle_buffer: 10000 # Used only when preload is false.
+  precision: bf16      # fp32, fp16, or bf16
+  shuffle_mode: global # global or shard
   log_every_steps: 10
   grad_clip_norm: 1.0
 

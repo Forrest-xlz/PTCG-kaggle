@@ -23,6 +23,7 @@ from deck.extract import extract_decks
 
 
 CONFIG_PATH = PROJECT_ROOT / "cfg" / "extract.yaml"
+SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class ExtractSettings:
     input: str
     output: str
     workers: int
+    winner_only: bool
     limit_members: int | None
     force: bool
 
@@ -45,6 +47,8 @@ def load_settings(path: Path = CONFIG_PATH) -> ExtractSettings:
     settings = ExtractSettings(**raw["extract"])
     if settings.workers < 1:
         raise ValueError("extract.workers must be >= 1")
+    if not isinstance(settings.winner_only, bool):
+        raise ValueError("extract.winner_only must be true or false")
     if settings.limit_members is not None and settings.limit_members < 1:
         raise ValueError("extract.limit_members must be null or >= 1")
     return settings
@@ -62,19 +66,62 @@ def _selected(action):
     return None
 
 
+def _iter_player_records(
+    steps: list,
+    player: int,
+    episode,
+    date: str,
+    deck: list[int],
+):
+    """Pair each active observation with the action recorded in the next step."""
+    for step_index in range(max(0, len(steps) - 1)):
+        step = steps[step_index]
+        next_step = steps[step_index + 1]
+        if player >= len(step) or player >= len(next_step):
+            continue
+        state = step[player]
+        if state.get("status") != "ACTIVE":
+            continue
+        observation = state.get("observation")
+        action = _selected(next_step[player].get("action"))
+        if (
+            not observation
+            or observation.get("current") is None
+            or action is None
+        ):
+            continue
+        yield {
+            "episode_id": episode,
+            "date": date,
+            "step": step_index,
+            "player": player,
+            "deck": deck,
+            "observation": observation,
+            "selected": action,
+        }
+
+
 def process_archive(job):
     archive = Path(job[0])
     output = Path(job[1])
-    force, limit = job[2], job[3]
+    force, limit, winner_only = job[2], job[3], job[4]
     shard = output / f"{archive.stem}.jsonl.gz"
     meta = output / f"{archive.stem}.meta.json"
     if shard.exists() and meta.exists() and not force:
-        return {"archive": archive.name, "status": "skipped"}
+        try:
+            cached = json.loads(meta.read_text(encoding="utf-8"))
+            if (
+                cached.get("schema_version") == SCHEMA_VERSION
+                and cached.get("winner_only") == winner_only
+            ):
+                return {"archive": archive.name, "status": "skipped"}
+        except (OSError, json.JSONDecodeError):
+            pass
 
     output.mkdir(parents=True, exist_ok=True)
     file_descriptor, temporary_path = tempfile.mkstemp(dir=output, suffix=".tmp")
     os.close(file_descriptor)
-    episodes = samples = failed = 0
+    episodes = samples = failed = no_winner = 0
     errors = []
     try:
         with (
@@ -94,28 +141,35 @@ def process_archive(job):
                     with source.open(member) as raw:
                         replay = json.load(io.TextIOWrapper(raw, encoding="utf-8"))
                     decks = extract_decks(replay)
+                    rewards = replay.get("rewards") or []
+                    winning_players = [
+                        player
+                        for player, reward in enumerate(rewards)
+                        if reward is not None and float(reward) > 0
+                    ]
+                    if winner_only and not winning_players:
+                        no_winner += 1
+                        episodes += 1
+                        continue
+                    selected_players = (
+                        winning_players
+                        if winner_only
+                        else list(range(len(decks)))
+                    )
                     episode = replay.get("info", {}).get(
                         "EpisodeId", Path(member.filename).stem
                     )
-                    for step_index, step in enumerate(replay.get("steps", [])):
-                        for player, state in enumerate(step):
-                            observation = state.get("observation")
-                            action = _selected(state.get("action"))
-                            if (
-                                not observation
-                                or observation.get("current") is None
-                                or action is None
-                            ):
-                                continue
-                            record = {
-                                "episode_id": episode,
-                                "date": archive.stem,
-                                "step": step_index,
-                                "player": player,
-                                "deck": decks[player],
-                                "observation": observation,
-                                "selected": action,
-                            }
+                    steps = replay.get("steps", [])
+                    for player in selected_players:
+                        if player >= len(decks):
+                            continue
+                        for record in _iter_player_records(
+                            steps,
+                            player,
+                            episode,
+                            archive.stem,
+                            decks[player],
+                        ):
                             destination.write(
                                 json.dumps(record, separators=(",", ":")) + "\n"
                             )
@@ -133,11 +187,14 @@ def process_archive(job):
             os.unlink(temporary_path)
 
     summary = {
+        "schema_version": SCHEMA_VERSION,
+        "winner_only": winner_only,
         "archive": archive.name,
         "status": "written",
         "episodes": episodes,
         "samples": samples,
         "failed": failed,
+        "no_winner": no_winner,
         "errors": errors,
     }
     meta.write_text(
@@ -163,7 +220,8 @@ def main():
     output_path.mkdir(parents=True, exist_ok=True)
     print(
         f"config={CONFIG_PATH} archives={len(archives)} workers={settings.workers} "
-        f"limit_members={settings.limit_members} force={settings.force}"
+        f"winner_only={settings.winner_only} limit_members={settings.limit_members} "
+        f"force={settings.force}"
     )
 
     jobs = [
@@ -172,6 +230,7 @@ def main():
             str(output_path),
             settings.force,
             settings.limit_members,
+            settings.winner_only,
         )
         for archive in archives
     ]

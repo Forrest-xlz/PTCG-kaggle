@@ -26,11 +26,28 @@ class SparseVector:
     def word_start(self) -> None: self.offset.append(len(self.index))
 
 
-def enumerate_actions(option_count: int, max_count: int, limit: int = 64) -> list[list[int]]:
-    """Match the notebook's first-64 lexicographic action combinations."""
-    if max_count == 0:
-        return [[]]
-    return [list(x) for x in list(combinations(range(option_count), max_count))[:limit]]
+def enumerate_actions(
+    option_count: int,
+    min_count: int,
+    max_count: int,
+    limit: int = 64,
+) -> list[list[int]]:
+    """Enumerate unordered legal selections, preferring the notebook's max count."""
+    if not 0 <= min_count <= max_count <= option_count:
+        raise ValueError(
+            "action counts must satisfy "
+            f"0 <= min_count <= max_count <= option_count; got "
+            f"{min_count}, {max_count}, {option_count}"
+        )
+    if limit < 1:
+        raise ValueError("limit must be >= 1")
+    actions: list[list[int]] = []
+    for count in range(max_count, min_count - 1, -1):
+        for selection in combinations(range(option_count), count):
+            actions.append(list(selection))
+            if len(actions) == limit:
+                return actions
+    return actions
 
 
 def _add_card(sv: SparseVector, card: Any, card_count: int) -> None:

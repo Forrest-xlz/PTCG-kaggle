@@ -67,8 +67,24 @@ class PTCGTransformer(torch.nn.Module):
         )
         self.decoder_fc = torch.nn.Linear(config.d_model, 1)
 
-    def forward(self, index_encoder, value_encoder, offset_encoder, index_decoder, value_decoder, offset_decoder):
+    def forward(
+        self,
+        index_encoder,
+        value_encoder,
+        offset_encoder,
+        index_decoder,
+        value_decoder_or_offset,
+        offset_decoder=None,
+    ):
         cfg = self.config
+        # New mmap caches omit decoder weights because every decoder feature
+        # has weight 1. Keep the old six-argument form checkpoint/notebook
+        # compatible by accepting an explicit value tensor as well.
+        if offset_decoder is None:
+            value_decoder = None
+            offset_decoder = value_decoder_or_offset
+        else:
+            value_decoder = value_decoder_or_offset
         encoded = self.encoder_bag(index_encoder, offset_encoder, value_encoder)
         encoded = encoded.reshape(-1, cfg.num_encoder_words, cfg.d_model).transpose(0, 1)
         batch_size = encoded.size(1)

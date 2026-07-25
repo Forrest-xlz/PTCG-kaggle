@@ -1,0 +1,93 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+import torch
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from model.network import ModelConfig, PTCGTransformer
+from training.precision import PrecisionContext
+
+
+def tiny_model() -> PTCGTransformer:
+    return PTCGTransformer(
+        ModelConfig(
+            card_count=8,
+            attack_count=4,
+            encoder_size=64,
+            num_encoder_words=2,
+            recover_special_condition=1,
+            d_model=8,
+            num_heads=2,
+            d_feedforward=16,
+            encoder_layers=1,
+            decoder_layers=1,
+        )
+    )
+
+
+def test_decoder_implicit_one_weights_match_explicit_weights() -> None:
+    torch.manual_seed(3)
+    model = tiny_model().eval()
+    encoder_index = torch.tensor([1, 2], dtype=torch.int32)
+    encoder_value = torch.tensor([1.0, 0.5])
+    encoder_offset = torch.tensor([0, 1], dtype=torch.int32)
+    decoder_index = torch.tensor([3, 4], dtype=torch.int32)
+    decoder_offset = torch.tensor([0, 1], dtype=torch.int32)
+    decoder_value = torch.ones(2)
+
+    explicit = model(
+        encoder_index,
+        encoder_value,
+        encoder_offset,
+        decoder_index,
+        decoder_value,
+        decoder_offset,
+    )
+    implicit = model(
+        encoder_index,
+        encoder_value,
+        encoder_offset,
+        decoder_index,
+        decoder_offset,
+    )
+    torch.testing.assert_close(explicit, implicit)
+
+
+def test_fp32_precision_is_supported_on_cpu() -> None:
+    context = PrecisionContext("fp32", torch.device("cpu"))
+    assert not context.scaler.is_enabled()
+    assert context.autocast_enabled is False
+
+
+@pytest.mark.parametrize("name", ["fp16", "bf16"])
+def test_mixed_precision_is_rejected_on_cpu(name: str) -> None:
+    with pytest.raises(ValueError, match="requires CUDA"):
+        PrecisionContext(name, torch.device("cpu"))
+
+
+def test_invalid_precision_is_rejected() -> None:
+    with pytest.raises(ValueError, match="precision"):
+        PrecisionContext("tf32", torch.device("cpu"))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_fp16_context_uses_grad_scaler() -> None:
+    context = PrecisionContext("fp16", torch.device("cuda"))
+    assert context.scaler.is_enabled()
+    assert context.autocast_dtype == torch.float16
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or not torch.cuda.is_bf16_supported(),
+    reason="CUDA BF16 is unavailable",
+)
+def test_bf16_context_does_not_use_grad_scaler() -> None:
+    context = PrecisionContext("bf16", torch.device("cuda"))
+    assert not context.scaler.is_enabled()
+    assert context.autocast_dtype == torch.bfloat16
