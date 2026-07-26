@@ -1,7 +1,7 @@
 cache:
   cg_path: ../pokemon_tcg_ai_battle/sample_submission
   input: data/training
-  output: data/training-cache
+  output: data/training_cache
   workers: 16
   samples_per_shard: 25000
   force: false
