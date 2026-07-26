@@ -1,4 +1,4 @@
-"""Train the pure-BC policy from packed mmap feature caches."""
+"""Train and validate the pure behavior-cloning policy."""
 from __future__ import annotations
 
 import json
@@ -54,13 +54,18 @@ class TrainSettings:
     weight_decay: float
     beta1: float
     beta2: float
-    warmup_ratio: float
+    warmup_steps: int
     max_samples: int | None
     seed: int
     device: str
     precision: str
-    shuffle_mode: str
     log_every_steps: int
+    eval_every_steps: int
+    save_every_steps: int
+    save_every_epoch: bool
+    ema_alpha: float
+    validation_ratio: float
+    validation_seed: int
     grad_clip_norm: float
 
 
@@ -71,6 +76,7 @@ class ModelSettings:
     num_heads: int
     encoder_layers: int
     decoder_layers: int
+    norm_mode: str
 
 
 @dataclass(frozen=True)
@@ -91,13 +97,49 @@ class ExperimentSettings:
 
 
 @dataclass(frozen=True, slots=True)
-class BatchResult:
+class PolicyMetrics:
     loss: float
-    correct: int
+    top1_correct: int
+    top3_correct: int
+    top5_correct: int
+    samples: int
+
+    def averages(self) -> dict[str, float]:
+        denominator = max(self.samples, 1)
+        return {
+            "loss": self.loss,
+            "top1_accuracy": self.top1_correct / denominator,
+            "top3_accuracy": self.top3_correct / denominator,
+            "top5_accuracy": self.top5_correct / denominator,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class BatchResult:
+    metrics: PolicyMetrics
     grad_norm: float
     learning_rate: float
     optimizer_stepped: bool
     grad_scale: float
+
+
+class ExponentialMovingAverage:
+    def __init__(self, alpha: float):
+        if not 0 <= alpha < 1:
+            raise ValueError("EMA alpha must be in [0, 1)")
+        self.alpha = float(alpha)
+        self.value: float | None = None
+
+    def update(self, value: float) -> float:
+        value = float(value)
+        if self.value is None:
+            self.value = value
+        else:
+            self.value = self.alpha * self.value + (1.0 - self.alpha) * value
+        return self.value
+
+    def state_dict(self) -> dict:
+        return {"alpha": self.alpha, "value": self.value}
 
 
 def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
@@ -135,49 +177,64 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError("train.epochs and train.batch_size must be >= 1")
     if train.max_samples is not None and train.max_samples < 1:
         raise ValueError("train.max_samples must be null or >= 1")
-    if train.log_every_steps < 1:
-        raise ValueError("train.log_every_steps must be >= 1")
+    for name in ("log_every_steps", "eval_every_steps", "save_every_steps"):
+        if getattr(train, name) < 1:
+            raise ValueError(f"train.{name} must be >= 1")
+    if train.warmup_steps < 0:
+        raise ValueError("train.warmup_steps must be >= 0")
     if train.precision not in {"fp32", "fp16", "bf16"}:
         raise ValueError("train.precision must be fp32, fp16, or bf16")
-    if train.shuffle_mode not in {"global", "shard"}:
-        raise ValueError("train.shuffle_mode must be global or shard")
     if train.learning_rate <= 0 or train.weight_decay < 0:
         raise ValueError("learning rate must be positive and weight decay non-negative")
     if train.grad_clip_norm <= 0:
         raise ValueError("train.grad_clip_norm must be positive")
-    if not 0 <= train.warmup_ratio < 1:
-        raise ValueError("train.warmup_ratio must be in [0, 1)")
     if not 0 <= train.beta1 < 1 or not 0 <= train.beta2 < 1:
         raise ValueError("train.beta1 and train.beta2 must be in [0, 1)")
+    if not 0 <= train.ema_alpha < 1:
+        raise ValueError("train.ema_alpha must be in [0, 1)")
+    if not 0 < train.validation_ratio < 1:
+        raise ValueError("train.validation_ratio must be strictly between 0 and 1")
+    if not isinstance(train.save_every_epoch, bool):
+        raise ValueError("train.save_every_epoch must be true or false")
     if model.d_model < 1 or model.ffn_multiplier <= 0:
         raise ValueError("model.d_model and model.ffn_multiplier must be positive")
     if model.num_heads < 1 or model.d_model % model.num_heads != 0:
         raise ValueError("model.d_model must be divisible by model.num_heads")
     if model.encoder_layers < 1 or model.decoder_layers < 1:
         raise ValueError("encoder_layers and decoder_layers must be >= 1")
+    if model.norm_mode not in {"prenorm", "postnorm"}:
+        raise ValueError("model.norm_mode must be prenorm or postnorm")
     if settings.wandb.enabled and not settings.wandb.project:
         raise ValueError("wandb.project is required when wandb.enabled is true")
     return settings
 
 
-def project_path(value: str) -> Path:
+def project_path(value: str | Path) -> Path:
     path = Path(value)
     return path if path.is_absolute() else PROJECT_ROOT / path
 
 
-def build_lr_scheduler(optimizer, total_steps: int, warmup_ratio: float):
+def build_lr_scheduler(
+    optimizer: torch.optim.Optimizer,
+    total_steps: int,
+    warmup_steps: int,
+):
     if total_steps < 1:
         raise ValueError("total training steps must be >= 1")
-    warmup_steps = min(total_steps - 1, round(total_steps * warmup_ratio))
+    if not 0 <= warmup_steps < total_steps:
+        raise ValueError("warmup_steps must satisfy 0 <= warmup_steps < total_steps")
+    decay_steps = total_steps - warmup_steps
 
-    def lr_multiplier(step: int) -> float:
-        if warmup_steps > 0 and step < warmup_steps:
-            return float(step + 1) / float(warmup_steps)
-        decay_steps = max(1, total_steps - warmup_steps)
-        progress = min(1.0, max(0.0, (step - warmup_steps) / decay_steps))
+    def lr_multiplier(step_index: int) -> float:
+        if warmup_steps and step_index < warmup_steps:
+            return float(step_index + 1) / float(warmup_steps)
+        if decay_steps == 1:
+            return 0.0
+        progress = (step_index - warmup_steps) / float(decay_steps - 1)
+        progress = min(1.0, max(0.0, progress))
         return 0.5 * (1.0 + math.cos(math.pi * progress))
 
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_multiplier), warmup_steps
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_multiplier)
 
 
 def feature_signature(config: ModelConfig) -> dict:
@@ -202,12 +259,81 @@ def resolve_device(value: str) -> torch.device:
     return device
 
 
-def _to_device(array: np.ndarray, device: torch.device, dtype=None) -> torch.Tensor:
-    tensor = torch.from_numpy(array)
-    return tensor.to(
+def resolve_output_root(
+    train_cfg: TrainSettings,
+    wandb_run,
+) -> Path:
+    if wandb_run is not None:
+        return Path(wandb_run.dir).parent / "local-output"
+    return project_path(train_cfg.output)
+
+
+def should_trigger(interval: int, global_step: int) -> bool:
+    return global_step > 0 and global_step % interval == 0
+
+
+def _to_device(
+    array: np.ndarray,
+    device: torch.device,
+    dtype=None,
+) -> torch.Tensor:
+    return torch.from_numpy(array).to(
         device=device,
         dtype=dtype,
         non_blocking=device.type == "cuda",
+    )
+
+
+def _forward_batch(
+    batch: CachedBatch,
+    model: torch.nn.Module,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    logits = model(
+        _to_device(batch.encoder_index, device),
+        _to_device(batch.encoder_value, device, dtype=torch.float32),
+        _to_device(batch.encoder_offset, device),
+        _to_device(batch.decoder_index, device),
+        _to_device(batch.decoder_offset, device),
+    )
+    targets = _to_device(batch.target, device, dtype=torch.long)
+    action_counts = _to_device(batch.action_count, device, dtype=torch.long)
+    return logits, targets, action_counts
+
+
+def policy_metrics(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    action_counts: torch.Tensor,
+) -> tuple[torch.Tensor, PolicyMetrics]:
+    invalid = (
+        torch.arange(logits.shape[1], device=logits.device).unsqueeze(0)
+        >= action_counts.unsqueeze(1)
+    )
+    masked = logits.masked_fill(invalid, torch.finfo(logits.dtype).min)
+    loss = torch.nn.functional.cross_entropy(masked, targets)
+    top_indices = masked.topk(min(5, masked.shape[1]), dim=1).indices
+
+    def correct_at(k: int) -> torch.Tensor:
+        width = min(k, top_indices.shape[1])
+        return (
+            (top_indices[:, :width] == targets.unsqueeze(1))
+            .any(dim=1)
+            .sum()
+        )
+
+    top1, top3, top5 = [
+        int(value)
+        for value in torch.stack(
+            [correct_at(1), correct_at(3), correct_at(5)]
+        ).tolist()
+    ]
+    return loss, PolicyMetrics(
+        loss=float(loss.item()),
+        top1_correct=top1,
+        top3_correct=top3,
+        top5_correct=top5,
+        samples=int(targets.numel()),
     )
 
 
@@ -220,33 +346,11 @@ def train_batch(
     precision: PrecisionContext,
     grad_clip_norm: float,
 ) -> BatchResult:
-    encoder_index = _to_device(batch.encoder_index, device)
-    encoder_value = _to_device(batch.encoder_value, device, dtype=torch.float32)
-    encoder_offset = _to_device(batch.encoder_offset, device)
-    decoder_index = _to_device(batch.decoder_index, device)
-    decoder_offset = _to_device(batch.decoder_offset, device)
-    targets = _to_device(batch.target, device, dtype=torch.long)
-    action_counts = _to_device(batch.action_count, device, dtype=torch.long)
-
     optimizer.zero_grad(set_to_none=True)
     learning_rate = float(optimizer.param_groups[0]["lr"])
     with precision.autocast():
-        policy_logits = model(
-            encoder_index,
-            encoder_value,
-            encoder_offset,
-            decoder_index,
-            decoder_offset,
-        )
-        invalid_actions = (
-            torch.arange(MAX_ACTIONS, device=device).unsqueeze(0)
-            >= action_counts.unsqueeze(1)
-        )
-        policy_logits = policy_logits.masked_fill(
-            invalid_actions, torch.finfo(policy_logits.dtype).min
-        )
-        loss = torch.nn.functional.cross_entropy(policy_logits, targets)
-
+        logits, targets, action_counts = _forward_batch(batch, model, device)
+        loss, metrics = policy_metrics(logits, targets, action_counts)
     step = precision.backward_step(
         loss=loss,
         model=model,
@@ -254,15 +358,122 @@ def train_batch(
         scheduler=scheduler,
         grad_clip_norm=grad_clip_norm,
     )
-    correct = int((policy_logits.argmax(dim=1) == targets).sum().item())
     return BatchResult(
-        loss=float(loss.item()),
-        correct=correct,
+        metrics=metrics,
         grad_norm=step.grad_norm,
         learning_rate=learning_rate,
         optimizer_stepped=step.optimizer_stepped,
         grad_scale=step.grad_scale,
     )
+
+
+def evaluate_dataset(
+    model: torch.nn.Module,
+    dataset: MmapFeatureDataset,
+    indices: np.ndarray,
+    batch_size: int,
+    device: torch.device,
+    precision: PrecisionContext,
+) -> tuple[PolicyMetrics, float]:
+    was_training = model.training
+    model.eval()
+    started = time.perf_counter()
+    loss_sum = 0.0
+    top1 = top3 = top5 = samples = 0
+    try:
+        with torch.inference_mode():
+            for batch in dataset.iter_batches(
+                indices=indices,
+                batch_size=batch_size,
+                seed=0,
+                shuffle=False,
+            ):
+                with precision.autocast():
+                    logits, targets, action_counts = _forward_batch(
+                        batch, model, device
+                    )
+                    _, metrics = policy_metrics(
+                        logits, targets, action_counts
+                    )
+                loss_sum += metrics.loss * metrics.samples
+                top1 += metrics.top1_correct
+                top3 += metrics.top3_correct
+                top5 += metrics.top5_correct
+                samples += metrics.samples
+    finally:
+        model.train(was_training)
+    elapsed = time.perf_counter() - started
+    return (
+        PolicyMetrics(
+            loss=loss_sum / max(samples, 1),
+            top1_correct=top1,
+            top3_correct=top3,
+            top5_correct=top5,
+            samples=samples,
+        ),
+        elapsed,
+    )
+
+
+def checkpoint_payload(
+    model,
+    optimizer,
+    scheduler,
+    precision: PrecisionContext,
+    settings: ExperimentSettings,
+    config: ModelConfig,
+    global_step: int,
+    epoch: int,
+    ema: dict[str, ExponentialMovingAverage],
+    history: list[dict],
+) -> dict:
+    return {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "scaler": precision.state_dict(),
+        "global_step": global_step,
+        "epoch": epoch,
+        "config": config.to_dict(),
+        "experiment": {
+            "version_name": settings.version_name,
+            "train": asdict(settings.train),
+            "model": asdict(settings.model),
+            "wandb": asdict(settings.wandb),
+            "cache_signature": feature_signature(config),
+        },
+        "ema": {name: tracker.state_dict() for name, tracker in ema.items()},
+        "history": history,
+    }
+
+
+def _log_validation(
+    namespace: str,
+    metrics: PolicyMetrics,
+    seconds: float,
+    global_step: int,
+    wandb_run,
+) -> None:
+    averages = metrics.averages()
+    payload = {
+        f"{namespace}/loss": averages["loss"],
+        f"{namespace}/top1_accuracy": averages["top1_accuracy"],
+        f"{namespace}/top3_accuracy": averages["top3_accuracy"],
+        f"{namespace}/top5_accuracy": averages["top5_accuracy"],
+        f"{namespace}/samples": metrics.samples,
+        f"{namespace}/seconds": seconds,
+        "optimizer_step": global_step,
+    }
+    print(
+        f"{namespace} step={global_step:,} samples={metrics.samples:,} "
+        f"loss={averages['loss']:.4f} "
+        f"top1={averages['top1_accuracy']:.3f} "
+        f"top3={averages['top3_accuracy']:.3f} "
+        f"top5={averages['top5_accuracy']:.3f}",
+        flush=True,
+    )
+    if wandb_run is not None:
+        wandb_run.log(payload)
 
 
 def main() -> None:
@@ -273,14 +484,12 @@ def main() -> None:
         settings.wandb,
     )
     data_path = project_path(train_cfg.data)
-    output_path = project_path(train_cfg.output)
     if not data_path.exists():
         raise FileNotFoundError(f"Training cache directory not found: {data_path}")
 
     random.seed(train_cfg.seed)
     np.random.seed(train_cfg.seed)
     torch.manual_seed(train_cfg.seed)
-    output_path.mkdir(parents=True, exist_ok=True)
 
     cards = all_card_data()
     config = ModelConfig(
@@ -292,20 +501,28 @@ def main() -> None:
         d_feedforward=int(model_cfg.d_model * model_cfg.ffn_multiplier),
         encoder_layers=model_cfg.encoder_layers,
         decoder_layers=model_cfg.decoder_layers,
+        norm_mode=model_cfg.norm_mode,
     )
     device = resolve_device(train_cfg.device)
     precision = PrecisionContext(train_cfg.precision, device)
-    cache_start = time.perf_counter()
+    cache_started = time.perf_counter()
     dataset = MmapFeatureDataset(
         data_path,
         expected_signature=feature_signature(config),
     )
-    cache_open_seconds = time.perf_counter() - cache_start
-    samples_per_epoch = len(dataset)
+    splits = dataset.build_splits(
+        validation_ratio=train_cfg.validation_ratio,
+        validation_seed=train_cfg.validation_seed,
+    )
+    cache_open_seconds = time.perf_counter() - cache_started
+    samples_per_epoch = len(splits.train)
     if train_cfg.max_samples is not None:
         samples_per_epoch = min(samples_per_epoch, train_cfg.max_samples)
     steps_per_epoch = math.ceil(samples_per_epoch / train_cfg.batch_size)
     total_steps = steps_per_epoch * train_cfg.epochs
+    if train_cfg.warmup_steps >= total_steps:
+        dataset.close()
+        raise ValueError("train.warmup_steps must be smaller than total steps")
 
     model = PTCGTransformer(config).to(device)
     optimizer = torch.optim.AdamW(
@@ -314,20 +531,10 @@ def main() -> None:
         weight_decay=train_cfg.weight_decay,
         betas=(train_cfg.beta1, train_cfg.beta2),
     )
-    scheduler, warmup_steps = build_lr_scheduler(
+    scheduler = build_lr_scheduler(
         optimizer,
         total_steps=total_steps,
-        warmup_ratio=train_cfg.warmup_ratio,
-    )
-    history = []
-    print(
-        f"version={settings.version_name} device={device} "
-        f"precision={train_cfg.precision} shuffle={train_cfg.shuffle_mode} "
-        f"cache_shards={len(dataset.shards)} cache_samples={len(dataset):,} "
-        f"samples_per_epoch={samples_per_epoch:,} "
-        f"batch_size={train_cfg.batch_size} steps_per_epoch={steps_per_epoch:,} "
-        f"total_steps={total_steps:,} warmup_steps={warmup_steps:,}",
-        flush=True,
+        warmup_steps=train_cfg.warmup_steps,
     )
 
     wandb_run = None
@@ -353,34 +560,122 @@ def main() -> None:
                 "cache_signature": feature_signature(config),
             },
         )
+        wandb.define_metric("optimizer_step")
+        for namespace in (
+            "train/*",
+            "epoch/*",
+            "val_in_distribution/*",
+            "val_latest/*",
+        ):
+            wandb.define_metric(namespace, step_metric="optimizer_step")
+
+    output_root = resolve_output_root(train_cfg, wandb_run)
+    checkpoint_dir = output_root / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    resolved_config = {
+        "version_name": settings.version_name,
+        "train": asdict(train_cfg),
+        "model": asdict(model_cfg),
+        "wandb": asdict(wandb_cfg),
+    }
+    (output_root / "resolved_config.yaml").write_text(
+        yaml.safe_dump(resolved_config, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    print(
+        f"version={settings.version_name} device={device} "
+        f"precision={train_cfg.precision} norm={model_cfg.norm_mode} "
+        f"cache_shards={len(dataset.shards)} cache_samples={len(dataset):,} "
+        f"train={len(splits.train):,} "
+        f"val_in_distribution={len(splits.in_distribution):,} "
+        f"val_latest={len(splits.latest):,} "
+        f"latest_date={splits.latest_date[0]}.{splits.latest_date[1]} "
+        f"steps_per_epoch={steps_per_epoch:,} total_steps={total_steps:,} "
+        f"warmup_steps={train_cfg.warmup_steps:,}",
+        flush=True,
+    )
+    if wandb_run is not None:
         wandb_run.log(
             {
                 "data/cache_open_seconds": cache_open_seconds,
                 "data/cache_shards": len(dataset.shards),
                 "data/cache_samples": len(dataset),
+                "data/train_samples": len(splits.train),
+                "data/val_in_distribution_samples": len(
+                    splits.in_distribution
+                ),
+                "data/val_latest_samples": len(splits.latest),
                 "schedule/steps_per_epoch": steps_per_epoch,
                 "schedule/total_steps": total_steps,
-                "schedule/warmup_steps": warmup_steps,
+                "schedule/warmup_steps": train_cfg.warmup_steps,
+                "optimizer_step": 0,
             }
         )
 
+    ema = {
+        name: ExponentialMovingAverage(train_cfg.ema_alpha)
+        for name in ("loss", "top1", "top3", "top5")
+    }
+    history: list[dict] = []
     global_step = 0
     skipped_updates = 0
+    train_samples_seen = 0
+    train_compute_seconds = 0.0
+    last_eval_step = -1
     total_training_start = time.perf_counter()
-    try:
-        for epoch in range(train_cfg.epochs):
-            epoch_start = time.perf_counter()
-            model.train()
-            total_loss = 0.0
-            correct = 0
-            count = 0
-            batches = dataset.iter_batches(
+
+    def save_checkpoint(name: str, epoch: int) -> None:
+        torch.save(
+            checkpoint_payload(
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                precision=precision,
+                settings=settings,
+                config=config,
+                global_step=global_step,
+                epoch=epoch,
+                ema=ema,
+                history=history,
+            ),
+            checkpoint_dir / name,
+        )
+
+    def run_validation() -> None:
+        nonlocal last_eval_step
+        for namespace, indices in (
+            ("val_in_distribution", splits.in_distribution),
+            ("val_latest", splits.latest),
+        ):
+            metrics, seconds = evaluate_dataset(
+                model=model,
+                dataset=dataset,
+                indices=indices,
                 batch_size=train_cfg.batch_size,
-                shuffle_mode=train_cfg.shuffle_mode,
-                seed=train_cfg.seed + epoch,
-                max_samples=train_cfg.max_samples,
+                device=device,
+                precision=precision,
             )
-            for batch in batches:
+            _log_validation(
+                namespace, metrics, seconds, global_step, wandb_run
+            )
+        last_eval_step = global_step
+
+    try:
+        for epoch_index in range(train_cfg.epochs):
+            epoch = epoch_index + 1
+            epoch_started = time.perf_counter()
+            model.train()
+            epoch_loss_sum = 0.0
+            epoch_top1 = epoch_top3 = epoch_top5 = epoch_samples = 0
+            for batch in dataset.iter_batches(
+                indices=splits.train,
+                batch_size=train_cfg.batch_size,
+                seed=train_cfg.seed + epoch_index,
+                shuffle=True,
+                max_samples=train_cfg.max_samples,
+            ):
+                batch_started = time.perf_counter()
                 result = train_batch(
                     batch=batch,
                     model=model,
@@ -390,106 +685,121 @@ def main() -> None:
                     precision=precision,
                     grad_clip_norm=train_cfg.grad_clip_norm,
                 )
-                batch_count = len(batch)
-                total_loss += result.loss * batch_count
-                correct += result.correct
-                count += batch_count
-                if result.optimizer_stepped:
-                    global_step += 1
-                else:
-                    skipped_updates += 1
+                train_compute_seconds += time.perf_counter() - batch_started
+                metrics = result.metrics
+                averages = metrics.averages()
+                ema_values = {
+                    "loss": ema["loss"].update(averages["loss"]),
+                    "top1": ema["top1"].update(averages["top1_accuracy"]),
+                    "top3": ema["top3"].update(averages["top3_accuracy"]),
+                    "top5": ema["top5"].update(averages["top5_accuracy"]),
+                }
+                train_samples_seen += metrics.samples
+                epoch_loss_sum += metrics.loss * metrics.samples
+                epoch_top1 += metrics.top1_correct
+                epoch_top3 += metrics.top3_correct
+                epoch_top5 += metrics.top5_correct
+                epoch_samples += metrics.samples
 
-                if (
-                    result.optimizer_stepped
-                    and global_step % train_cfg.log_every_steps == 0
-                ):
-                    elapsed = max(time.perf_counter() - epoch_start, 1e-9)
-                    metrics = {
-                        "train/batch_loss": result.loss,
-                        "train/batch_accuracy": result.correct / batch_count,
-                        "train/running_loss": total_loss / count,
-                        "train/running_accuracy": correct / count,
+                if not result.optimizer_stepped:
+                    skipped_updates += 1
+                    continue
+                global_step += 1
+
+                if should_trigger(train_cfg.log_every_steps, global_step):
+                    samples_per_second = train_samples_seen / max(
+                        train_compute_seconds, 1e-9
+                    )
+                    payload = {
+                        "train/ema_loss": ema_values["loss"],
+                        "train/ema_top1_accuracy": ema_values["top1"],
+                        "train/ema_top3_accuracy": ema_values["top3"],
+                        "train/ema_top5_accuracy": ema_values["top5"],
                         "train/grad_norm": result.grad_norm,
                         "train/grad_scale": result.grad_scale,
                         "train/learning_rate": result.learning_rate,
-                        "train/samples": count,
-                        "train/samples_per_second": count / elapsed,
-                        "train/epoch": epoch + 1,
-                        "train/optimizer_step": global_step,
+                        "train/samples": train_samples_seen,
+                        "train/samples_per_second": samples_per_second,
+                        "train/epoch": epoch,
                         "train/skipped_optimizer_steps": skipped_updates,
+                        "optimizer_step": global_step,
                     }
                     print(
-                        f"epoch={epoch + 1} samples={count:,} "
-                        f"loss={metrics['train/running_loss']:.4f} "
-                        f"acc={metrics['train/running_accuracy']:.3f} "
+                        f"epoch={epoch} step={global_step:,} "
+                        f"samples={train_samples_seen:,} "
+                        f"loss_ema={ema_values['loss']:.4f} "
+                        f"top1_ema={ema_values['top1']:.3f} "
+                        f"top3_ema={ema_values['top3']:.3f} "
+                        f"top5_ema={ema_values['top5']:.3f} "
                         f"lr={result.learning_rate:.3e} "
-                        f"scale={result.grad_scale:g} "
-                        f"samples/s={metrics['train/samples_per_second']:.1f}",
+                        f"samples/s={samples_per_second:.1f}",
                         flush=True,
                     )
                     if wandb_run is not None:
-                        wandb_run.log(metrics)
+                        wandb_run.log(payload)
 
-            epoch_seconds = time.perf_counter() - epoch_start
+                if should_trigger(train_cfg.eval_every_steps, global_step):
+                    run_validation()
+                if should_trigger(train_cfg.save_every_steps, global_step):
+                    save_checkpoint(f"step-{global_step:08d}.pt", epoch)
+
+            epoch_seconds = time.perf_counter() - epoch_started
+            denominator = max(epoch_samples, 1)
             row = {
-                "epoch": epoch + 1,
-                "samples": count,
+                "epoch": epoch,
+                "samples": epoch_samples,
                 "batch_size": train_cfg.batch_size,
-                "loss": total_loss / max(count, 1),
-                "accuracy": correct / max(count, 1),
+                "loss": epoch_loss_sum / denominator,
+                "top1_accuracy": epoch_top1 / denominator,
+                "top3_accuracy": epoch_top3 / denominator,
+                "top5_accuracy": epoch_top5 / denominator,
                 "seconds": epoch_seconds,
-                "samples_per_second": count / max(epoch_seconds, 1e-9),
+                "samples_per_second": epoch_samples
+                / max(epoch_seconds, 1e-9),
                 "optimizer_step": global_step,
                 "skipped_optimizer_steps": skipped_updates,
             }
             history.append(row)
             print(row, flush=True)
-            epoch_metrics = {
-                "epoch/loss": row["loss"],
-                "epoch/accuracy": row["accuracy"],
-                "epoch/samples": row["samples"],
-                "epoch/seconds": row["seconds"],
-                "epoch/samples_per_second": row["samples_per_second"],
-                "epoch/index": epoch + 1,
-                "epoch/optimizer_step": global_step,
-                "epoch/learning_rate": optimizer.param_groups[0]["lr"],
-                "epoch/skipped_optimizer_steps": skipped_updates,
-            }
-            if device.type == "cuda":
-                epoch_metrics["system/gpu_peak_memory_gb"] = (
-                    torch.cuda.max_memory_allocated(device) / 1024**3
-                )
-                torch.cuda.reset_peak_memory_stats(device)
             if wandb_run is not None:
-                wandb_run.log(epoch_metrics)
-            torch.save(
-                {
-                    "model": model.state_dict(),
-                    "config": config.to_dict(),
-                    "experiment": {
-                        "version_name": settings.version_name,
-                        "train": asdict(train_cfg),
-                        "model": asdict(model_cfg),
-                        "wandb": asdict(wandb_cfg),
-                        "cache_signature": feature_signature(config),
-                    },
-                    "history": history,
-                },
-                output_path / f"epoch-{epoch + 1}.pt",
+                wandb_run.log(
+                    {
+                        "epoch/loss": row["loss"],
+                        "epoch/top1_accuracy": row["top1_accuracy"],
+                        "epoch/top3_accuracy": row["top3_accuracy"],
+                        "epoch/top5_accuracy": row["top5_accuracy"],
+                        "epoch/samples": row["samples"],
+                        "epoch/seconds": row["seconds"],
+                        "epoch/samples_per_second": row[
+                            "samples_per_second"
+                        ],
+                        "epoch/index": epoch,
+                        "epoch/skipped_optimizer_steps": skipped_updates,
+                        "optimizer_step": global_step,
+                    }
+                )
+            if train_cfg.save_every_epoch:
+                save_checkpoint(f"epoch-{epoch:03d}.pt", epoch)
+            (output_root / "history.json").write_text(
+                json.dumps(history, indent=2), encoding="utf-8"
             )
+
+        if last_eval_step != global_step:
+            run_validation()
     finally:
         dataset.close()
-
-    (output_path / "history.json").write_text(
-        json.dumps(history, indent=2), encoding="utf-8"
-    )
-    if wandb_run is not None:
-        wandb_run.summary["training/total_seconds"] = (
-            time.perf_counter() - total_training_start
-        )
-        wandb_run.summary["training/final_loss"] = history[-1]["loss"]
-        wandb_run.summary["training/final_accuracy"] = history[-1]["accuracy"]
-        wandb_run.finish()
+        if wandb_run is not None:
+            if history:
+                wandb_run.summary["training/final_loss"] = history[-1][
+                    "loss"
+                ]
+                wandb_run.summary["training/final_top1_accuracy"] = history[
+                    -1
+                ]["top1_accuracy"]
+            wandb_run.summary["training/total_seconds"] = (
+                time.perf_counter() - total_training_start
+            )
+            wandb_run.finish()
 
 
 if __name__ == "__main__":

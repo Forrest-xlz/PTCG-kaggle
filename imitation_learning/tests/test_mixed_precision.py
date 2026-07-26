@@ -14,7 +14,7 @@ from model.network import ModelConfig, PTCGTransformer
 from training.precision import PrecisionContext
 
 
-def tiny_model() -> PTCGTransformer:
+def tiny_model(norm_mode: str = "postnorm") -> PTCGTransformer:
     return PTCGTransformer(
         ModelConfig(
             card_count=8,
@@ -27,36 +27,35 @@ def tiny_model() -> PTCGTransformer:
             d_feedforward=16,
             encoder_layers=1,
             decoder_layers=1,
+            norm_mode=norm_mode,
         )
     )
 
 
-def test_decoder_implicit_one_weights_match_explicit_weights() -> None:
+@pytest.mark.parametrize("norm_mode", ["prenorm", "postnorm"])
+def test_normalization_modes_preserve_policy_shape(norm_mode: str) -> None:
     torch.manual_seed(3)
-    model = tiny_model().eval()
+    model = tiny_model(norm_mode).eval()
     encoder_index = torch.tensor([1, 2], dtype=torch.int32)
     encoder_value = torch.tensor([1.0, 0.5])
     encoder_offset = torch.tensor([0, 1], dtype=torch.int32)
     decoder_index = torch.tensor([3, 4], dtype=torch.int32)
     decoder_offset = torch.tensor([0, 1], dtype=torch.int32)
-    decoder_value = torch.ones(2)
+    logits = model(
+        encoder_index,
+        encoder_value,
+        encoder_offset,
+        decoder_index,
+        decoder_offset,
+    )
+    assert logits.shape == (1, 2)
+    assert model.encoder.layers[0].norm_first is (norm_mode == "prenorm")
+    assert (model.encoder.norm is not None) is (norm_mode == "prenorm")
 
-    explicit = model(
-        encoder_index,
-        encoder_value,
-        encoder_offset,
-        decoder_index,
-        decoder_value,
-        decoder_offset,
-    )
-    implicit = model(
-        encoder_index,
-        encoder_value,
-        encoder_offset,
-        decoder_index,
-        decoder_offset,
-    )
-    torch.testing.assert_close(explicit, implicit)
+
+def test_invalid_normalization_mode_is_rejected() -> None:
+    with pytest.raises(ValueError, match="norm_mode"):
+        tiny_model("sandwich")
 
 
 def test_fp32_precision_is_supported_on_cpu() -> None:

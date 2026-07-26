@@ -47,16 +47,25 @@ values use compact 16-bit storage where safe, decoder values are omitted
 because they are always one, and only the current batch is materialized in
 ordinary CPU memory. Candidate selections cover every legal size from
 `maxCount` down to `minCount`, retain at most the first 64 combinations, and
-treat replay selection order as irrelevant.
+treat replay selection order as irrelevant. Each sample also stores a stable
+32-bit replay key used for validation splitting. This field requires rebuilding
+feature caches created with older schema versions; replay extraction does not
+need to be repeated.
 
 Training has no command-line parameters. It reads `cfg/train.yaml`, whose
 `train`, `model`, and `wandb` sections control cache paths, batching, network
-depth/width, precision, shuffle, and experiment tracking. `shuffle_mode:
-global` builds a compact global uint32 permutation (about 120 MB for 30 million
-samples); `shuffle_mode: shard` shuffles physical shard order and samples
-within each shard for better storage locality. In either mode, every cache
-sample is consumed once per global epoch. Use `train.max_samples` for bounded
-trials before setting it to `null`.
+depth/width, precision, validation, and experiment tracking. Training always
+uses a compact global permutation (about 120 MB for 30 million samples), and
+every eligible training sample is consumed once per epoch. Use
+`train.max_samples` for bounded trials before setting it to `null`.
+
+The numerically latest `month.day` source is held out completely as the
+latest-date validation set. Older replays are assigned as a group to training
+or in-distribution validation using `validation_ratio` and `validation_seed`;
+different states from the same replay can never cross the split. Every
+`eval_every_steps` successful optimizer updates, both validation sets are
+evaluated separately with CE loss and Top-1/3/5 accuracy. Training logs use
+cross-epoch exponential moving averages controlled by `ema_alpha`.
 
 `train.precision` accepts `fp32`, `fp16`, or `bf16`. FP16 uses autocast and
 gradient scaling; BF16 uses autocast without a scaler and requires a supported
@@ -68,9 +77,20 @@ CUDA GPU. Model parameters and saved checkpoints remain FP32.
 
 The root `version_name` can be reused as `${version_name}` in values such as
 `train.output` and `wandb.name`. The AdamW optimizer supports configurable
-`beta1`/`beta2`; its learning rate warms up linearly for `warmup_ratio` of all
-optimizer steps and then follows cosine decay to zero. `log_every_steps` controls
-the WandB/console logging interval in optimizer steps rather than samples.
+`beta1`/`beta2`; its learning rate warms up linearly for `warmup_steps`
+successful optimizer updates and then follows cosine decay to zero.
+`log_every_steps`, `eval_every_steps`, and `save_every_steps` all use successful
+optimizer steps. Epoch checkpointing remains controlled by
+`save_every_epoch`.
+
+`model.norm_mode` accepts `postnorm` or `prenorm`. PreNorm applies
+normalization before every encoder/decoder sublayer and adds a final encoder
+LayerNorm; PostNorm preserves the original notebook residual ordering.
+
+When WandB is enabled, checkpoints and history are written to
+`local-output/` beside that run's `files/` directory, keeping them inside the
+local run-ID folder without uploading model artifacts. When WandB is disabled,
+they are written under `train.output`.
 
 Open `deck/deck_eda.ipynb` after deck extraction. It ranks complete deck types
 by usage, analyzes win rates, and plots usage and win-rate trends by date.

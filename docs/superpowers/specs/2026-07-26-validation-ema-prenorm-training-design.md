@@ -240,8 +240,9 @@ training is not added in this baseline change.
 
 Output root selection is:
 
-- WandB enabled: the local `wandb_run.dir`; checkpoints are not uploaded as
-  WandB artifacts and WandB uploads metrics only.
+- WandB enabled: `local-output/` beside `wandb_run.dir` inside the same local
+  run-ID folder; keeping files outside the run's `files/` directory prevents
+  checkpoint upload and WandB uploads metrics only.
 - WandB disabled: resolved `train.output`.
 
 The `checkpoints` directory, resolved configuration, and `history.json` all

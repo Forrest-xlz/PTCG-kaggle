@@ -16,6 +16,8 @@ from training.feature_cache import (
     MmapFeatureDataset,
     PackedShard,
     PackedShardWriter,
+    parse_source_date,
+    stable_episode_key,
 )
 
 
@@ -39,11 +41,16 @@ def record(marker: int, action_count: int = 2) -> FeatureRecord:
         decoder_offset=[0, 1][:action_count],
         target=min(1, action_count - 1),
         action_count=action_count,
+        episode_key=stable_episode_key(f"episode-{marker}"),
     )
 
 
-def build_shard(path: Path, markers: list[int]) -> Path:
-    writer = PackedShardWriter(path, SIGNATURE, {"name": path.stem})
+def build_shard(
+    path: Path,
+    markers: list[int],
+    source_name: str = "7.1.jsonl.gz",
+) -> Path:
+    writer = PackedShardWriter(path, SIGNATURE, {"name": source_name})
     for marker in markers:
         writer.add(record(marker))
     writer.finalize()
@@ -65,6 +72,8 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
         np.testing.assert_array_equal(sample.decoder_offset, [0, 1])
         assert sample.target == 1
         assert sample.action_count == 2
+        assert sample.episode_key == stable_episode_key("episode-11")
+        assert shard.arrays["episode_key"].dtype == np.dtype("<u4")
     finally:
         shard.close()
 
@@ -78,6 +87,16 @@ def test_writer_rejects_encoder_index_outside_uint16(tmp_path: Path) -> None:
     writer.abort()
 
 
+def test_episode_key_is_stable_for_equivalent_ids() -> None:
+    assert stable_episode_key(12345) == stable_episode_key("12345")
+    assert 0 <= stable_episode_key("episode-a") <= np.iinfo(np.uint32).max
+
+
+def test_source_dates_sort_numerically() -> None:
+    assert parse_source_date("7.19.jsonl.gz") > parse_source_date("7.5.jsonl.gz")
+    assert parse_source_date("7.1.part-00000.cache") == (7, 1)
+
+
 def test_dataset_global_shuffle_visits_every_sample_once(tmp_path: Path) -> None:
     build_shard(tmp_path / "a.cache", [1, 2, 3])
     build_shard(tmp_path / "b.cache", [4, 5])
@@ -85,7 +104,10 @@ def test_dataset_global_shuffle_visits_every_sample_once(tmp_path: Path) -> None
     try:
         batches = list(
             dataset.iter_index_batches(
-                batch_size=2, shuffle_mode="global", seed=123, max_samples=None
+                indices=np.arange(5, dtype=np.uint32),
+                batch_size=2,
+                seed=123,
+                shuffle=True,
             )
         )
         global_ids = np.concatenate([batch.global_ids for batch in batches])
@@ -94,18 +116,54 @@ def test_dataset_global_shuffle_visits_every_sample_once(tmp_path: Path) -> None
         dataset.close()
 
 
-def test_dataset_shard_shuffle_visits_every_sample_once(tmp_path: Path) -> None:
-    build_shard(tmp_path / "a.cache", [1, 2, 3])
-    build_shard(tmp_path / "b.cache", [4, 5])
+def test_splits_hold_out_latest_and_keep_replays_together(
+    tmp_path: Path,
+) -> None:
+    build_shard(
+        tmp_path / "old-a.cache",
+        list(range(1, 51)) * 2,
+        source_name="7.5.jsonl.gz",
+    )
+    build_shard(
+        tmp_path / "old-b.cache",
+        list(range(51, 101)) * 2,
+        source_name="7.19.jsonl.gz",
+    )
+    build_shard(
+        tmp_path / "latest.cache",
+        [101, 102, 103],
+        source_name="7.24.jsonl.gz",
+    )
     dataset = MmapFeatureDataset(tmp_path, expected_signature=SIGNATURE)
     try:
-        batches = list(
-            dataset.iter_index_batches(
-                batch_size=2, shuffle_mode="shard", seed=123, max_samples=None
-            )
+        splits = dataset.build_splits(
+            validation_ratio=0.5, validation_seed=123
         )
-        global_ids = np.concatenate([batch.global_ids for batch in batches])
-        np.testing.assert_array_equal(np.sort(global_ids), np.arange(5))
+        assert splits.latest_date == (7, 24)
+        expected_latest = np.concatenate(
+            [
+                np.arange(dataset.starts[i], dataset.ends[i])
+                for i, date in enumerate(dataset.shard_dates)
+                if date == (7, 24)
+            ]
+        )
+        np.testing.assert_array_equal(splits.latest, expected_latest)
+        assert not set(splits.latest) & set(splits.train)
+        assert not set(splits.latest) & set(splits.in_distribution)
+
+        memberships = {}
+        for name, ids in (
+            ("train", splits.train),
+            ("validation", splits.in_distribution),
+        ):
+            for global_id in ids:
+                shard_id = np.searchsorted(
+                    dataset.ends, global_id, side="right"
+                )
+                local_id = int(global_id - dataset.starts[shard_id])
+                key = dataset.shards[shard_id].sample(local_id).episode_key
+                memberships.setdefault(key, set()).add(name)
+        assert all(len(groups) == 1 for groups in memberships.values())
     finally:
         dataset.close()
 
@@ -116,7 +174,10 @@ def test_collate_pads_decoder_offsets_without_decoder_values(tmp_path: Path) -> 
     try:
         index_batch = next(
             dataset.iter_index_batches(
-                batch_size=2, shuffle_mode="global", seed=1, max_samples=None
+                indices=np.arange(2, dtype=np.uint32),
+                batch_size=2,
+                seed=1,
+                shuffle=True,
             )
         )
         batch = dataset.collate(index_batch)

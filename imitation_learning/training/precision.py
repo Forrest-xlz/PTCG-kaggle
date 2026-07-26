@@ -64,6 +64,9 @@ class PrecisionContext:
             enabled=True,
         )
 
+    def state_dict(self) -> dict:
+        return self.scaler.state_dict() if self.scaler.is_enabled() else {}
+
     def backward_step(
         self,
         loss: torch.Tensor,

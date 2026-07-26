@@ -438,9 +438,11 @@ git commit -m "feat: configure transformer normalization"
 - [ ] **Step 1: Write failing validation and output routing tests**
 
 ```python
-def test_output_root_prefers_wandb_run_directory(tmp_path: Path) -> None:
+def test_output_root_uses_local_output_beside_wandb_files(tmp_path: Path) -> None:
     run = SimpleNamespace(dir=str(tmp_path / "wandb-run-files"))
-    assert resolve_output_root(train_cfg(output=tmp_path / "fallback"), run) == Path(run.dir)
+    assert resolve_output_root(train_cfg(output=tmp_path / "fallback"), run) == (
+        Path(run.dir).parent / "local-output"
+    )
 
 def test_output_root_uses_config_when_wandb_disabled(tmp_path: Path) -> None:
     assert resolve_output_root(train_cfg(output=tmp_path / "fallback"), None) == tmp_path / "fallback"

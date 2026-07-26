@@ -1,8 +1,10 @@
 """Packed, mmap-backed feature storage for large behavior-cloning datasets."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -12,7 +14,7 @@ from typing import Iterable
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 ENCODER_WORDS = 24
 MAX_ACTIONS = 64
 ALIGNMENT = 64
@@ -28,6 +30,7 @@ SECTION_DTYPES = {
     "decoder_offset_ptr": np.dtype("<u4"),
     "target": np.dtype("u1"),
     "action_count": np.dtype("u1"),
+    "episode_key": np.dtype("<u4"),
 }
 
 
@@ -40,6 +43,7 @@ class FeatureRecord:
     decoder_offset: list[int]
     target: int
     action_count: int
+    episode_key: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +55,7 @@ class FeatureView:
     decoder_offset: np.ndarray
     target: int
     action_count: int
+    episode_key: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +75,42 @@ class CachedBatch:
 
     def __len__(self) -> int:
         return int(self.target.size)
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetSplits:
+    train: np.ndarray
+    in_distribution: np.ndarray
+    latest: np.ndarray
+    latest_date: tuple[int, int]
+
+
+def stable_episode_key(episode_id: object) -> int:
+    payload = str(episode_id).encode("utf-8")
+    return int.from_bytes(
+        hashlib.blake2s(payload, digest_size=4).digest(), "little"
+    )
+
+
+def parse_source_date(name: str) -> tuple[int, int]:
+    match = re.search(r"(?<!\d)(\d{1,2})\.(\d{1,2})(?!\d)", str(name))
+    if match is None:
+        raise ValueError(f"cannot parse month.day from cache source: {name}")
+    month, day = map(int, match.groups())
+    if not 1 <= month <= 12 or not 1 <= day <= 31:
+        raise ValueError(f"invalid month.day cache source: {name}")
+    return month, day
+
+
+def _mix_episode_keys(keys: np.ndarray, seed: int) -> np.ndarray:
+    mixed = np.asarray(keys, dtype=np.uint32).copy()
+    mixed ^= np.uint32(int(seed) & 0xFFFFFFFF)
+    mixed ^= mixed >> np.uint32(16)
+    mixed *= np.uint32(0x7FEB352D)
+    mixed ^= mixed >> np.uint32(15)
+    mixed *= np.uint32(0x846CA68B)
+    mixed ^= mixed >> np.uint32(16)
+    return mixed
 
 
 def _validate_unsigned(name: str, values: Iterable[int], maximum: int) -> None:
@@ -136,6 +177,8 @@ class PackedShardWriter:
             raise ValueError("decoder_offset length must equal action_count")
         if not 0 <= int(record.target) < int(record.action_count):
             raise ValueError("target must be smaller than action_count")
+        if not 0 <= int(record.episode_key) <= np.iinfo(np.uint32).max:
+            raise ValueError("episode_key must fit uint32")
 
         _validate_unsigned("encoder_index", record.encoder_index, np.iinfo(np.uint16).max)
         _validate_unsigned("decoder_index", record.decoder_index, np.iinfo(np.uint32).max)
@@ -168,6 +211,7 @@ class PackedShardWriter:
         self._append("decoder_offset_ptr", self._decoder_words)
         self._append("target", int(record.target))
         self._append("action_count", int(record.action_count))
+        self._append("episode_key", int(record.episode_key))
         self._samples += 1
         self._buffered_samples += 1
         if self._buffered_samples >= self.flush_samples:
@@ -316,6 +360,8 @@ class PackedShard:
             raise ValueError("target length does not match sample count")
         if self.arrays["action_count"].size != self.samples:
             raise ValueError("action_count length does not match sample count")
+        if self.arrays["episode_key"].size != self.samples:
+            raise ValueError("episode_key length does not match sample count")
         pointer_targets = {
             "encoder_ptr": self.arrays["encoder_index"].size,
             "decoder_ptr": self.arrays["decoder_index"].size,
@@ -358,6 +404,7 @@ class PackedShard:
             decoder_offset=self.arrays["decoder_offset"][offset_start:offset_end],
             target=int(self.arrays["target"][local_id]),
             action_count=int(self.arrays["action_count"][local_id]),
+            episode_key=int(self.arrays["episode_key"][local_id]),
         )
 
     def close(self) -> None:
@@ -411,71 +458,83 @@ class MmapFeatureDataset:
             np.cumsum(counts[:-1], out=self.starts[1:])
         self.ends = self.starts + counts
         self.total_samples = int(counts.sum())
+        self.shard_dates = [
+            parse_source_date(shard.metadata.get("source", {}).get("name", ""))
+            for shard in self.shards
+        ]
 
     def __len__(self) -> int:
         return self.total_samples
 
     def iter_index_batches(
         self,
+        indices: np.ndarray,
         batch_size: int,
-        shuffle_mode: str,
         seed: int,
-        max_samples: int | None,
+        shuffle: bool,
+        max_samples: int | None = None,
     ):
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
-        if shuffle_mode not in {"global", "shard"}:
-            raise ValueError("shuffle_mode must be 'global' or 'shard'")
-        limit = self.total_samples
+        order = np.asarray(indices)
+        if order.ndim != 1:
+            raise ValueError("indices must be one-dimensional")
+        limit = order.size
         if max_samples is not None:
             limit = min(limit, int(max_samples))
-        rng = np.random.default_rng(seed)
+        if shuffle:
+            order = order.copy()
+            np.random.default_rng(seed).shuffle(order)
+        for start in range(0, limit, batch_size):
+            yield IndexBatch(order[start : min(start + batch_size, limit)])
 
-        if shuffle_mode == "global":
-            dtype = np.uint32 if self.total_samples <= np.iinfo(np.uint32).max else np.uint64
-            if limit < self.total_samples:
-                order = rng.choice(
-                    self.total_samples,
-                    size=limit,
-                    replace=False,
-                    shuffle=True,
-                ).astype(dtype, copy=False)
-            else:
-                order = np.arange(self.total_samples, dtype=dtype)
-                rng.shuffle(order)
-            for start in range(0, limit, batch_size):
-                yield IndexBatch(order[start : start + batch_size])
-            return
-
-        shard_order = np.arange(len(self.shards), dtype=np.int64)
-        rng.shuffle(shard_order)
-        pending = np.empty(0, dtype=np.uint64)
-        produced = 0
-        for shard_id in shard_order:
-            local_count = len(self.shards[int(shard_id)])
-            dtype = np.uint32 if local_count <= np.iinfo(np.uint32).max else np.uint64
-            local = np.arange(local_count, dtype=dtype)
-            rng.shuffle(local)
-            global_ids = local.astype(np.uint64, copy=False) + np.uint64(
-                self.starts[int(shard_id)]
+    def build_splits(
+        self,
+        validation_ratio: float,
+        validation_seed: int,
+    ) -> DatasetSplits:
+        if not 0 < validation_ratio < 1:
+            raise ValueError("validation_ratio must be strictly between 0 and 1")
+        latest_date = max(self.shard_dates)
+        dtype = (
+            np.uint32
+            if self.total_samples <= np.iinfo(np.uint32).max
+            else np.uint64
+        )
+        threshold = int(validation_ratio * (1 << 32))
+        train_parts = []
+        in_distribution_parts = []
+        latest_parts = []
+        for shard_id, shard in enumerate(self.shards):
+            global_ids = np.arange(
+                self.starts[shard_id],
+                self.ends[shard_id],
+                dtype=dtype,
             )
-            if pending.size:
-                global_ids = np.concatenate((pending, global_ids))
-                pending = np.empty(0, dtype=np.uint64)
-            offset = 0
-            while offset + batch_size <= global_ids.size and produced < limit:
-                take = min(batch_size, limit - produced)
-                if take < batch_size:
-                    yield IndexBatch(global_ids[offset : offset + take])
-                    return
-                yield IndexBatch(global_ids[offset : offset + batch_size])
-                offset += batch_size
-                produced += batch_size
-            if produced >= limit:
-                return
-            pending = global_ids[offset:]
-        if pending.size and produced < limit:
-            yield IndexBatch(pending[: limit - produced])
+            if self.shard_dates[shard_id] == latest_date:
+                latest_parts.append(global_ids)
+                continue
+            mixed = _mix_episode_keys(
+                shard.arrays["episode_key"], validation_seed
+            )
+            validation_mask = mixed.astype(np.uint64) < threshold
+            in_distribution_parts.append(global_ids[validation_mask])
+            train_parts.append(global_ids[~validation_mask])
+
+        def combine(parts: list[np.ndarray], name: str) -> np.ndarray:
+            nonempty = [part for part in parts if part.size]
+            if not nonempty:
+                raise ValueError(f"{name} split is empty")
+            return np.concatenate(nonempty).astype(dtype, copy=False)
+
+        return DatasetSplits(
+            train=combine(train_parts, "train"),
+            in_distribution=combine(
+                in_distribution_parts, "in-distribution validation"
+            ),
+            latest=combine(latest_parts, "latest-date validation"),
+            latest_date=latest_date,
+        )
 
     def collate(self, index_batch: IndexBatch) -> CachedBatch:
         global_ids = np.asarray(index_batch.global_ids, dtype=np.int64)
@@ -526,15 +585,17 @@ class MmapFeatureDataset:
 
     def iter_batches(
         self,
+        indices: np.ndarray,
         batch_size: int,
-        shuffle_mode: str,
         seed: int,
+        shuffle: bool,
         max_samples: int | None = None,
     ):
         for index_batch in self.iter_index_batches(
+            indices=indices,
             batch_size=batch_size,
-            shuffle_mode=shuffle_mode,
             seed=seed,
+            shuffle=shuffle,
             max_samples=max_samples,
         ):
             yield self.collate(index_batch)
