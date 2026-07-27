@@ -1,4 +1,4 @@
-version_name: pure-bc-e4-d4-v1
+version_name: pure_baseline
 
 train:
   cg_path: ../pokemon_tcg_ai_battle/sample_submission
