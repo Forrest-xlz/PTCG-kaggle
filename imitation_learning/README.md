@@ -67,6 +67,16 @@ different states from the same replay can never cross the split. Every
 evaluated separately with CE loss and Top-1/3/5 accuracy. Training logs use
 cross-epoch exponential moving averages controlled by `ema_alpha`.
 
+Each replay ZIP under `train.replay_episodes` must contain one `manifest.csv`.
+For every date independently, training reconstructs both player scores from
+`min_score` and `sum_score`, then uses `expert_validation_ratio` to find the
+top-score cutoff across all players. Ties at the cutoff are retained, and an
+episode is marked expert when either player reaches it. The existing
+winner-only samples from those episodes form expert subsets inside both
+validation sets. Base and expert metrics share one model forward pass and are
+logged separately as `val_in_distribution_expert/*` and
+`val_latest_expert/*`.
+
 `train.precision` accepts `fp32`, `fp16`, or `bf16`. FP16 uses autocast and
 gradient scaling; BF16 uses autocast without a scaler and requires a supported
 CUDA GPU. Model parameters and saved checkpoints remain FP32.

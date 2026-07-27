@@ -19,6 +19,8 @@ def test_train_yaml_uses_validation_and_step_configuration() -> None:
     assert "warmup_ratio" not in train
     assert train["warmup_steps"] >= 0
     assert train["validation_ratio"] == pytest.approx(0.05)
+    assert train["expert_validation_ratio"] == pytest.approx(0.05)
+    assert train["replay_episodes"]
     assert train["ema_alpha"] == pytest.approx(0.99)
     assert config["model"]["norm_mode"] in {"prenorm", "postnorm"}
 

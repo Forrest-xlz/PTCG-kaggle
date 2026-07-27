@@ -81,7 +81,9 @@ class CachedBatch:
 class DatasetSplits:
     train: np.ndarray
     in_distribution: np.ndarray
+    in_distribution_expert_mask: np.ndarray
     latest: np.ndarray
+    latest_expert_mask: np.ndarray
     latest_date: tuple[int, int]
 
 
@@ -492,6 +494,8 @@ class MmapFeatureDataset:
         self,
         validation_ratio: float,
         validation_seed: int,
+        expert_episode_keys: dict[tuple[int, int], set[int] | frozenset[int]]
+        | None = None,
     ) -> DatasetSplits:
         if not 0 < validation_ratio < 1:
             raise ValueError("validation_ratio must be strictly between 0 and 1")
@@ -504,21 +508,44 @@ class MmapFeatureDataset:
         threshold = int(validation_ratio * (1 << 32))
         train_parts = []
         in_distribution_parts = []
+        in_distribution_expert_parts = []
         latest_parts = []
+        latest_expert_parts = []
+        if expert_episode_keys is not None:
+            missing = set(self.shard_dates) - set(expert_episode_keys)
+            if missing:
+                labels = ", ".join(
+                    f"{month}.{day}" for month, day in sorted(missing)
+                )
+                raise ValueError(f"expert episode keys missing for dates: {labels}")
         for shard_id, shard in enumerate(self.shards):
             global_ids = np.arange(
                 self.starts[shard_id],
                 self.ends[shard_id],
                 dtype=dtype,
             )
-            if self.shard_dates[shard_id] == latest_date:
+            date = self.shard_dates[shard_id]
+            if expert_episode_keys is None:
+                expert_mask = np.zeros(len(shard), dtype=np.bool_)
+            else:
+                keys = np.fromiter(
+                    expert_episode_keys[date], dtype=np.uint32
+                )
+                expert_mask = np.isin(
+                    shard.arrays["episode_key"], keys, assume_unique=False
+                )
+            if date == latest_date:
                 latest_parts.append(global_ids)
+                latest_expert_parts.append(expert_mask)
                 continue
             mixed = _mix_episode_keys(
                 shard.arrays["episode_key"], validation_seed
             )
             validation_mask = mixed.astype(np.uint64) < threshold
             in_distribution_parts.append(global_ids[validation_mask])
+            in_distribution_expert_parts.append(
+                expert_mask[validation_mask]
+            )
             train_parts.append(global_ids[~validation_mask])
 
         def combine(parts: list[np.ndarray], name: str) -> np.ndarray:
@@ -527,12 +554,28 @@ class MmapFeatureDataset:
                 raise ValueError(f"{name} split is empty")
             return np.concatenate(nonempty).astype(dtype, copy=False)
 
+        in_distribution = combine(
+            in_distribution_parts, "in-distribution validation"
+        )
+        latest = combine(latest_parts, "latest-date validation")
+        in_distribution_expert_mask = np.concatenate(
+            in_distribution_expert_parts
+        ).astype(np.bool_, copy=False)
+        latest_expert_mask = np.concatenate(latest_expert_parts).astype(
+            np.bool_, copy=False
+        )
+        if expert_episode_keys is not None:
+            if not np.any(in_distribution_expert_mask):
+                raise ValueError("in-distribution expert validation is empty")
+            if not np.any(latest_expert_mask):
+                raise ValueError("latest-date expert validation is empty")
+
         return DatasetSplits(
             train=combine(train_parts, "train"),
-            in_distribution=combine(
-                in_distribution_parts, "in-distribution validation"
-            ),
-            latest=combine(latest_parts, "latest-date validation"),
+            in_distribution=in_distribution,
+            in_distribution_expert_mask=in_distribution_expert_mask,
+            latest=latest,
+            latest_expert_mask=latest_expert_mask,
             latest_date=latest_date,
         )
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import csv
+import io
 import sys
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +22,7 @@ from training.feature_cache import (
     parse_source_date,
     stable_episode_key,
 )
+from training.expert_validation import load_expert_date_info
 
 
 SIGNATURE = {
@@ -55,6 +59,25 @@ def build_shard(
         writer.add(record(marker))
     writer.finalize()
     return path
+
+
+def write_manifest_archive(
+    path: Path, rows: list[dict[str, object]]
+) -> None:
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        buffer,
+        fieldnames=[
+            "episode_id",
+            "min_score",
+            "sum_score",
+            "agent_count",
+        ],
+    )
+    writer.writeheader()
+    writer.writerows(rows)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.csv", buffer.getvalue())
 
 
 def test_packed_shard_round_trip(tmp_path: Path) -> None:
@@ -95,6 +118,44 @@ def test_episode_key_is_stable_for_equivalent_ids() -> None:
 def test_source_dates_sort_numerically() -> None:
     assert parse_source_date("7.19.jsonl.gz") > parse_source_date("7.5.jsonl.gz")
     assert parse_source_date("7.1.part-00000.cache") == (7, 1)
+
+
+def test_expert_cutoff_uses_both_scores_and_includes_ties(
+    tmp_path: Path,
+) -> None:
+    write_manifest_archive(
+        tmp_path / "7.24.zip",
+        [
+            {
+                "episode_id": "a",
+                "min_score": 10,
+                "sum_score": 100,
+                "agent_count": 2,
+            },
+            {
+                "episode_id": "b",
+                "min_score": 20,
+                "sum_score": 100,
+                "agent_count": 2,
+            },
+            {
+                "episode_id": "c",
+                "min_score": 30,
+                "sum_score": 110,
+                "agent_count": 2,
+            },
+        ],
+    )
+
+    info = load_expert_date_info(
+        tmp_path, required_dates=[(7, 24)], ratio=0.2
+    )[(7, 24)]
+
+    assert info.cutoff == 80
+    assert info.episode_count == 3
+    assert info.expert_episode_keys == frozenset(
+        stable_episode_key(episode_id) for episode_id in ("a", "b", "c")
+    )
 
 
 def test_dataset_global_shuffle_visits_every_sample_once(tmp_path: Path) -> None:
@@ -164,6 +225,44 @@ def test_splits_hold_out_latest_and_keep_replays_together(
                 key = dataset.shards[shard_id].sample(local_id).episode_key
                 memberships.setdefault(key, set()).add(name)
         assert all(len(groups) == 1 for groups in memberships.values())
+    finally:
+        dataset.close()
+
+
+def test_expert_masks_align_with_existing_validation_splits(
+    tmp_path: Path,
+) -> None:
+    build_shard(
+        tmp_path / "old.cache",
+        list(range(1, 101)),
+        source_name="7.19.jsonl.gz",
+    )
+    build_shard(
+        tmp_path / "latest.cache",
+        [101, 102, 103],
+        source_name="7.24.jsonl.gz",
+    )
+    dataset = MmapFeatureDataset(tmp_path, expected_signature=SIGNATURE)
+    try:
+        splits = dataset.build_splits(
+            validation_ratio=0.5,
+            validation_seed=123,
+            expert_episode_keys={
+                (7, 19): {
+                    stable_episode_key(f"episode-{marker}")
+                    for marker in range(1, 101)
+                },
+                (7, 24): {stable_episode_key("episode-101")},
+            },
+        )
+        assert len(splits.in_distribution_expert_mask) == len(
+            splits.in_distribution
+        )
+        assert splits.in_distribution_expert_mask.all()
+        assert len(splits.latest_expert_mask) == len(splits.latest)
+        np.testing.assert_array_equal(
+            splits.latest_expert_mask, [True, False, False]
+        )
     finally:
         dataset.close()
 

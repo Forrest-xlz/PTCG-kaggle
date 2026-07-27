@@ -39,7 +39,13 @@ if str(_cg_path) not in sys.path:
 
 from cg.api import SelectContext, all_attack, all_card_data
 from model.network import ModelConfig, PTCGTransformer
-from training.feature_cache import MAX_ACTIONS, CachedBatch, MmapFeatureDataset
+from training.expert_validation import load_expert_date_info
+from training.feature_cache import (
+    MAX_ACTIONS,
+    CachedBatch,
+    IndexBatch,
+    MmapFeatureDataset,
+)
 from training.precision import PrecisionContext
 
 
@@ -47,6 +53,7 @@ from training.precision import PrecisionContext
 class TrainSettings:
     cg_path: str
     data: str
+    replay_episodes: str
     output: str
     epochs: int
     batch_size: int
@@ -66,6 +73,7 @@ class TrainSettings:
     ema_alpha: float
     validation_ratio: float
     validation_seed: int
+    expert_validation_ratio: float
     grad_clip_norm: float
 
 
@@ -121,6 +129,13 @@ class BatchResult:
     learning_rate: float
     optimizer_stepped: bool
     grad_scale: float
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationResult:
+    overall: PolicyMetrics
+    expert: PolicyMetrics
+    seconds: float
 
 
 class ExponentialMovingAverage:
@@ -194,6 +209,10 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError("train.ema_alpha must be in [0, 1)")
     if not 0 < train.validation_ratio < 1:
         raise ValueError("train.validation_ratio must be strictly between 0 and 1")
+    if not 0 < train.expert_validation_ratio <= 1:
+        raise ValueError(
+            "train.expert_validation_ratio must be in (0, 1]"
+        )
     if not isinstance(train.save_every_epoch, bool):
         raise ValueError("train.save_every_epoch must be true or false")
     if model.d_model < 1 or model.ffn_multiplier <= 0:
@@ -374,20 +393,50 @@ def evaluate_dataset(
     batch_size: int,
     device: torch.device,
     precision: PrecisionContext,
-) -> tuple[PolicyMetrics, float]:
+    expert_mask: np.ndarray,
+) -> ValidationResult:
+    indices = np.asarray(indices)
+    expert_mask = np.asarray(expert_mask, dtype=np.bool_)
+    if indices.ndim != 1 or expert_mask.ndim != 1:
+        raise ValueError("validation indices and expert mask must be one-dimensional")
+    if len(indices) != len(expert_mask):
+        raise ValueError("expert mask must align with validation indices")
+    if not np.any(expert_mask):
+        raise ValueError("expert validation subset is empty")
+
+    totals = {
+        "overall": [0.0, 0, 0, 0, 0],
+        "expert": [0.0, 0, 0, 0, 0],
+    }
+
+    def accumulate(name: str, metrics: PolicyMetrics) -> None:
+        total = totals[name]
+        total[0] += metrics.loss * metrics.samples
+        total[1] += metrics.top1_correct
+        total[2] += metrics.top3_correct
+        total[3] += metrics.top5_correct
+        total[4] += metrics.samples
+
+    def finalize(name: str) -> PolicyMetrics:
+        loss_sum, top1, top3, top5, samples = totals[name]
+        if samples < 1:
+            raise ValueError(f"{name} validation subset is empty")
+        return PolicyMetrics(
+            loss=loss_sum / samples,
+            top1_correct=top1,
+            top3_correct=top3,
+            top5_correct=top5,
+            samples=samples,
+        )
+
     was_training = model.training
     model.eval()
     started = time.perf_counter()
-    loss_sum = 0.0
-    top1 = top3 = top5 = samples = 0
     try:
         with torch.inference_mode():
-            for batch in dataset.iter_batches(
-                indices=indices,
-                batch_size=batch_size,
-                seed=0,
-                shuffle=False,
-            ):
+            for start in range(0, len(indices), batch_size):
+                end = min(start + batch_size, len(indices))
+                batch = dataset.collate(IndexBatch(indices[start:end]))
                 with precision.autocast():
                     logits, targets, action_counts = _forward_batch(
                         batch, model, device
@@ -395,23 +444,23 @@ def evaluate_dataset(
                     _, metrics = policy_metrics(
                         logits, targets, action_counts
                     )
-                loss_sum += metrics.loss * metrics.samples
-                top1 += metrics.top1_correct
-                top3 += metrics.top3_correct
-                top5 += metrics.top5_correct
-                samples += metrics.samples
+                    accumulate("overall", metrics)
+                    selected = torch.from_numpy(
+                        expert_mask[start:end]
+                    ).to(device=device)
+                    if bool(selected.any()):
+                        _, expert_metrics = policy_metrics(
+                            logits[selected],
+                            targets[selected],
+                            action_counts[selected],
+                        )
+                        accumulate("expert", expert_metrics)
     finally:
         model.train(was_training)
-    elapsed = time.perf_counter() - started
-    return (
-        PolicyMetrics(
-            loss=loss_sum / max(samples, 1),
-            top1_correct=top1,
-            top3_correct=top3,
-            top5_correct=top5,
-            samples=samples,
-        ),
-        elapsed,
+    return ValidationResult(
+        overall=finalize("overall"),
+        expert=finalize("expert"),
+        seconds=time.perf_counter() - started,
     )
 
 
@@ -450,7 +499,7 @@ def checkpoint_payload(
 def _log_validation(
     namespace: str,
     metrics: PolicyMetrics,
-    seconds: float,
+    seconds: float | None,
     global_step: int,
     wandb_run,
 ) -> None:
@@ -461,9 +510,10 @@ def _log_validation(
         f"{namespace}/top3_accuracy": averages["top3_accuracy"],
         f"{namespace}/top5_accuracy": averages["top5_accuracy"],
         f"{namespace}/samples": metrics.samples,
-        f"{namespace}/seconds": seconds,
         "optimizer_step": global_step,
     }
+    if seconds is not None:
+        payload[f"{namespace}/seconds"] = seconds
     print(
         f"{namespace} step={global_step:,} samples={metrics.samples:,} "
         f"loss={averages['loss']:.4f} "
@@ -486,6 +536,7 @@ def main() -> None:
     data_path = project_path(train_cfg.data)
     if not data_path.exists():
         raise FileNotFoundError(f"Training cache directory not found: {data_path}")
+    replay_root = project_path(train_cfg.replay_episodes)
 
     random.seed(train_cfg.seed)
     np.random.seed(train_cfg.seed)
@@ -510,10 +561,31 @@ def main() -> None:
         data_path,
         expected_signature=feature_signature(config),
     )
-    splits = dataset.build_splits(
-        validation_ratio=train_cfg.validation_ratio,
-        validation_seed=train_cfg.validation_seed,
-    )
+    try:
+        expert_dates = load_expert_date_info(
+            replay_root=replay_root,
+            required_dates=dataset.shard_dates,
+            ratio=train_cfg.expert_validation_ratio,
+        )
+        for date in sorted(expert_dates):
+            info = expert_dates[date]
+            print(
+                f"expert_date={date[0]}.{date[1]} cutoff={info.cutoff:g} "
+                f"episodes={info.episode_count:,} "
+                f"expert_episodes={info.expert_episode_count:,}",
+                flush=True,
+            )
+        splits = dataset.build_splits(
+            validation_ratio=train_cfg.validation_ratio,
+            validation_seed=train_cfg.validation_seed,
+            expert_episode_keys={
+                date: info.expert_episode_keys
+                for date, info in expert_dates.items()
+            },
+        )
+    except Exception:
+        dataset.close()
+        raise
     cache_open_seconds = time.perf_counter() - cache_started
     samples_per_epoch = len(splits.train)
     if train_cfg.max_samples is not None:
@@ -565,7 +637,9 @@ def main() -> None:
             "train/*",
             "epoch/*",
             "val_in_distribution/*",
+            "val_in_distribution_expert/*",
             "val_latest/*",
+            "val_latest_expert/*",
         ):
             wandb.define_metric(namespace, step_metric="optimizer_step")
 
@@ -589,7 +663,10 @@ def main() -> None:
         f"cache_shards={len(dataset.shards)} cache_samples={len(dataset):,} "
         f"train={len(splits.train):,} "
         f"val_in_distribution={len(splits.in_distribution):,} "
+        f"val_in_distribution_expert="
+        f"{int(splits.in_distribution_expert_mask.sum()):,} "
         f"val_latest={len(splits.latest):,} "
+        f"val_latest_expert={int(splits.latest_expert_mask.sum()):,} "
         f"latest_date={splits.latest_date[0]}.{splits.latest_date[1]} "
         f"steps_per_epoch={steps_per_epoch:,} total_steps={total_steps:,} "
         f"warmup_steps={train_cfg.warmup_steps:,}",
@@ -605,7 +682,13 @@ def main() -> None:
                 "data/val_in_distribution_samples": len(
                     splits.in_distribution
                 ),
+                "data/val_in_distribution_expert_samples": int(
+                    splits.in_distribution_expert_mask.sum()
+                ),
                 "data/val_latest_samples": len(splits.latest),
+                "data/val_latest_expert_samples": int(
+                    splits.latest_expert_mask.sum()
+                ),
                 "schedule/steps_per_epoch": steps_per_epoch,
                 "schedule/total_steps": total_steps,
                 "schedule/warmup_steps": train_cfg.warmup_steps,
@@ -644,20 +727,42 @@ def main() -> None:
 
     def run_validation() -> None:
         nonlocal last_eval_step
-        for namespace, indices in (
-            ("val_in_distribution", splits.in_distribution),
-            ("val_latest", splits.latest),
+        for namespace, expert_namespace, indices, expert_mask in (
+            (
+                "val_in_distribution",
+                "val_in_distribution_expert",
+                splits.in_distribution,
+                splits.in_distribution_expert_mask,
+            ),
+            (
+                "val_latest",
+                "val_latest_expert",
+                splits.latest,
+                splits.latest_expert_mask,
+            ),
         ):
-            metrics, seconds = evaluate_dataset(
+            result = evaluate_dataset(
                 model=model,
                 dataset=dataset,
                 indices=indices,
                 batch_size=train_cfg.batch_size,
                 device=device,
                 precision=precision,
+                expert_mask=expert_mask,
             )
             _log_validation(
-                namespace, metrics, seconds, global_step, wandb_run
+                namespace,
+                result.overall,
+                result.seconds,
+                global_step,
+                wandb_run,
+            )
+            _log_validation(
+                expert_namespace,
+                result.expert,
+                None,
+                global_step,
+                wandb_run,
             )
         last_eval_step = global_step
 

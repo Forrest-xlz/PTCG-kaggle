@@ -3,6 +3,7 @@ version_name: pure_baseline
 train:
   cg_path: ../pokemon_tcg_ai_battle/sample_submission
   data: data/training_cache
+  replay_episodes: ../replay_episodes
   output: outputs/${version_name}
   epochs: 3
   batch_size: 4096
@@ -22,6 +23,7 @@ train:
   ema_alpha: 0.99
   validation_ratio: 0.05
   validation_seed: 42
+  expert_validation_ratio: 0.05
   grad_clip_norm: 1.0
 
 model:
