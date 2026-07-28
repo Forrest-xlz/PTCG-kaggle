@@ -1,18 +1,58 @@
 """Extract the two initial decks from replay ZIPs in parallel."""
 from __future__ import annotations
 
-import argparse
 import csv
 import io
 import json
 import os
+import sys
 import tempfile
 import zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH = PROJECT_ROOT / "cfg" / "deck_extract.yaml"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 SCHEMA_VERSION = 2
+
+
+@dataclass(frozen=True)
+class DeckExtractSettings:
+    input: str
+    output: str
+    workers: int
+    limit_members: int | None
+    force: bool
+
+
+def load_settings(path: Path = CONFIG_PATH) -> DeckExtractSettings:
+    if not path.exists():
+        raise FileNotFoundError(f"Deck extraction config not found: {path}")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or not isinstance(raw.get("extract"), dict):
+        raise ValueError("deck_extract.yaml must contain an 'extract' mapping")
+    settings = DeckExtractSettings(**raw["extract"])
+    if type(settings.workers) is not int or settings.workers < 1:
+        raise ValueError("extract.workers must be an integer >= 1")
+    if settings.limit_members is not None and (
+        type(settings.limit_members) is not int or settings.limit_members < 1
+    ):
+        raise ValueError("extract.limit_members must be null or an integer >= 1")
+    if not isinstance(settings.force, bool):
+        raise ValueError("extract.force must be true or false")
+    return settings
+
+
+def project_path(value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 def _episode_id(payload: dict[str, Any], member: str) -> str:
@@ -97,20 +137,40 @@ def process_archive(args: tuple[str, str, bool, int | None]) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, required=True, help="ZIP file or directory of ZIPs")
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--workers", type=int, default=max(1, min(5, (os.cpu_count() or 2) - 1)))
-    parser.add_argument("--limit-members", type=int, default=None)
-    parser.add_argument("--force", action="store_true")
-    ns = parser.parse_args()
-    archives = [ns.input] if ns.input.is_file() else sorted(ns.input.glob("*.zip"))
-    ns.output.mkdir(parents=True, exist_ok=True)
-    jobs = [(str(x), str(ns.output), ns.force, ns.limit_members) for x in archives]
-    with ProcessPoolExecutor(max_workers=ns.workers) as pool:
+    settings = load_settings()
+    input_path = project_path(settings.input)
+    output_path = project_path(settings.output)
+    if not input_path.exists():
+        raise FileNotFoundError(f"Replay input does not exist: {input_path}")
+    if input_path.is_file() and input_path.suffix.lower() != ".zip":
+        raise ValueError(f"Replay input file must be a ZIP: {input_path}")
+    archives = (
+        [input_path]
+        if input_path.is_file()
+        else sorted(input_path.glob("*.zip"))
+    )
+    if not archives:
+        raise FileNotFoundError(f"No ZIP archives found under: {input_path}")
+    output_path.mkdir(parents=True, exist_ok=True)
+    workers = min(settings.workers, len(archives))
+    jobs = [
+        (
+            str(archive),
+            str(output_path),
+            settings.force,
+            settings.limit_members,
+        )
+        for archive in archives
+    ]
+    print(
+        f"config={CONFIG_PATH} archives={len(archives)} workers={workers} "
+        f"limit_members={settings.limit_members} force={settings.force}",
+        flush=True,
+    )
+    with ProcessPoolExecutor(max_workers=workers) as pool:
         futures = [pool.submit(process_archive, job) for job in jobs]
         for future in as_completed(futures):
-            print(json.dumps(future.result(), ensure_ascii=False))
+            print(json.dumps(future.result(), ensure_ascii=False), flush=True)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,6 @@
+extract:
+  input: ../replay_episodes
+  output: data/deck
+  workers: 16
+  limit_members: null  # Set an integer only for a smoke test.
+  force: false         # true rebuilds existing completed shards.

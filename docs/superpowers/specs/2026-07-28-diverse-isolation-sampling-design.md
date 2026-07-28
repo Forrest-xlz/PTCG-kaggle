@@ -12,7 +12,7 @@ independent, rerollable samplers:
   label is one of those archetypes.
 
 The EDA is a selection aid. It displays every selected object for manual
-review and writes two selected-deck CSV files that a later training-data task
+review and writes three selected-deck CSV files that a later training-data task
 can consume. It does not create validation caches or modify training
 configuration.
 
@@ -31,6 +31,23 @@ validation size.
 
 `uses` remains a separate descriptive metric and counts player-side deck
 occurrences.
+
+## Top-Deck Definition
+
+The notebook owns two editable values for the model's final deck:
+
+```python
+TOP_DECK_ARCHETYPE = "..."
+TOP_DECK_CARD_IDS = [...]
+```
+
+`TOP_DECK_CARD_IDS` must contain exactly 60 non-negative integer Card IDs. Its
+exact-deck identity is excluded from every isolation selection and CSV, but a
+replay is not excluded merely because the top deck appears as the opponent.
+
+The ordinary Deck-Isolation and Archetype-Isolation samplers exclude
+`TOP_DECK_ARCHETYPE`. A dedicated selector handles variants within that
+archetype without selecting the model's exact top deck as a validation deck.
 
 ## Deck-Isolation Parameters
 
@@ -193,13 +210,14 @@ constraint.
 The notebook keeps the existing census and similarity exploration, then
 presents:
 
-1. Deck Isolation candidate table and plots.
-2. A Deck Isolation parameter and reroll cell.
-3. The selected Deck Isolation table.
-4. Archetype Isolation candidate tables and plots.
-5. An Archetype Isolation parameter and reroll cell.
-6. The selected archetype summary and selected exact-deck detail table.
-7. A combined hypothetical audit.
+1. Top-deck definition and dedicated same-archetype variant selector.
+2. Deck Isolation candidate table and plots.
+3. A Deck Isolation parameter and reroll cell.
+4. The selected Deck Isolation table.
+5. Archetype Isolation candidate tables and plots.
+6. An Archetype Isolation parameter and reroll cell.
+7. The selected archetype summary and selected exact-deck detail table.
+8. A combined hypothetical audit.
 
 All chart and column labels remain English.
 
@@ -223,7 +241,7 @@ card_ids
 It is written, with no configurable output directory, to:
 
 ```text
-imitation_learning/deck/deck_isolation_selection.csv
+imitation_learning/data/deck_isolation_selection.csv
 ```
 
 `card_ids` stores the complete sorted 60-card list as compact JSON.
@@ -256,7 +274,7 @@ card_ids
 The exact-deck detail table is written to:
 
 ```text
-imitation_learning/deck/archetype_isolation_selection.csv
+imitation_learning/data/archetype_isolation_selection.csv
 ```
 
 This expanded mapping lets later training-data code identify validation
@@ -266,21 +284,58 @@ classification.
 Rerunning a sampler with a different `ROLL_ID` overwrites only that sampler's
 selection CSV. The current CSV represents the latest manually reviewed roll.
 
+## Top-Deck Archetype Deck Isolation
+
+A third notebook cell selects exact-deck variants from the configured
+`TOP_DECK_ARCHETYPE`:
+
+```python
+TOP_DECK_MIN_REPLAYS = 100
+TOP_DECK_MIN_COUNT = 3
+TOP_DECK_TOTAL_REPLAYS_MIN = 1000
+TOP_DECK_TOTAL_REPLAYS_MAX = 3000
+TOP_DECK_ROLL_ID = 0
+```
+
+Candidates must satisfy the ordinary Deck-Isolation replay, exact-deck,
+training-card, and remaining-training constraints. The configured exact top
+deck is never eligible. Multiple variants from the target archetype may be
+selected because archetype uniqueness is intentionally not enforced here.
+
+Similarity is measured directly against `TOP_DECK_CARD_IDS` using
+`top_deck_changed_slots` and `top_deck_weighted_jaccard`. Eligible candidates
+are divided into tie-preserving empirical thirds, and the sampler chooses
+uniformly among available bands before choosing a deck uniformly within the
+band. Replay totals use the deduplicated union.
+
+The selected table contains the target archetype, exact deck ID, replay and
+usage statistics, direct top-deck similarity, band, and complete Card ID list.
+It is written to:
+
+```text
+imitation_learning/data/top_deck_archetype_isolation_selection.csv
+```
+
 ## Combined Audit
 
-The final notebook cell simulates removing the union of both selected replay
+The final notebook cell simulates removing the union of all three selected replay
 sets and reports:
 
 - Deck Isolation unique replay count.
+- Top-deck archetype Deck Isolation unique replay count.
 - Archetype Isolation unique replay count.
-- Replay overlap between the two selections.
+- Replay overlap among the three selections.
 - Combined validation and remaining-training replay counts.
 - Exact-deck leakage for Deck Isolation.
 - Missing training-side Card IDs for Deck Isolation.
 - Missing training-side same-archetype coverage for Deck Isolation.
 - Remaining selected Archetype Isolation occurrences on the training side.
 - Any primary archetype selected by both isolation methods.
+- Whether the exact configured top deck was accidentally selected.
 - Overall audit validity and diagnostics.
+
+The exact top deck may still occur as an opponent in a selected replay. This is
+intentional and is not an audit failure.
 
 The combined audit does not require core Card IDs to disappear globally.
 

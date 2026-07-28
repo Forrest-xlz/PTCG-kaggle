@@ -22,15 +22,17 @@ sample-submission directory to `PYTHONPATH`).
 
 ```bash
 pip install -r requirements.txt
-python -m deck.extract --input "../replay episodes" --output data/decks
+python -m deck.extract
 python -m training.extract
 python -m training.cache_features
 python -m training.train
 ```
 
 Both extractors create one output shard and one metadata file per ZIP. Existing
-valid shards are skipped, so interrupted runs are resumable. Training extraction
-has no command-line parameters and always reads `cfg/extract.yaml`; its
+valid shards are skipped, so interrupted runs are resumable. Deck extraction
+has no command-line parameters and reads `cfg/deck_extract.yaml`; its input,
+output, worker count, smoke-test limit, and rebuild behavior are configured
+there. Training extraction reads `cfg/extract.yaml`; its
 `workers`, `limit_members`, and `force` fields control parallelism, smoke tests,
 and rebuilding. With `winner_only: true`, only decisions made by players whose
 final replay reward is positive are written; draws produce no samples. Replay
@@ -114,8 +116,16 @@ When WandB is enabled, checkpoints and history are written to
 local run-ID folder without uploading model artifacts. When WandB is disabled,
 they are written under `train.output`.
 
-Open `deck/deck_eda.ipynb` after deck extraction. It ranks complete deck types
-by usage, analyzes win rates, and plots usage and win-rate trends by date.
+Open `deck/deck_eda.ipynb` after deck extraction. Set the extracted-deck and
+`EN_Card_Data.csv` paths in its setup cell, then run top-to-bottom. The
+notebook classifies rule-based archetypes, assigns stable SHA-256 exact-deck
+IDs, and saves:
+
+- `data/deck_analysis/deck_summary.csv`
+- `data/deck_analysis/deck_similarity_pairs.csv`
+
+The similarity table contains every unordered exact-deck pair. It reports the
+minimum changed card slots and count-aware Weighted Jaccard similarity.
 
 For Kaggle submission, upload a trained `epoch-*.pt` file as a Kaggle Dataset,
 attach it to `kaggle_submission_imitation_agent.ipynb` together with a Dataset
