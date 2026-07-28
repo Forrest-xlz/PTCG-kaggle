@@ -20,6 +20,7 @@ from training.feature_cache import (
     PackedShard,
     PackedShardWriter,
     parse_source_date,
+    stable_deck_key,
     stable_episode_key,
 )
 from training.expert_validation import load_expert_date_info
@@ -46,6 +47,7 @@ def record(marker: int, action_count: int = 2) -> FeatureRecord:
         target=min(1, action_count - 1),
         action_count=action_count,
         episode_key=stable_episode_key(f"episode-{marker}"),
+        deck_key=stable_deck_key([marker] * 60),
     )
 
 
@@ -96,7 +98,9 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
         assert sample.target == 1
         assert sample.action_count == 2
         assert sample.episode_key == stable_episode_key("episode-11")
+        assert sample.deck_key == stable_deck_key([11] * 60)
         assert shard.arrays["episode_key"].dtype == np.dtype("<u4")
+        assert shard.arrays["deck_key"].dtype == np.dtype("<u8")
     finally:
         shard.close()
 
@@ -113,6 +117,19 @@ def test_writer_rejects_encoder_index_outside_uint16(tmp_path: Path) -> None:
 def test_episode_key_is_stable_for_equivalent_ids() -> None:
     assert stable_episode_key(12345) == stable_episode_key("12345")
     assert 0 <= stable_episode_key("episode-a") <= np.iinfo(np.uint32).max
+
+
+def test_deck_key_ignores_order_and_preserves_multiplicity() -> None:
+    deck = list(range(60))
+    assert stable_deck_key(deck) == stable_deck_key(reversed(deck))
+    changed = deck.copy()
+    changed[-1] = changed[-2]
+    assert stable_deck_key(deck) != stable_deck_key(changed)
+
+
+def test_deck_key_requires_exactly_60_cards() -> None:
+    with pytest.raises(ValueError, match="exactly 60"):
+        stable_deck_key([1] * 59)
 
 
 def test_source_dates_sort_numerically() -> None:
@@ -254,6 +271,10 @@ def test_expert_masks_align_with_existing_validation_splits(
                 },
                 (7, 24): {stable_episode_key("episode-101")},
             },
+            top_deck_keys={
+                stable_deck_key([marker] * 60)
+                for marker in range(1, 102)
+            },
         )
         assert len(splits.in_distribution_expert_mask) == len(
             splits.in_distribution
@@ -263,6 +284,62 @@ def test_expert_masks_align_with_existing_validation_splits(
         np.testing.assert_array_equal(
             splits.latest_expert_mask, [True, False, False]
         )
+        assert splits.in_distribution_top_deck_mask.all()
+        np.testing.assert_array_equal(
+            splits.latest_top_deck_mask, [True, False, False]
+        )
+        np.testing.assert_array_equal(
+            splits.latest_expert_top_deck_mask, [True, False, False]
+        )
+    finally:
+        dataset.close()
+
+
+def test_train_replay_sampling_is_deterministic_and_keeps_replays_together(
+    tmp_path: Path,
+) -> None:
+    old_markers = list(range(1, 101)) * 2
+    build_shard(
+        tmp_path / "old.cache",
+        old_markers,
+        source_name="7.19.jsonl.gz",
+    )
+    build_shard(
+        tmp_path / "latest.cache",
+        [101, 102],
+        source_name="7.24.jsonl.gz",
+    )
+    dataset = MmapFeatureDataset(tmp_path, expected_signature=SIGNATURE)
+    try:
+        first = dataset.build_splits(
+            validation_ratio=0.2,
+            validation_seed=11,
+            train_replay_ratio=0.5,
+            train_replay_seed=29,
+        )
+        second = dataset.build_splits(
+            validation_ratio=0.2,
+            validation_seed=11,
+            train_replay_ratio=0.5,
+            train_replay_seed=29,
+        )
+        np.testing.assert_array_equal(first.train, second.train)
+        assert first.eligible_train_samples > len(first.train)
+        assert first.eligible_train_replays > first.selected_train_replays
+
+        train_ids = set(map(int, first.train))
+        validation_ids = set(map(int, first.in_distribution))
+        memberships: dict[int, set[str]] = {}
+        for global_id in range(len(old_markers)):
+            key = stable_episode_key(f"episode-{old_markers[global_id]}")
+            if global_id in train_ids:
+                group = "train"
+            elif global_id in validation_ids:
+                group = "validation"
+            else:
+                group = "not-selected"
+            memberships.setdefault(key, set()).add(group)
+        assert all(len(groups) == 1 for groups in memberships.values())
     finally:
         dataset.close()
 

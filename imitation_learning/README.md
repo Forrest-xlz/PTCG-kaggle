@@ -48,9 +48,9 @@ because they are always one, and only the current batch is materialized in
 ordinary CPU memory. Candidate selections cover every legal size from
 `maxCount` down to `minCount`, retain at most the first 64 combinations, and
 treat replay selection order as irrelevant. Each sample also stores a stable
-32-bit replay key used for validation splitting. This field requires rebuilding
-feature caches created with older schema versions; replay extraction does not
-need to be repeated.
+32-bit replay key used for validation splitting and a stable 64-bit key for
+its complete deck. Cache schema 4 is required, so older feature caches must be
+rebuilt; replay extraction does not need to be repeated.
 
 Training has no command-line parameters. It reads `cfg/train.yaml`, whose
 `train`, `model`, and `wandb` sections control cache paths, batching, network
@@ -76,6 +76,18 @@ winner-only samples from those episodes form expert subsets inside both
 validation sets. Base and expert metrics share one model forward pass and are
 logged separately as `val_in_distribution_expert/*` and
 `val_latest_expert/*`.
+
+`train.top_decks` accepts one or more complete 60-card lists. Card order is
+ignored but multiplicity is preserved. These decks define
+`val_in_distribution_top_deck`, `val_latest_top_deck`, and the intersection
+`val_latest_expert_top_deck`. All subgroup metrics reuse their base validation
+batch's logits, so they do not add model forward passes.
+
+After both validation sets are fixed, `train.train_replay_ratio` selects a
+deterministic fraction of the remaining replays using `train_replay_seed`.
+Every selected replay keeps all of its samples, and the fixed subset is reused
+for every epoch. The realized sample ratio can differ from the replay ratio
+because games contain different numbers of decisions.
 
 `train.precision` accepts `fp32`, `fp16`, or `bf16`. FP16 uses autocast and
 gradient scaling; BF16 uses autocast without a scaler and requires a supported
@@ -107,7 +119,11 @@ by usage, analyzes win rates, and plots usage and win-rate trends by date.
 
 For Kaggle submission, upload a trained `epoch-*.pt` file as a Kaggle Dataset,
 attach it to `kaggle_submission_imitation_agent.ipynb` together with a Dataset
-containing the `cg` directory, and run all cells. The notebook embeds the inference code and deck list and creates
+containing the `cg` directory. In the first code cell, set the exact
+`MODEL_PATH`, `CG_PATH`, and the agent's 60-card `DECK`, then run all cells.
+The notebook reads width, FFN size, attention heads, encoder/decoder depth, and
+normalization mode from the checkpoint; these architecture fields are not
+configured twice. It embeds the inference code and creates
 `/kaggle/working/submission.tar.gz`.
 
 ## Training records

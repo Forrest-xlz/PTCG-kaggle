@@ -45,6 +45,7 @@ from training.feature_cache import (
     CachedBatch,
     IndexBatch,
     MmapFeatureDataset,
+    stable_deck_key,
 )
 from training.precision import PrecisionContext
 
@@ -74,6 +75,9 @@ class TrainSettings:
     validation_ratio: float
     validation_seed: int
     expert_validation_ratio: float
+    top_decks: list[list[int]]
+    train_replay_ratio: float
+    train_replay_seed: int
     grad_clip_norm: float
 
 
@@ -134,7 +138,7 @@ class BatchResult:
 @dataclass(frozen=True, slots=True)
 class ValidationResult:
     overall: PolicyMetrics
-    expert: PolicyMetrics
+    subgroups: dict[str, PolicyMetrics]
     seconds: float
 
 
@@ -213,6 +217,21 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError(
             "train.expert_validation_ratio must be in (0, 1]"
         )
+    if not 0 < train.train_replay_ratio <= 1:
+        raise ValueError("train.train_replay_ratio must be in (0, 1]")
+    if type(train.train_replay_seed) is not int:
+        raise ValueError("train.train_replay_seed must be an integer")
+    if not train.top_decks:
+        raise ValueError("train.top_decks must contain at least one deck")
+    for deck_index, deck in enumerate(train.top_decks):
+        if not isinstance(deck, list) or len(deck) != 60:
+            raise ValueError(
+                f"train.top_decks[{deck_index}] must contain exactly 60 cards"
+            )
+        if any(type(card_id) is not int or card_id < 0 for card_id in deck):
+            raise ValueError(
+                f"train.top_decks[{deck_index}] must contain non-negative integers"
+            )
     if not isinstance(train.save_every_epoch, bool):
         raise ValueError("train.save_every_epoch must be true or false")
     if model.d_model < 1 or model.ffn_multiplier <= 0:
@@ -393,21 +412,25 @@ def evaluate_dataset(
     batch_size: int,
     device: torch.device,
     precision: PrecisionContext,
-    expert_mask: np.ndarray,
+    subgroup_masks: dict[str, np.ndarray],
 ) -> ValidationResult:
     indices = np.asarray(indices)
-    expert_mask = np.asarray(expert_mask, dtype=np.bool_)
-    if indices.ndim != 1 or expert_mask.ndim != 1:
-        raise ValueError("validation indices and expert mask must be one-dimensional")
-    if len(indices) != len(expert_mask):
-        raise ValueError("expert mask must align with validation indices")
-    if not np.any(expert_mask):
-        raise ValueError("expert validation subset is empty")
-
-    totals = {
-        "overall": [0.0, 0, 0, 0, 0],
-        "expert": [0.0, 0, 0, 0, 0],
+    if indices.ndim != 1:
+        raise ValueError("validation indices must be one-dimensional")
+    masks = {
+        name: np.asarray(mask, dtype=np.bool_)
+        for name, mask in subgroup_masks.items()
     }
+    for name, mask in masks.items():
+        if mask.ndim != 1 or len(mask) != len(indices):
+            raise ValueError(
+                f"{name} mask must be one-dimensional and align with indices"
+            )
+        if not np.any(mask):
+            raise ValueError(f"{name} validation subset is empty")
+
+    totals = {"overall": [0.0, 0, 0, 0, 0]}
+    totals.update({name: [0.0, 0, 0, 0, 0] for name in masks})
 
     def accumulate(name: str, metrics: PolicyMetrics) -> None:
         total = totals[name]
@@ -445,21 +468,22 @@ def evaluate_dataset(
                         logits, targets, action_counts
                     )
                     accumulate("overall", metrics)
-                    selected = torch.from_numpy(
-                        expert_mask[start:end]
-                    ).to(device=device)
-                    if bool(selected.any()):
-                        _, expert_metrics = policy_metrics(
-                            logits[selected],
-                            targets[selected],
-                            action_counts[selected],
+                    for name, mask in masks.items():
+                        selected = torch.from_numpy(mask[start:end]).to(
+                            device=device
                         )
-                        accumulate("expert", expert_metrics)
+                        if bool(selected.any()):
+                            _, subgroup_metrics = policy_metrics(
+                                logits[selected],
+                                targets[selected],
+                                action_counts[selected],
+                            )
+                            accumulate(name, subgroup_metrics)
     finally:
         model.train(was_training)
     return ValidationResult(
         overall=finalize("overall"),
-        expert=finalize("expert"),
+        subgroups={name: finalize(name) for name in masks},
         seconds=time.perf_counter() - started,
     )
 
@@ -554,6 +578,22 @@ def main() -> None:
         decoder_layers=model_cfg.decoder_layers,
         norm_mode=model_cfg.norm_mode,
     )
+    invalid_card_ids = sorted(
+        {
+            card_id
+            for deck in train_cfg.top_decks
+            for card_id in deck
+            if card_id >= config.card_count
+        }
+    )
+    if invalid_card_ids:
+        raise ValueError(
+            "train.top_decks contains card IDs outside the model vocabulary: "
+            f"{invalid_card_ids}"
+        )
+    top_deck_keys = {
+        stable_deck_key(deck) for deck in train_cfg.top_decks
+    }
     device = resolve_device(train_cfg.device)
     precision = PrecisionContext(train_cfg.precision, device)
     cache_started = time.perf_counter()
@@ -582,11 +622,20 @@ def main() -> None:
                 date: info.expert_episode_keys
                 for date, info in expert_dates.items()
             },
+            top_deck_keys=top_deck_keys,
+            train_replay_ratio=train_cfg.train_replay_ratio,
+            train_replay_seed=train_cfg.train_replay_seed,
         )
     except Exception:
         dataset.close()
         raise
     cache_open_seconds = time.perf_counter() - cache_started
+    realized_train_sample_ratio = (
+        len(splits.train) / splits.eligible_train_samples
+    )
+    realized_train_replay_ratio = (
+        splits.selected_train_replays / splits.eligible_train_replays
+    )
     samples_per_epoch = len(splits.train)
     if train_cfg.max_samples is not None:
         samples_per_epoch = min(samples_per_epoch, train_cfg.max_samples)
@@ -638,8 +687,11 @@ def main() -> None:
             "epoch/*",
             "val_in_distribution/*",
             "val_in_distribution_expert/*",
+            "val_in_distribution_top_deck/*",
             "val_latest/*",
             "val_latest_expert/*",
+            "val_latest_top_deck/*",
+            "val_latest_expert_top_deck/*",
         ):
             wandb.define_metric(namespace, step_metric="optimizer_step")
 
@@ -661,12 +713,22 @@ def main() -> None:
         f"version={settings.version_name} device={device} "
         f"precision={train_cfg.precision} norm={model_cfg.norm_mode} "
         f"cache_shards={len(dataset.shards)} cache_samples={len(dataset):,} "
-        f"train={len(splits.train):,} "
+        f"eligible_train={splits.eligible_train_samples:,} "
+        f"selected_train={len(splits.train):,} "
+        f"eligible_train_replays={splits.eligible_train_replays:,} "
+        f"selected_train_replays={splits.selected_train_replays:,} "
+        f"train_sample_ratio={realized_train_sample_ratio:.4f} "
+        f"train_replay_ratio={realized_train_replay_ratio:.4f} "
         f"val_in_distribution={len(splits.in_distribution):,} "
         f"val_in_distribution_expert="
         f"{int(splits.in_distribution_expert_mask.sum()):,} "
+        f"val_in_distribution_top_deck="
+        f"{int(splits.in_distribution_top_deck_mask.sum()):,} "
         f"val_latest={len(splits.latest):,} "
         f"val_latest_expert={int(splits.latest_expert_mask.sum()):,} "
+        f"val_latest_top_deck={int(splits.latest_top_deck_mask.sum()):,} "
+        f"val_latest_expert_top_deck="
+        f"{int(splits.latest_expert_top_deck_mask.sum()):,} "
         f"latest_date={splits.latest_date[0]}.{splits.latest_date[1]} "
         f"steps_per_epoch={steps_per_epoch:,} total_steps={total_steps:,} "
         f"warmup_steps={train_cfg.warmup_steps:,}",
@@ -679,15 +741,34 @@ def main() -> None:
                 "data/cache_shards": len(dataset.shards),
                 "data/cache_samples": len(dataset),
                 "data/train_samples": len(splits.train),
+                "data/eligible_train_samples":
+                    splits.eligible_train_samples,
+                "data/eligible_train_replays":
+                    splits.eligible_train_replays,
+                "data/selected_train_replays":
+                    splits.selected_train_replays,
+                "data/realized_train_sample_ratio":
+                    realized_train_sample_ratio,
+                "data/realized_train_replay_ratio":
+                    realized_train_replay_ratio,
                 "data/val_in_distribution_samples": len(
                     splits.in_distribution
                 ),
                 "data/val_in_distribution_expert_samples": int(
                     splits.in_distribution_expert_mask.sum()
                 ),
+                "data/val_in_distribution_top_deck_samples": int(
+                    splits.in_distribution_top_deck_mask.sum()
+                ),
                 "data/val_latest_samples": len(splits.latest),
                 "data/val_latest_expert_samples": int(
                     splits.latest_expert_mask.sum()
+                ),
+                "data/val_latest_top_deck_samples": int(
+                    splits.latest_top_deck_mask.sum()
+                ),
+                "data/val_latest_expert_top_deck_samples": int(
+                    splits.latest_expert_top_deck_mask.sum()
                 ),
                 "schedule/steps_per_epoch": steps_per_epoch,
                 "schedule/total_steps": total_steps,
@@ -727,18 +808,26 @@ def main() -> None:
 
     def run_validation() -> None:
         nonlocal last_eval_step
-        for namespace, expert_namespace, indices, expert_mask in (
+        for namespace, indices, subgroup_masks in (
             (
                 "val_in_distribution",
-                "val_in_distribution_expert",
                 splits.in_distribution,
-                splits.in_distribution_expert_mask,
+                {
+                    "val_in_distribution_expert":
+                        splits.in_distribution_expert_mask,
+                    "val_in_distribution_top_deck":
+                        splits.in_distribution_top_deck_mask,
+                },
             ),
             (
                 "val_latest",
-                "val_latest_expert",
                 splits.latest,
-                splits.latest_expert_mask,
+                {
+                    "val_latest_expert": splits.latest_expert_mask,
+                    "val_latest_top_deck": splits.latest_top_deck_mask,
+                    "val_latest_expert_top_deck":
+                        splits.latest_expert_top_deck_mask,
+                },
             ),
         ):
             result = evaluate_dataset(
@@ -748,7 +837,7 @@ def main() -> None:
                 batch_size=train_cfg.batch_size,
                 device=device,
                 precision=precision,
-                expert_mask=expert_mask,
+                subgroup_masks=subgroup_masks,
             )
             _log_validation(
                 namespace,
@@ -757,13 +846,14 @@ def main() -> None:
                 global_step,
                 wandb_run,
             )
-            _log_validation(
-                expert_namespace,
-                result.expert,
-                None,
-                global_step,
-                wandb_run,
-            )
+            for subgroup_namespace, metrics in result.subgroups.items():
+                _log_validation(
+                    subgroup_namespace,
+                    metrics,
+                    None,
+                    global_step,
+                    wandb_run,
+                )
         last_eval_step = global_step
 
     try:

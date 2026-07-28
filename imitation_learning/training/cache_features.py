@@ -46,6 +46,7 @@ from training.feature_cache import (
     FeatureRecord,
     PackedShard,
     PackedShardWriter,
+    stable_deck_key,
     stable_episode_key,
 )
 
@@ -130,6 +131,7 @@ def _prepare_record(
             target=target,
             action_count=len(actions),
             episode_key=stable_episode_key(record["episode_id"]),
+            deck_key=stable_deck_key(record["deck"]),
         ),
         None,
     )

@@ -14,7 +14,7 @@ from typing import Iterable
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 3
+CACHE_SCHEMA_VERSION = 4
 ENCODER_WORDS = 24
 MAX_ACTIONS = 64
 ALIGNMENT = 64
@@ -31,6 +31,7 @@ SECTION_DTYPES = {
     "target": np.dtype("u1"),
     "action_count": np.dtype("u1"),
     "episode_key": np.dtype("<u4"),
+    "deck_key": np.dtype("<u8"),
 }
 
 
@@ -44,6 +45,7 @@ class FeatureRecord:
     target: int
     action_count: int
     episode_key: int
+    deck_key: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +58,7 @@ class FeatureView:
     target: int
     action_count: int
     episode_key: int
+    deck_key: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,15 +85,41 @@ class DatasetSplits:
     train: np.ndarray
     in_distribution: np.ndarray
     in_distribution_expert_mask: np.ndarray
+    in_distribution_top_deck_mask: np.ndarray
     latest: np.ndarray
     latest_expert_mask: np.ndarray
+    latest_top_deck_mask: np.ndarray
+    latest_expert_top_deck_mask: np.ndarray
     latest_date: tuple[int, int]
+    eligible_train_samples: int
+    eligible_train_replays: int
+    selected_train_replays: int
 
 
 def stable_episode_key(episode_id: object) -> int:
     payload = str(episode_id).encode("utf-8")
     return int.from_bytes(
         hashlib.blake2s(payload, digest_size=4).digest(), "little"
+    )
+
+
+def stable_deck_key(deck: Iterable[int]) -> int:
+    raw_card_ids = list(deck)
+    if any(
+        isinstance(card_id, bool)
+        or not isinstance(card_id, (int, np.integer))
+        for card_id in raw_card_ids
+    ):
+        raise ValueError("deck card IDs must be integers")
+    card_ids = sorted(int(card_id) for card_id in raw_card_ids)
+    if len(card_ids) != 60:
+        raise ValueError(f"deck must contain exactly 60 cards, found {len(card_ids)}")
+    uint32_max = np.iinfo(np.uint32).max
+    if any(card_id < 0 or card_id > uint32_max for card_id in card_ids):
+        raise ValueError("deck card IDs must fit uint32")
+    payload = np.asarray(card_ids, dtype="<u4").tobytes()
+    return int.from_bytes(
+        hashlib.blake2b(payload, digest_size=8).digest(), "little"
     )
 
 
@@ -181,6 +210,8 @@ class PackedShardWriter:
             raise ValueError("target must be smaller than action_count")
         if not 0 <= int(record.episode_key) <= np.iinfo(np.uint32).max:
             raise ValueError("episode_key must fit uint32")
+        if not 0 <= int(record.deck_key) <= np.iinfo(np.uint64).max:
+            raise ValueError("deck_key must fit uint64")
 
         _validate_unsigned("encoder_index", record.encoder_index, np.iinfo(np.uint16).max)
         _validate_unsigned("decoder_index", record.decoder_index, np.iinfo(np.uint32).max)
@@ -214,6 +245,7 @@ class PackedShardWriter:
         self._append("target", int(record.target))
         self._append("action_count", int(record.action_count))
         self._append("episode_key", int(record.episode_key))
+        self._append("deck_key", int(record.deck_key))
         self._samples += 1
         self._buffered_samples += 1
         if self._buffered_samples >= self.flush_samples:
@@ -364,6 +396,8 @@ class PackedShard:
             raise ValueError("action_count length does not match sample count")
         if self.arrays["episode_key"].size != self.samples:
             raise ValueError("episode_key length does not match sample count")
+        if self.arrays["deck_key"].size != self.samples:
+            raise ValueError("deck_key length does not match sample count")
         pointer_targets = {
             "encoder_ptr": self.arrays["encoder_index"].size,
             "decoder_ptr": self.arrays["decoder_index"].size,
@@ -407,6 +441,7 @@ class PackedShard:
             target=int(self.arrays["target"][local_id]),
             action_count=int(self.arrays["action_count"][local_id]),
             episode_key=int(self.arrays["episode_key"][local_id]),
+            deck_key=int(self.arrays["deck_key"][local_id]),
         )
 
     def close(self) -> None:
@@ -496,9 +531,14 @@ class MmapFeatureDataset:
         validation_seed: int,
         expert_episode_keys: dict[tuple[int, int], set[int] | frozenset[int]]
         | None = None,
+        top_deck_keys: set[int] | frozenset[int] | None = None,
+        train_replay_ratio: float = 1.0,
+        train_replay_seed: int = 0,
     ) -> DatasetSplits:
         if not 0 < validation_ratio < 1:
             raise ValueError("validation_ratio must be strictly between 0 and 1")
+        if not 0 < train_replay_ratio <= 1:
+            raise ValueError("train_replay_ratio must be in (0, 1]")
         latest_date = max(self.shard_dates)
         dtype = (
             np.uint32
@@ -506,11 +546,17 @@ class MmapFeatureDataset:
             else np.uint64
         )
         threshold = int(validation_ratio * (1 << 32))
+        train_threshold = int(train_replay_ratio * (1 << 32))
         train_parts = []
+        eligible_train_samples = 0
+        eligible_train_key_parts = []
+        selected_train_key_parts = []
         in_distribution_parts = []
         in_distribution_expert_parts = []
+        in_distribution_top_deck_parts = []
         latest_parts = []
         latest_expert_parts = []
+        latest_top_deck_parts = []
         if expert_episode_keys is not None:
             missing = set(self.shard_dates) - set(expert_episode_keys)
             if missing:
@@ -534,9 +580,19 @@ class MmapFeatureDataset:
                 expert_mask = np.isin(
                     shard.arrays["episode_key"], keys, assume_unique=False
                 )
+            if top_deck_keys is None:
+                top_deck_mask = np.zeros(len(shard), dtype=np.bool_)
+            else:
+                deck_keys = np.fromiter(top_deck_keys, dtype=np.uint64)
+                top_deck_mask = np.isin(
+                    shard.arrays["deck_key"],
+                    deck_keys,
+                    assume_unique=False,
+                )
             if date == latest_date:
                 latest_parts.append(global_ids)
                 latest_expert_parts.append(expert_mask)
+                latest_top_deck_parts.append(top_deck_mask)
                 continue
             mixed = _mix_episode_keys(
                 shard.arrays["episode_key"], validation_seed
@@ -546,7 +602,26 @@ class MmapFeatureDataset:
             in_distribution_expert_parts.append(
                 expert_mask[validation_mask]
             )
-            train_parts.append(global_ids[~validation_mask])
+            in_distribution_top_deck_parts.append(
+                top_deck_mask[validation_mask]
+            )
+            eligible_mask = ~validation_mask
+            train_selection = (
+                _mix_episode_keys(
+                    shard.arrays["episode_key"],
+                    train_replay_seed ^ 0x9E3779B9,
+                ).astype(np.uint64)
+                < train_threshold
+            )
+            selected_mask = eligible_mask & train_selection
+            train_parts.append(global_ids[selected_mask])
+            eligible_train_samples += int(eligible_mask.sum())
+            eligible_train_key_parts.append(
+                np.unique(shard.arrays["episode_key"][eligible_mask])
+            )
+            selected_train_key_parts.append(
+                np.unique(shard.arrays["episode_key"][selected_mask])
+            )
 
         def combine(parts: list[np.ndarray], name: str) -> np.ndarray:
             nonempty = [part for part in parts if part.size]
@@ -564,19 +639,49 @@ class MmapFeatureDataset:
         latest_expert_mask = np.concatenate(latest_expert_parts).astype(
             np.bool_, copy=False
         )
+        in_distribution_top_deck_mask = np.concatenate(
+            in_distribution_top_deck_parts
+        ).astype(np.bool_, copy=False)
+        latest_top_deck_mask = np.concatenate(latest_top_deck_parts).astype(
+            np.bool_, copy=False
+        )
+        latest_expert_top_deck_mask = (
+            latest_expert_mask & latest_top_deck_mask
+        )
         if expert_episode_keys is not None:
             if not np.any(in_distribution_expert_mask):
                 raise ValueError("in-distribution expert validation is empty")
             if not np.any(latest_expert_mask):
                 raise ValueError("latest-date expert validation is empty")
+        if top_deck_keys is not None:
+            if not np.any(in_distribution_top_deck_mask):
+                raise ValueError("in-distribution top-deck validation is empty")
+            if not np.any(latest_top_deck_mask):
+                raise ValueError("latest-date top-deck validation is empty")
+            if not np.any(latest_expert_top_deck_mask):
+                raise ValueError(
+                    "latest-date expert top-deck validation is empty"
+                )
+
+        def unique_count(parts: list[np.ndarray]) -> int:
+            nonempty = [part for part in parts if part.size]
+            if not nonempty:
+                return 0
+            return int(np.unique(np.concatenate(nonempty)).size)
 
         return DatasetSplits(
             train=combine(train_parts, "train"),
             in_distribution=in_distribution,
             in_distribution_expert_mask=in_distribution_expert_mask,
+            in_distribution_top_deck_mask=in_distribution_top_deck_mask,
             latest=latest,
             latest_expert_mask=latest_expert_mask,
+            latest_top_deck_mask=latest_top_deck_mask,
+            latest_expert_top_deck_mask=latest_expert_top_deck_mask,
             latest_date=latest_date,
+            eligible_train_samples=eligible_train_samples,
+            eligible_train_replays=unique_count(eligible_train_key_parts),
+            selected_train_replays=unique_count(selected_train_key_parts),
         )
 
     def collate(self, index_batch: IndexBatch) -> CachedBatch:
