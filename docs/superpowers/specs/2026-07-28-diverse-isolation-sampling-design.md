@@ -7,9 +7,9 @@ independent, rerollable samplers:
 
 - **Deck Isolation:** select unseen exact decks while retaining their
   archetype and Card IDs on the hypothetical training side.
-- **Archetype Isolation:** select complete rule-defined archetypes and remove
-  all replays containing a deck whose primary label is one of those
-  archetypes.
+- **Archetype Isolation:** select complete rule-defined or curated named
+  fallback archetypes and remove all replays containing a deck whose primary
+  label is one of those archetypes.
 
 The EDA is a selection aid. It displays every selected object for manual
 review and writes two selected-deck CSV files that a later training-data task
@@ -76,17 +76,34 @@ An eligible exact deck must:
    training side.
 5. Leave at least one training replay.
 
-The nearest remaining same-archetype exact deck determines:
+The nearest remaining same-archetype exact deck remains visible as:
 
 - `nearest_changed_slots`
 - `nearest_weighted_jaccard`
-- `similarity_band`
 
-The three bands remain:
+It is not used for similarity bands because nearest-deck distance often
+collapses to one changed slot when many small variants exist.
 
-- `high`: changed slots at or below the high threshold
-- `moderate`: above the high threshold and at or below the moderate threshold
-- `lower`: above the moderate threshold
+For banding, the hypothetical training-side exact deck with the highest usage
+within the same archetype becomes the candidate's reference deck. Ties are
+resolved by stable `deck_id`. The analysis records:
+
+- `reference_train_deck_id`
+- `reference_changed_slots`
+- `reference_weighted_jaccard`
+
+Candidates are sorted by `reference_changed_slots` and divided automatically
+using the 1/3 and 2/3 empirical quantiles:
+
+- `high`: closest third to the dominant reference build
+- `moderate`: middle third
+- `lower`: farthest third
+
+Equal `reference_changed_slots` values are never split across bands. If ties
+make fewer than three non-empty bands possible, only the bands supported by
+the data are created, and sampling renormalizes equally across those bands.
+The notebook displays the calculated cut points and candidate counts for every
+resulting band.
 
 ## Deck-Isolation Sampling
 
@@ -135,9 +152,17 @@ ARCHETYPE_ROLL_ID = 0
   selected archetype replay IDs.
 - `ARCHETYPE_ROLL_ID`: deterministic reroll control.
 
-Only archetypes classified by an explicit entry in `ARCHETYPE_RULES` are
-eligible. Fallback archetypes remain visible in the complete EDA tables but
-cannot be randomly selected for Archetype Isolation.
+Archetypes classified by either of these methods are eligible:
+
+- `rule`
+- `named_fallback_main_pokemon`
+
+The named fallback method uses a representative main Pokémon whose display
+name has an explicit curated entry in `FALLBACK_ARCHETYPE_NAMES`.
+
+Raw `fallback_main_pokemon`, `Unknown`, and `no_pokemon_found` classifications
+remain visible in the complete EDA tables but cannot be randomly selected for
+Archetype Isolation.
 
 The minimum replay condition applies to the archetype as a whole. Individual
 exact-deck variants inside that archetype do not need to satisfy the threshold.
@@ -146,7 +171,7 @@ exact-deck variants inside that archetype do not need to satisfy the threshold.
 
 The sampler uses bounded randomized restarts:
 
-1. Filter to rule-defined archetypes with at least
+1. Filter to rule-defined or curated named-fallback archetypes with at least
    `ARCHETYPE_MIN_REPLAYS` unique replays.
 2. Sample eligible archetypes uniformly without replacement.
 3. Add an archetype only if the deduplicated replay union does not exceed
