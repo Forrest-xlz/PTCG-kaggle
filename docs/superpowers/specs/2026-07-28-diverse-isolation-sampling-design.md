@@ -1,0 +1,290 @@
+# Diverse Deck and Archetype Isolation Sampling Design
+
+## Goal
+
+Replace the fixed-count isolation recommendation in `deck_eda.ipynb` with two
+independent, rerollable samplers:
+
+- **Deck Isolation:** select unseen exact decks while retaining their
+  archetype and Card IDs on the hypothetical training side.
+- **Archetype Isolation:** select complete rule-defined archetypes and remove
+  all replays containing a deck whose primary label is one of those
+  archetypes.
+
+The EDA is a selection aid. It displays every selected object for manual
+review and writes two selected-deck CSV files that a later training-data task
+can consume. It does not create validation caches or modify training
+configuration.
+
+This design supersedes strict core-card closure sampling. Archetype Isolation
+does not guarantee that an archetype's core Card IDs are absent from decks
+with other primary archetype labels.
+
+## Common Replay Semantics
+
+Each replay has two deck rows, one per player. A replay matches a selected
+exact deck or archetype when either player matches it.
+
+Replay totals are deduplicated by `(date, episode_id)`. If two selected decks
+play against each other, that replay contributes one—not two—to the selected
+validation size.
+
+`uses` remains a separate descriptive metric and counts player-side deck
+occurrences.
+
+## Deck-Isolation Parameters
+
+The Deck Isolation notebook cell owns its parameters:
+
+```python
+DECK_MIN_REPLAYS = 100
+DECK_MIN_COUNT = 3
+DECK_TOTAL_REPLAYS_MIN = 1000
+DECK_TOTAL_REPLAYS_MAX = 3000
+DECK_ROLL_ID = 0
+```
+
+- `DECK_MIN_REPLAYS`: minimum unique replay count for each exact-deck
+  candidate.
+- `DECK_MIN_COUNT`: minimum number of selected exact decks.
+- `DECK_TOTAL_REPLAYS_MIN/MAX`: allowed inclusive range for the union of
+  selected replay IDs.
+- `DECK_ROLL_ID`: changes the deterministic random stream. Incrementing it
+  rerolls the selection while preserving reproducibility.
+
+The parameter cell validates:
+
+```text
+DECK_MIN_REPLAYS >= 1
+DECK_MIN_COUNT >= 1
+0 <= DECK_TOTAL_REPLAYS_MIN <= DECK_TOTAL_REPLAYS_MAX
+```
+
+## Deck-Isolation Candidate Constraints
+
+Before random selection, each exact deck is evaluated by hypothetically moving
+every replay containing that deck to validation.
+
+An eligible exact deck must:
+
+1. Have at least `DECK_MIN_REPLAYS` unique replays.
+2. Have zero remaining exact-deck occurrences on the hypothetical training
+   side.
+3. Leave at least one other exact deck with the same primary archetype on the
+   training side.
+4. Leave every Card ID from the selected deck visible somewhere on the
+   training side.
+5. Leave at least one training replay.
+
+The nearest remaining same-archetype exact deck determines:
+
+- `nearest_changed_slots`
+- `nearest_weighted_jaccard`
+- `similarity_band`
+
+The three bands remain:
+
+- `high`: changed slots at or below the high threshold
+- `moderate`: above the high threshold and at or below the moderate threshold
+- `lower`: above the moderate threshold
+
+## Deck-Isolation Sampling
+
+The sampler uses bounded randomized restarts.
+
+Within one attempt:
+
+1. Start with an empty selection and empty replay union.
+2. Choose among currently available `high`, `moderate`, and `lower` bands with
+   equal probability. If one or more bands have no feasible candidates,
+   renormalize uniformly across the remaining bands.
+3. Within the chosen band, choose uniformly among primary archetypes not
+   already selected.
+4. Within the chosen `(band, archetype)` group, choose one exact deck
+   uniformly.
+5. Never select two exact decks with the same primary archetype.
+6. Add the candidate only if the deduplicated replay union does not exceed
+   `DECK_TOTAL_REPLAYS_MAX`.
+7. Stop when both conditions hold:
+   - at least `DECK_MIN_COUNT` decks are selected;
+   - deduplicated replay total is within the configured inclusive range.
+
+If the attempt gets stuck before satisfying both conditions, restart from an
+empty selection. The retry count is bounded. Failure returns diagnostics
+instead of an invalid selection, including eligible candidate count, available
+archetype count, band counts, and reachable replay context.
+
+Deck usage volume never increases sampling weight.
+
+## Archetype-Isolation Parameters
+
+The Archetype Isolation notebook cell owns a separate parameter set:
+
+```python
+ARCHETYPE_MIN_REPLAYS = 100
+ARCHETYPE_MIN_COUNT = 3
+ARCHETYPE_TOTAL_REPLAYS_MIN = 1000
+ARCHETYPE_TOTAL_REPLAYS_MAX = 3000
+ARCHETYPE_ROLL_ID = 0
+```
+
+- `ARCHETYPE_MIN_REPLAYS`: minimum unique replay count for the whole primary
+  archetype.
+- `ARCHETYPE_MIN_COUNT`: minimum number of selected archetypes.
+- `ARCHETYPE_TOTAL_REPLAYS_MIN/MAX`: allowed inclusive range for the union of
+  selected archetype replay IDs.
+- `ARCHETYPE_ROLL_ID`: deterministic reroll control.
+
+Only archetypes classified by an explicit entry in `ARCHETYPE_RULES` are
+eligible. Fallback archetypes remain visible in the complete EDA tables but
+cannot be randomly selected for Archetype Isolation.
+
+The minimum replay condition applies to the archetype as a whole. Individual
+exact-deck variants inside that archetype do not need to satisfy the threshold.
+
+## Archetype-Isolation Sampling
+
+The sampler uses bounded randomized restarts:
+
+1. Filter to rule-defined archetypes with at least
+   `ARCHETYPE_MIN_REPLAYS` unique replays.
+2. Sample eligible archetypes uniformly without replacement.
+3. Add an archetype only if the deduplicated replay union does not exceed
+   `ARCHETYPE_TOTAL_REPLAYS_MAX`.
+4. Stop after selecting at least `ARCHETYPE_MIN_COUNT` archetypes and reaching
+   the configured replay range.
+5. Restart when an attempt cannot reach the constraints.
+
+Every eligible archetype has equal sampling weight. Archetype replay volume and
+the number of exact-deck variants do not affect its probability.
+
+Archetype Isolation removes only replays containing decks whose
+`deck_archetype` equals a selected value. Core-card overlap with other
+`deck_archetype` labels is reported for interpretation but is not a hard
+constraint.
+
+## Notebook Layout
+
+The notebook keeps the existing census and similarity exploration, then
+presents:
+
+1. Deck Isolation candidate table and plots.
+2. A Deck Isolation parameter and reroll cell.
+3. The selected Deck Isolation table.
+4. Archetype Isolation candidate tables and plots.
+5. An Archetype Isolation parameter and reroll cell.
+6. The selected archetype summary and selected exact-deck detail table.
+7. A combined hypothetical audit.
+
+All chart and column labels remain English.
+
+## Deck-Isolation Output
+
+The selected table contains one row per selected exact deck:
+
+```text
+deck_id
+deck_archetype
+replays
+uses
+win_rate
+similarity_band
+nearest_train_deck_id
+nearest_changed_slots
+nearest_weighted_jaccard
+card_ids
+```
+
+It is written, with no configurable output directory, to:
+
+```text
+imitation_learning/deck/deck_isolation_selection.csv
+```
+
+`card_ids` stores the complete sorted 60-card list as compact JSON.
+
+## Archetype-Isolation Output
+
+The notebook first displays one summary row per selected archetype:
+
+```text
+deck_archetype
+core_card_names
+replays
+uses
+win_rate
+unique_exact_decks
+```
+
+It then displays one detail row per exact deck belonging to the selected
+archetypes:
+
+```text
+deck_archetype
+deck_id
+replays
+uses
+win_rate
+card_ids
+```
+
+The exact-deck detail table is written to:
+
+```text
+imitation_learning/deck/archetype_isolation_selection.csv
+```
+
+This expanded mapping lets later training-data code identify validation
+replays using exact 60-card multisets without reimplementing archetype
+classification.
+
+Rerunning a sampler with a different `ROLL_ID` overwrites only that sampler's
+selection CSV. The current CSV represents the latest manually reviewed roll.
+
+## Combined Audit
+
+The final notebook cell simulates removing the union of both selected replay
+sets and reports:
+
+- Deck Isolation unique replay count.
+- Archetype Isolation unique replay count.
+- Replay overlap between the two selections.
+- Combined validation and remaining-training replay counts.
+- Exact-deck leakage for Deck Isolation.
+- Missing training-side Card IDs for Deck Isolation.
+- Missing training-side same-archetype coverage for Deck Isolation.
+- Remaining selected Archetype Isolation occurrences on the training side.
+- Any primary archetype selected by both isolation methods.
+- Overall audit validity and diagnostics.
+
+The combined audit does not require core Card IDs to disappear globally.
+
+The samplers are independent selection cells. The combined audit is the final
+manual acceptance guard: a user can change either `ROLL_ID` and rerun until
+the displayed combination is acceptable.
+
+## Failure Behavior
+
+A sampler must not write a new selection CSV when no valid combination is
+found. It displays:
+
+- the violated parameter range;
+- eligible candidate count;
+- available unique archetype count;
+- similarity-band counts where applicable;
+- a concise suggestion to reduce the minimum count, lower the replay minimum,
+  or widen the total replay interval.
+
+Previously accepted CSV files are not silently replaced by an invalid or empty
+selection.
+
+## Scope Exclusions
+
+This EDA change does not:
+
+- split replay data;
+- modify `train.yaml`;
+- alter the latest-date or random replay validation sets;
+- create training caches;
+- guarantee core Card ID zero leakage for Archetype Isolation;
+- automatically accept a sampled selection on the user's behalf.
