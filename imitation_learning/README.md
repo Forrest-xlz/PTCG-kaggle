@@ -61,13 +61,23 @@ uses a compact global permutation (about 120 MB for 30 million samples), and
 every eligible training sample is consumed once per epoch. Use
 `train.max_samples` for bounded trials before setting it to `null`.
 
-The numerically latest `month.day` source is held out completely as the
-latest-date validation set. Older replays are assigned as a group to training
-or in-distribution validation using `validation_ratio` and `validation_seed`;
-different states from the same replay can never cross the split. Every
-`eval_every_steps` successful optimizer updates, both validation sets are
-evaluated separately with CE loss and Top-1/3/5 accuracy. Training logs use
-cross-epoch exponential moving averages controlled by `ema_alpha`.
+Training first reads the three reviewed exact-deck selections configured under
+`train.isolation_validation`. It scans `data/deck/*.decks.csv`, so a selected
+deck used by either player moves the entire replay into its isolation
+validation set. The three isolation sets may overlap with one another, but
+their replay union is removed before every later split. This lookup is
+performed at training startup and does not require rebuilding feature caches.
+
+After isolation, the numerically latest `month.day` source becomes the
+latest-date validation set. Older remaining replays are assigned as a group to
+training or in-distribution validation using `validation_ratio` and
+`validation_seed`; different states from the same replay can never cross
+these splits. Every `eval_every_steps` successful optimizer updates, the
+isolation union is forwarded once and accumulated into three independent
+Wandb groups: `val_deck_isolation/*`, `val_archetype_isolation/*`, and
+`val_top_deck_archetype_isolation/*`. Latest-date and in-distribution
+validation retain their existing CE loss and Top-1/3/5 metrics. Training logs
+use cross-epoch exponential moving averages controlled by `ema_alpha`.
 
 Each replay ZIP under `train.replay_episodes` must contain one `manifest.csv`.
 For every date independently, training reconstructs both player scores from
@@ -85,7 +95,8 @@ ignored but multiplicity is preserved. These decks define
 `val_latest_expert_top_deck`. All subgroup metrics reuse their base validation
 batch's logits, so they do not add model forward passes.
 
-After both validation sets are fixed, `train.train_replay_ratio` selects a
+After isolation, latest-date, and in-distribution validation are fixed,
+`train.train_replay_ratio` selects a
 deterministic fraction of the remaining replays using `train_replay_seed`.
 Every selected replay keeps all of its samples, and the fixed subset is reused
 for every epoch. The realized sample ratio can differ from the replay ratio

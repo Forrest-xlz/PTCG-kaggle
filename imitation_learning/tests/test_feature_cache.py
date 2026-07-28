@@ -295,6 +295,65 @@ def test_expert_masks_align_with_existing_validation_splits(
         dataset.close()
 
 
+def test_isolation_precedes_latest_and_in_distribution_splits(
+    tmp_path: Path,
+) -> None:
+    build_shard(
+        tmp_path / "old.cache",
+        list(range(1, 101)),
+        source_name="7.19.jsonl.gz",
+    )
+    build_shard(
+        tmp_path / "latest.cache",
+        [101, 102, 103],
+        source_name="7.24.jsonl.gz",
+    )
+    dataset = MmapFeatureDataset(tmp_path, expected_signature=SIGNATURE)
+    try:
+        splits = dataset.build_splits(
+            validation_ratio=0.5,
+            validation_seed=123,
+            isolation_episode_keys={
+                "val_first": {
+                    (7, 19): {stable_episode_key("episode-1")},
+                    (7, 24): {stable_episode_key("episode-101")},
+                },
+                "val_second": {
+                    (7, 19): {stable_episode_key("episode-2")},
+                    (7, 24): {stable_episode_key("episode-101")},
+                },
+                "val_third": {
+                    (7, 19): {stable_episode_key("episode-3")},
+                    (7, 24): {stable_episode_key("episode-102")},
+                },
+            },
+        )
+
+        np.testing.assert_array_equal(
+            splits.isolation,
+            [0, 1, 2, 100, 101],
+        )
+        np.testing.assert_array_equal(
+            splits.isolation_masks["val_first"],
+            [True, False, False, True, False],
+        )
+        np.testing.assert_array_equal(
+            splits.isolation_masks["val_second"],
+            [False, True, False, True, False],
+        )
+        np.testing.assert_array_equal(
+            splits.isolation_masks["val_third"],
+            [False, False, True, False, True],
+        )
+        assert splits.isolation_union_replays == 5
+        np.testing.assert_array_equal(splits.latest, [102])
+        assert not set(splits.isolation) & set(splits.latest)
+        assert not set(splits.isolation) & set(splits.in_distribution)
+        assert not set(splits.isolation) & set(splits.train)
+    finally:
+        dataset.close()
+
+
 def test_train_replay_sampling_is_deterministic_and_keeps_replays_together(
     tmp_path: Path,
 ) -> None:

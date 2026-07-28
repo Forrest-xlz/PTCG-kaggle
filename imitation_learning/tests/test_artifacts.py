@@ -36,6 +36,14 @@ def test_train_yaml_uses_validation_and_step_configuration() -> None:
     assert train["validation_ratio"] == pytest.approx(0.05)
     assert train["expert_validation_ratio"] == pytest.approx(0.05)
     assert train["replay_episodes"]
+    isolation = train["isolation_validation"]
+    assert isolation["deck_data"] == "data/deck"
+    assert set(isolation["selections"]) == {
+        "deck_isolation",
+        "archetype_isolation",
+        "top_deck_archetype_isolation",
+    }
+    assert all(isolation["selections"].values())
     assert train["train_replay_ratio"] == pytest.approx(1.0)
     assert isinstance(train["train_replay_seed"], int)
     assert train["top_decks"]

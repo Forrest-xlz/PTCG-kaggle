@@ -24,6 +24,12 @@ train:
   validation_ratio: 0.05
   validation_seed: 42
   expert_validation_ratio: 0.05
+  isolation_validation:
+    deck_data: data/deck
+    selections:
+      deck_isolation: data/deck_isolation_selection.csv
+      archetype_isolation: data/archetype_isolation_selection.csv
+      top_deck_archetype_isolation: data/top_deck_archetype_isolation_selection.csv
   top_decks:
     - [7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
        104, 104, 112, 112, 112, 112,

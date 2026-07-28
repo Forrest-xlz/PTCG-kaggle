@@ -47,7 +47,21 @@ from training.feature_cache import (
     MmapFeatureDataset,
     stable_deck_key,
 )
+from training.isolation_validation import load_isolation_replay_sets
 from training.precision import PrecisionContext
+
+
+ISOLATION_SELECTION_NAMES = (
+    "deck_isolation",
+    "archetype_isolation",
+    "top_deck_archetype_isolation",
+)
+
+
+@dataclass(frozen=True)
+class IsolationValidationSettings:
+    deck_data: str
+    selections: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -75,6 +89,7 @@ class TrainSettings:
     validation_ratio: float
     validation_seed: int
     expert_validation_ratio: float
+    isolation_validation: IsolationValidationSettings
     top_decks: list[list[int]]
     train_replay_ratio: float
     train_replay_seed: int
@@ -185,9 +200,45 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         return value
 
     raw = interpolate(raw)
+    train_raw = dict(raw["train"])
+    isolation_raw = train_raw.pop("isolation_validation", None)
+    if not isinstance(isolation_raw, dict):
+        raise ValueError(
+            "train.isolation_validation must be a mapping"
+        )
+    selections = isolation_raw.get("selections")
+    if not isinstance(selections, dict):
+        raise ValueError(
+            "train.isolation_validation.selections must be a mapping"
+        )
+    deck_data_value = isolation_raw.get("deck_data")
+    if not isinstance(deck_data_value, str):
+        raise ValueError(
+            "train.isolation_validation.deck_data must be a string"
+        )
+    invalid_path_types = sorted(
+        str(name)
+        for name, path in selections.items()
+        if not isinstance(path, str)
+    )
+    if invalid_path_types:
+        raise ValueError(
+            "isolation selection paths must be strings: "
+            f"{invalid_path_types}"
+        )
+    isolation_settings = IsolationValidationSettings(
+        deck_data=deck_data_value.strip(),
+        selections={
+            str(name): path.strip()
+            for name, path in selections.items()
+        },
+    )
     settings = ExperimentSettings(
         version_name=version_name,
-        train=TrainSettings(**raw["train"]),
+        train=TrainSettings(
+            isolation_validation=isolation_settings,
+            **train_raw,
+        ),
         model=ModelSettings(**raw["model"]),
         wandb=WandbSettings(**raw["wandb"]),
     )
@@ -216,6 +267,28 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
     if not 0 < train.expert_validation_ratio <= 1:
         raise ValueError(
             "train.expert_validation_ratio must be in (0, 1]"
+        )
+    isolation = train.isolation_validation
+    if not isolation.deck_data:
+        raise ValueError(
+            "train.isolation_validation.deck_data must not be empty"
+        )
+    expected_isolation = set(ISOLATION_SELECTION_NAMES)
+    actual_isolation = set(isolation.selections)
+    if actual_isolation != expected_isolation:
+        raise ValueError(
+            "train.isolation_validation.selections must contain exactly "
+            f"{sorted(expected_isolation)}, found {sorted(actual_isolation)}"
+        )
+    empty_selection_paths = sorted(
+        name
+        for name, path in isolation.selections.items()
+        if not path
+    )
+    if empty_selection_paths:
+        raise ValueError(
+            "isolation selection paths must not be empty: "
+            f"{empty_selection_paths}"
         )
     if not 0 < train.train_replay_ratio <= 1:
         raise ValueError("train.train_replay_ratio must be in (0, 1]")
@@ -602,6 +675,15 @@ def main() -> None:
         expected_signature=feature_signature(config),
     )
     try:
+        isolation_cfg = train_cfg.isolation_validation
+        isolation_sets = load_isolation_replay_sets(
+            deck_data_dir=project_path(isolation_cfg.deck_data),
+            selection_paths={
+                f"val_{name}": project_path(path)
+                for name, path in isolation_cfg.selections.items()
+            },
+            required_dates=dataset.shard_dates,
+        )
         expert_dates = load_expert_date_info(
             replay_root=replay_root,
             required_dates=dataset.shard_dates,
@@ -625,6 +707,7 @@ def main() -> None:
             top_deck_keys=top_deck_keys,
             train_replay_ratio=train_cfg.train_replay_ratio,
             train_replay_seed=train_cfg.train_replay_seed,
+            isolation_episode_keys=isolation_sets.by_namespace,
         )
     except Exception:
         dataset.close()
@@ -692,6 +775,9 @@ def main() -> None:
             "val_latest_expert/*",
             "val_latest_top_deck/*",
             "val_latest_expert_top_deck/*",
+            "val_deck_isolation/*",
+            "val_archetype_isolation/*",
+            "val_top_deck_archetype_isolation/*",
         ):
             wandb.define_metric(namespace, step_metric="optimizer_step")
 
@@ -709,6 +795,22 @@ def main() -> None:
         encoding="utf-8",
     )
 
+    for namespace in sorted(isolation_sets.by_namespace):
+        print(
+            f"{namespace} "
+            f"selected_decks="
+            f"{isolation_sets.selected_deck_counts[namespace]:,} "
+            f"replays={isolation_sets.replay_counts[namespace]:,} "
+            f"samples={splits.isolation_sample_counts[namespace]:,}",
+            flush=True,
+        )
+    print(
+        f"isolation_union_replays={isolation_sets.union_replay_count:,} "
+        f"isolation_union_samples={len(splits.isolation):,} "
+        f"isolation_pairwise_overlaps="
+        f"{isolation_sets.pairwise_overlap_counts}",
+        flush=True,
+    )
     print(
         f"version={settings.version_name} device={device} "
         f"precision={train_cfg.precision} norm={model_cfg.norm_mode} "
@@ -719,6 +821,7 @@ def main() -> None:
         f"selected_train_replays={splits.selected_train_replays:,} "
         f"train_sample_ratio={realized_train_sample_ratio:.4f} "
         f"train_replay_ratio={realized_train_replay_ratio:.4f} "
+        f"val_isolation_union={len(splits.isolation):,} "
         f"val_in_distribution={len(splits.in_distribution):,} "
         f"val_in_distribution_expert="
         f"{int(splits.in_distribution_expert_mask.sum()):,} "
@@ -735,8 +838,32 @@ def main() -> None:
         flush=True,
     )
     if wandb_run is not None:
+        isolation_data_metrics = {
+            "data/isolation_union_replays":
+                isolation_sets.union_replay_count,
+            "data/isolation_union_samples": len(splits.isolation),
+        }
+        for namespace in sorted(isolation_sets.by_namespace):
+            isolation_data_metrics.update(
+                {
+                    f"data/{namespace}_selected_decks":
+                        isolation_sets.selected_deck_counts[namespace],
+                    f"data/{namespace}_replays":
+                        isolation_sets.replay_counts[namespace],
+                    f"data/{namespace}_samples":
+                        splits.isolation_sample_counts[namespace],
+                }
+            )
+        isolation_data_metrics.update(
+            {
+                f"data/isolation_overlap_{name}_replays": count
+                for name, count
+                in isolation_sets.pairwise_overlap_counts.items()
+            }
+        )
         wandb_run.log(
             {
+                **isolation_data_metrics,
                 "data/cache_open_seconds": cache_open_seconds,
                 "data/cache_shards": len(dataset.shards),
                 "data/cache_samples": len(dataset),
@@ -808,17 +935,32 @@ def main() -> None:
 
     def run_validation() -> None:
         nonlocal last_eval_step
+        isolation_result = evaluate_dataset(
+            model=model,
+            dataset=dataset,
+            indices=splits.isolation,
+            batch_size=train_cfg.batch_size,
+            device=device,
+            precision=precision,
+            subgroup_masks=splits.isolation_masks,
+        )
+        print(
+            f"isolation_union step={global_step:,} "
+            f"samples={len(splits.isolation):,} "
+            f"seconds={isolation_result.seconds:.2f}",
+            flush=True,
+        )
+        for namespace, metrics in sorted(
+            isolation_result.subgroups.items()
+        ):
+            _log_validation(
+                namespace,
+                metrics,
+                None,
+                global_step,
+                wandb_run,
+            )
         for namespace, indices, subgroup_masks in (
-            (
-                "val_in_distribution",
-                splits.in_distribution,
-                {
-                    "val_in_distribution_expert":
-                        splits.in_distribution_expert_mask,
-                    "val_in_distribution_top_deck":
-                        splits.in_distribution_top_deck_mask,
-                },
-            ),
             (
                 "val_latest",
                 splits.latest,
@@ -827,6 +969,16 @@ def main() -> None:
                     "val_latest_top_deck": splits.latest_top_deck_mask,
                     "val_latest_expert_top_deck":
                         splits.latest_expert_top_deck_mask,
+                },
+            ),
+            (
+                "val_in_distribution",
+                splits.in_distribution,
+                {
+                    "val_in_distribution_expert":
+                        splits.in_distribution_expert_mask,
+                    "val_in_distribution_top_deck":
+                        splits.in_distribution_top_deck_mask,
                 },
             ),
         ):

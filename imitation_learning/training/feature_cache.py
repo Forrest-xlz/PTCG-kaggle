@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import AbstractSet, Iterable, Mapping
 
 import numpy as np
 
@@ -83,6 +83,10 @@ class CachedBatch:
 @dataclass(frozen=True, slots=True)
 class DatasetSplits:
     train: np.ndarray
+    isolation: np.ndarray
+    isolation_masks: dict[str, np.ndarray]
+    isolation_sample_counts: dict[str, int]
+    isolation_union_replays: int
     in_distribution: np.ndarray
     in_distribution_expert_mask: np.ndarray
     in_distribution_top_deck_mask: np.ndarray
@@ -534,6 +538,11 @@ class MmapFeatureDataset:
         top_deck_keys: set[int] | frozenset[int] | None = None,
         train_replay_ratio: float = 1.0,
         train_replay_seed: int = 0,
+        isolation_episode_keys: Mapping[
+            str,
+            Mapping[tuple[int, int], AbstractSet[int]],
+        ]
+        | None = None,
     ) -> DatasetSplits:
         if not 0 < validation_ratio < 1:
             raise ValueError("validation_ratio must be strictly between 0 and 1")
@@ -548,6 +557,7 @@ class MmapFeatureDataset:
         threshold = int(validation_ratio * (1 << 32))
         train_threshold = int(train_replay_ratio * (1 << 32))
         train_parts = []
+        isolation_parts = []
         eligible_train_samples = 0
         eligible_train_key_parts = []
         selected_train_key_parts = []
@@ -557,6 +567,40 @@ class MmapFeatureDataset:
         latest_parts = []
         latest_expert_parts = []
         latest_top_deck_parts = []
+        isolation_names = sorted(
+            map(str, (isolation_episode_keys or {}).keys())
+        )
+        isolation_mask_parts: dict[str, list[np.ndarray]] = {
+            name: [] for name in isolation_names
+        }
+        isolation_union_replay_ids: set[tuple[tuple[int, int], int]] = set()
+        required_dates = set(self.shard_dates)
+        if isolation_episode_keys is not None:
+            if not isolation_names:
+                raise ValueError(
+                    "isolation_episode_keys must contain at least one namespace"
+                )
+            for name in isolation_names:
+                date_sets = isolation_episode_keys[name]
+                missing_dates = required_dates - set(date_sets)
+                if missing_dates:
+                    labels = ", ".join(
+                        f"{month}.{day}"
+                        for month, day in sorted(missing_dates)
+                    )
+                    raise ValueError(
+                        f"{name} isolation episode keys missing dates: {labels}"
+                    )
+                replay_ids = {
+                    (date, int(key))
+                    for date in required_dates
+                    for key in date_sets[date]
+                }
+                if not replay_ids:
+                    raise ValueError(
+                        f"{name} isolation validation has no replay keys"
+                    )
+                isolation_union_replay_ids.update(replay_ids)
         if expert_episode_keys is not None:
             missing = set(self.shard_dates) - set(expert_episode_keys)
             if missing:
@@ -589,15 +633,43 @@ class MmapFeatureDataset:
                     deck_keys,
                     assume_unique=False,
                 )
+            namespace_masks: dict[str, np.ndarray] = {}
+            for name in isolation_names:
+                keys = np.fromiter(
+                    isolation_episode_keys[name][date],
+                    dtype=np.uint32,
+                )
+                namespace_masks[name] = np.isin(
+                    shard.arrays["episode_key"],
+                    keys,
+                    assume_unique=False,
+                )
+            if namespace_masks:
+                isolation_mask = np.logical_or.reduce(
+                    tuple(namespace_masks.values())
+                )
+                isolation_parts.append(global_ids[isolation_mask])
+                for name, mask in namespace_masks.items():
+                    isolation_mask_parts[name].append(mask[isolation_mask])
+            else:
+                isolation_mask = np.zeros(len(shard), dtype=np.bool_)
             if date == latest_date:
-                latest_parts.append(global_ids)
-                latest_expert_parts.append(expert_mask)
-                latest_top_deck_parts.append(top_deck_mask)
+                latest_mask = ~isolation_mask
+                if np.any(isolation_mask & latest_mask):
+                    raise RuntimeError(
+                        "isolation validation overlaps latest-date samples"
+                    )
+                latest_parts.append(global_ids[latest_mask])
+                latest_expert_parts.append(expert_mask[latest_mask])
+                latest_top_deck_parts.append(top_deck_mask[latest_mask])
                 continue
             mixed = _mix_episode_keys(
                 shard.arrays["episode_key"], validation_seed
             )
-            validation_mask = mixed.astype(np.uint64) < threshold
+            validation_mask = (
+                ~isolation_mask
+                & (mixed.astype(np.uint64) < threshold)
+            )
             in_distribution_parts.append(global_ids[validation_mask])
             in_distribution_expert_parts.append(
                 expert_mask[validation_mask]
@@ -605,7 +677,7 @@ class MmapFeatureDataset:
             in_distribution_top_deck_parts.append(
                 top_deck_mask[validation_mask]
             )
-            eligible_mask = ~validation_mask
+            eligible_mask = ~isolation_mask & ~validation_mask
             train_selection = (
                 _mix_episode_keys(
                     shard.arrays["episode_key"],
@@ -614,6 +686,12 @@ class MmapFeatureDataset:
                 < train_threshold
             )
             selected_mask = eligible_mask & train_selection
+            if np.any(
+                isolation_mask & (validation_mask | selected_mask)
+            ):
+                raise RuntimeError(
+                    "isolation validation overlaps later split samples"
+                )
             train_parts.append(global_ids[selected_mask])
             eligible_train_samples += int(eligible_mask.sum())
             eligible_train_key_parts.append(
@@ -633,6 +711,31 @@ class MmapFeatureDataset:
             in_distribution_parts, "in-distribution validation"
         )
         latest = combine(latest_parts, "latest-date validation")
+        if isolation_names:
+            isolation = combine(
+                isolation_parts,
+                "isolation validation union",
+            )
+            isolation_masks = {
+                name: np.concatenate(isolation_mask_parts[name]).astype(
+                    np.bool_,
+                    copy=False,
+                )
+                for name in isolation_names
+            }
+            empty_isolation = [
+                name
+                for name, mask in isolation_masks.items()
+                if not np.any(mask)
+            ]
+            if empty_isolation:
+                raise ValueError(
+                    "isolation validation subsets are empty in cache: "
+                    f"{empty_isolation}"
+                )
+        else:
+            isolation = np.empty(0, dtype=dtype)
+            isolation_masks = {}
         in_distribution_expert_mask = np.concatenate(
             in_distribution_expert_parts
         ).astype(np.bool_, copy=False)
@@ -662,6 +765,7 @@ class MmapFeatureDataset:
                 raise ValueError(
                     "latest-date expert top-deck validation is empty"
                 )
+        train = combine(train_parts, "train")
 
         def unique_count(parts: list[np.ndarray]) -> int:
             nonempty = [part for part in parts if part.size]
@@ -670,7 +774,14 @@ class MmapFeatureDataset:
             return int(np.unique(np.concatenate(nonempty)).size)
 
         return DatasetSplits(
-            train=combine(train_parts, "train"),
+            train=train,
+            isolation=isolation,
+            isolation_masks=isolation_masks,
+            isolation_sample_counts={
+                name: int(mask.sum())
+                for name, mask in isolation_masks.items()
+            },
+            isolation_union_replays=len(isolation_union_replay_ids),
             in_distribution=in_distribution,
             in_distribution_expert_mask=in_distribution_expert_mask,
             in_distribution_top_deck_mask=in_distribution_top_deck_mask,
