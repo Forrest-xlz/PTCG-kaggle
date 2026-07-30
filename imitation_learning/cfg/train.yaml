@@ -50,6 +50,7 @@ model:
   encoder_layers: 1
   decoder_layers: 1
   norm_mode: postnorm   # prenorm or postnorm
+  card_feature_ratio: 0.5  # Linear(54, int(d_model * ratio)); remaining dimensions are zero.
 
 wandb:
   enabled: true

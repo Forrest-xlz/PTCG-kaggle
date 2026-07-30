@@ -38,6 +38,7 @@ if str(_cg_path) not in sys.path:
     sys.path.insert(0, str(_cg_path))
 
 from cg.api import SelectContext, all_attack, all_card_data
+from model.card_features import build_card_feature_table
 from model.network import ModelConfig, PTCGTransformer
 from training.expert_validation import load_expert_date_info
 from training.feature_cache import (
@@ -104,6 +105,7 @@ class ModelSettings:
     encoder_layers: int
     decoder_layers: int
     norm_mode: str
+    card_feature_ratio: float
 
 
 @dataclass(frozen=True)
@@ -315,6 +317,12 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError("encoder_layers and decoder_layers must be >= 1")
     if model.norm_mode not in {"prenorm", "postnorm"}:
         raise ValueError("model.norm_mode must be prenorm or postnorm")
+    if not 0 < model.card_feature_ratio <= 1:
+        raise ValueError("model.card_feature_ratio must be in (0, 1]")
+    if int(model.d_model * model.card_feature_ratio) < 1:
+        raise ValueError(
+            "model.card_feature_ratio * model.d_model must be at least 1"
+        )
     if settings.wandb.enabled and not settings.wandb.project:
         raise ValueError("wandb.project is required when wandb.enabled is true")
     return settings
@@ -650,6 +658,7 @@ def main() -> None:
         encoder_layers=model_cfg.encoder_layers,
         decoder_layers=model_cfg.decoder_layers,
         norm_mode=model_cfg.norm_mode,
+        card_feature_ratio=model_cfg.card_feature_ratio,
     )
     invalid_card_ids = sorted(
         {
@@ -728,7 +737,14 @@ def main() -> None:
         dataset.close()
         raise ValueError("train.warmup_steps must be smaller than total steps")
 
-    model = PTCGTransformer(config).to(device)
+    card_feature_table = build_card_feature_table(
+        cards,
+        config.card_count,
+    )
+    model = PTCGTransformer(
+        config,
+        card_feature_table,
+    ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=train_cfg.learning_rate,

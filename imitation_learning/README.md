@@ -121,6 +121,10 @@ optimizer steps. Epoch checkpointing remains controlled by
 `model.norm_mode` accepts `postnorm` or `prenorm`. PreNorm applies
 normalization before every encoder/decoder sublayer and adds a final encoder
 LayerNorm; PostNorm preserves the original notebook residual ordering.
+`model.card_feature_ratio` sets the active width of the globally shared
+`Linear(54, k)` static-card projection, where
+`k = int(d_model * card_feature_ratio)`. The remaining dimensions are zero
+padded before the projection is added to every Card ID embedding.
 
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the
@@ -142,9 +146,10 @@ For Kaggle submission, upload a trained `epoch-*.pt` file as a Kaggle Dataset,
 attach it to `kaggle_submission_imitation_agent.ipynb` together with a Dataset
 containing the `cg` directory. In the first code cell, set the exact
 `MODEL_PATH`, `CG_PATH`, and the agent's 60-card `DECK`, then run all cells.
-The notebook reads width, FFN size, attention heads, encoder/decoder depth, and
-normalization mode from the checkpoint; these architecture fields are not
-configured twice. It embeds the inference code and creates
+The notebook reads width, FFN size, attention heads, encoder/decoder depth,
+normalization mode, and the static-card projection ratio from the checkpoint;
+these architecture fields are not configured twice. It embeds the inference
+code and creates
 `/kaggle/working/submission.tar.gz`.
 
 ## Training records

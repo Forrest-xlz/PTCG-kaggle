@@ -50,6 +50,7 @@ def test_train_yaml_uses_validation_and_step_configuration() -> None:
     assert all(len(deck) == 60 for deck in train["top_decks"])
     assert train["ema_alpha"] == pytest.approx(0.99)
     assert config["model"]["norm_mode"] in {"prenorm", "postnorm"}
+    assert 0 < config["model"]["card_feature_ratio"] <= 1
 
 
 def test_submission_notebook_is_valid_json() -> None:
@@ -68,6 +69,9 @@ def test_submission_notebook_is_valid_json() -> None:
     assert "CG_PATHS" not in source
     assert "ModelConfig(**checkpoint['config'])" in source
     assert "model.load_state_dict(checkpoint['model'])" in source
+    assert "card_feature_ratio" in source
+    assert "build_card_feature_table" in source
+    assert "projected_card_features" in source
 
 
 def test_deck_eda_notebook_starts_with_census_and_similarity() -> None:
