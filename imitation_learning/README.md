@@ -150,7 +150,7 @@ When WandB is enabled, checkpoints and history are written to
 local run-ID folder without uploading model artifacts. When WandB is disabled,
 they are written under `train.output`.
 
-Open `deck/deck_eda.ipynb` after deck extraction. Set the extracted-deck and
+Open `eda/deck.ipynb` after deck extraction. Set the extracted-deck and
 `EN_Card_Data.csv` paths in its setup cell, then run top-to-bottom. The
 notebook classifies rule-based archetypes, assigns stable SHA-256 exact-deck
 IDs, and saves:
@@ -160,6 +160,12 @@ IDs, and saves:
 
 The similarity table contains every unordered exact-deck pair. It reports the
 minimum changed card slots and count-aware Weighted Jaccard similarity.
+
+Open `eda/replay_timing.ipynb` to analyze the newest dated replay archive.
+Configure `SCORE_MODE` (`avg`, `min`, or `max`) and `SCORE_THRESHOLD` in the
+parameter cell. The notebook caches replay-player timings and exports the
+team-level analysis under `data/replay_timing/`, then plots timing
+distributions and four global K-Means timing clusters.
 
 Before Kaggle submission, edit `CHECKPOINT_PATH`, `OUTPUT_PATH`, and
 `PRECISION` at the top of `training/export_inference.py`, then strip the
