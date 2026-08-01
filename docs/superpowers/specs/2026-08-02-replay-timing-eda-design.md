@@ -4,8 +4,8 @@
 
 Create a reproducible notebook that analyzes agent startup time and subsequent
 per-action time from the newest replay archive. The analysis operates at team
-grain, compares all teams with a strict 1100+ cohort, and uses one global
-four-cluster K-Means model for both scatter plots.
+grain, compares all teams with a configurable score-filtered cohort, and uses
+one global four-cluster K-Means model for both scatter plots.
 
 ## Project Layout
 
@@ -41,6 +41,7 @@ The notebook parameters cell exposes:
 
 - `FORCE_REBUILD = False`
 - `SCORE_THRESHOLD = 1100.0`
+- `SCORE_MODE = "avg"` (`"avg"`, `"min"`, or `"max"`)
 - `N_CLUSTERS = 4`
 - `RANDOM_STATE = 42`
 
@@ -78,13 +79,21 @@ Required columns:
 - `mean_step_time_seconds`
 - `avg_score`
 - `min_score`
+- `max_score`
 - `sum_score`
-- `is_score_1100_plus`
+- `score_value`
+- `passes_score_filter`
 
-`is_score_1100_plus` is computed as `min_score > SCORE_THRESHOLD`. This strict
-definition guarantees that both teams in the replay exceed the threshold,
-because the manifest does not map its two individual scores back to player
-indices.
+`max_score` is reconstructed as `sum_score - min_score`. `score_value` selects
+the manifest field named by `SCORE_MODE`, and `passes_score_filter` is computed
+as `score_value > SCORE_THRESHOLD`. The three modes have different meanings:
+
+- `avg`: filter by the replay's mean participant score; this is the default.
+- `min`: require both participants to exceed the threshold.
+- `max`: require at least one participant to exceed the threshold.
+
+These remain replay-level filters because the manifest does not map its two
+individual scores back to player indices.
 
 When the cache exists and `FORCE_REBUILD` is false, load it after checking the
 required columns. Rebuild when forced or when the cache schema is incomplete.
@@ -94,7 +103,8 @@ required columns. Rebuild when forced or when the cache schema is incomplete.
 Create two cohorts independently:
 
 1. `all`: every valid episode-player row.
-2. `score_1100_plus`: only rows whose replay has `min_score > 1100`.
+2. `score_filtered`: only rows whose replay satisfies the configured score
+   mode and threshold.
 
 Within each cohort, group by exact `team_name`:
 
@@ -122,8 +132,8 @@ Fit the clustering pipeline only on complete team rows from the `all` cohort:
 3. Fit `KMeans(n_clusters=4, random_state=42, n_init=10)`.
 
 Use the same fitted scaler and K-Means model to predict clusters for the
-1100+ cohort. Do not refit on the subset. Plot coordinates remain in original
-seconds; transformation is internal to clustering.
+score-filtered cohort. Do not refit on the subset. Plot coordinates remain in
+original seconds; transformation is internal to clustering.
 
 Cluster numbers are descriptive identifiers only and must not be labeled as
 definitive rule-based, neural, search, or hybrid implementations.
@@ -142,16 +152,19 @@ issues:
 7. Render six figures:
    - all-team startup-time histogram;
    - all-team mean-step-time histogram;
-   - 1100+ startup-time histogram;
-   - 1100+ mean-step-time histogram;
+   - score-filtered startup-time histogram;
+   - score-filtered mean-step-time histogram;
    - all-team startup-versus-step scatter, colored by global cluster;
-   - 1100+ startup-versus-step scatter using the same global clusters.
+   - score-filtered startup-versus-step scatter using the same global
+     clusters.
 8. Display compact cluster-center and cohort-summary tables.
 9. State interpretation caveats.
 
 Histogram y-axes count unique teams. Scatter points are teams, not individual
 replays. Cluster centers are inverse-transformed and shown in seconds on the
-all-team scatter; the 1100+ scatter uses the same centers as references.
+all-team scatter; the score-filtered scatter uses the same centers as
+references. Filtered chart titles or subtitles state the active score mode,
+operator, and threshold, for example `avg_score > 1100`.
 
 ## Visualization Rules
 
