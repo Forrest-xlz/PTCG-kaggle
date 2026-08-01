@@ -8,6 +8,7 @@ replay_episodes/
 # Training outputs and checkpoints
 output/
 outputs/
+*.pt
 
 # Python caches
 __pycache__/
