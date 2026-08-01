@@ -14,11 +14,13 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 5
+CACHE_SCHEMA_VERSION = 6
 ENCODER_WORDS = 20
 OWN_SUMMARY_DIM = 60
 OPPONENT_SUMMARY_DIM = 62
 GLOBAL_SUMMARY_DIM = 73
+OPTION_CATEGORICAL_DIM = 5
+OPTION_NUMERIC_DIM = 16
 MAX_ACTIONS = 64
 ALIGNMENT = 64
 
@@ -30,10 +32,13 @@ SECTION_DTYPES = {
     "own_summary": np.dtype("<f2"),
     "opponent_summary": np.dtype("<f2"),
     "global_summary": np.dtype("<f2"),
-    "decoder_index": np.dtype("<u4"),
-    "decoder_ptr": np.dtype("<u4"),
-    "decoder_offset": np.dtype("<u2"),
-    "decoder_offset_ptr": np.dtype("<u4"),
+    "option_categorical": np.dtype("<u2"),
+    "option_numeric": np.dtype("<f2"),
+    "option_ptr": np.dtype("<u4"),
+    "action_option_index": np.dtype("<u2"),
+    "action_option_ptr": np.dtype("<u4"),
+    "action_option_offset": np.dtype("<u2"),
+    "action_option_offset_ptr": np.dtype("<u4"),
     "target": np.dtype("u1"),
     "action_count": np.dtype("u1"),
     "episode_key": np.dtype("<u4"),
@@ -49,8 +54,10 @@ class FeatureRecord:
     own_summary: list[float]
     opponent_summary: list[float]
     global_summary: list[float]
-    decoder_index: list[int]
-    decoder_offset: list[int]
+    option_categorical: list[int]
+    option_numeric: list[float]
+    action_option_index: list[int]
+    action_option_offset: list[int]
     target: int
     action_count: int
     episode_key: int
@@ -65,8 +72,10 @@ class FeatureView:
     own_summary: np.ndarray
     opponent_summary: np.ndarray
     global_summary: np.ndarray
-    decoder_index: np.ndarray
-    decoder_offset: np.ndarray
+    option_categorical: np.ndarray
+    option_numeric: np.ndarray
+    action_option_index: np.ndarray
+    action_option_offset: np.ndarray
     target: int
     action_count: int
     episode_key: int
@@ -86,8 +95,10 @@ class CachedBatch:
     own_summary: np.ndarray
     opponent_summary: np.ndarray
     global_summary: np.ndarray
-    decoder_index: np.ndarray
-    decoder_offset: np.ndarray
+    option_categorical: np.ndarray
+    option_numeric: np.ndarray
+    action_option_index: np.ndarray
+    action_option_offset: np.ndarray
     target: np.ndarray
     action_count: np.ndarray
 
@@ -210,13 +221,15 @@ class PackedShardWriter:
         self._samples = 0
         self._buffered_samples = 0
         self._encoder_nnz = 0
-        self._decoder_nnz = 0
-        self._decoder_words = 0
+        self._option_count = 0
+        self._action_option_nnz = 0
+        self._action_offset_count = 0
         self._closed = False
 
         self._append("encoder_ptr", 0)
-        self._append("decoder_ptr", 0)
-        self._append("decoder_offset_ptr", 0)
+        self._append("option_ptr", 0)
+        self._append("action_option_ptr", 0)
+        self._append("action_option_offset_ptr", 0)
 
     def _append(self, name: str, value) -> None:
         self._buffers[name].append(value)
@@ -239,8 +252,29 @@ class PackedShardWriter:
         )
         if not 1 <= int(record.action_count) <= MAX_ACTIONS:
             raise ValueError(f"action_count must be in [1, {MAX_ACTIONS}]")
-        if len(record.decoder_offset) != int(record.action_count):
-            raise ValueError("decoder_offset length must equal action_count")
+        if len(record.option_categorical) % OPTION_CATEGORICAL_DIM:
+            raise ValueError("option_categorical has an invalid width")
+        option_count = len(record.option_categorical) // OPTION_CATEGORICAL_DIM
+        if len(record.option_numeric) != option_count * OPTION_NUMERIC_DIM:
+            raise ValueError("option_numeric does not align with options")
+        if len(record.action_option_offset) != int(record.action_count) + 1:
+            raise ValueError(
+                "action_option_offset length must equal action_count + 1"
+            )
+        action_offsets = np.asarray(
+            record.action_option_offset, dtype=np.int64
+        )
+        if (
+            action_offsets[0] != 0
+            or action_offsets[-1] != len(record.action_option_index)
+            or np.any(action_offsets[1:] < action_offsets[:-1])
+        ):
+            raise ValueError("action_option_offset boundaries are invalid")
+        if any(
+            index < 0 or index >= option_count
+            for index in record.action_option_index
+        ):
+            raise ValueError("action_option_index contains an invalid option")
         if not 0 <= int(record.target) < int(record.action_count):
             raise ValueError("target must be smaller than action_count")
         if not 0 <= int(record.episode_key) <= np.iinfo(np.uint32).max:
@@ -249,20 +283,51 @@ class PackedShardWriter:
             raise ValueError("deck_key must fit uint64")
 
         _validate_unsigned("encoder_index", record.encoder_index, np.iinfo(np.uint16).max)
-        _validate_unsigned("decoder_index", record.decoder_index, np.iinfo(np.uint32).max)
         _validate_unsigned("encoder_offset", record.encoder_offset, np.iinfo(np.uint16).max)
-        _validate_unsigned("decoder_offset", record.decoder_offset, np.iinfo(np.uint16).max)
+        _validate_unsigned(
+            "option_categorical",
+            record.option_categorical,
+            np.iinfo(np.uint16).max,
+        )
+        _validate_unsigned(
+            "action_option_index",
+            record.action_option_index,
+            np.iinfo(np.uint16).max,
+        )
+        _validate_unsigned(
+            "action_option_offset",
+            record.action_option_offset,
+            np.iinfo(np.uint16).max,
+        )
 
         encoder_values = np.asarray(record.encoder_value, dtype=np.float32)
         narrowed = encoder_values.astype(np.float16)
         if not np.all(np.isfinite(encoder_values)) or not np.all(np.isfinite(narrowed)):
             raise ValueError("encoder_value contains a non-finite or float16-overflow value")
+        option_numeric = np.asarray(record.option_numeric, dtype=np.float32)
+        narrowed_numeric = option_numeric.astype(np.float16)
+        if not np.all(np.isfinite(option_numeric)) or not np.all(
+            np.isfinite(narrowed_numeric)
+        ):
+            raise ValueError(
+                "option_numeric contains a non-finite or float16-overflow value"
+            )
 
         next_encoder_nnz = self._encoder_nnz + len(record.encoder_index)
-        next_decoder_nnz = self._decoder_nnz + len(record.decoder_index)
-        next_decoder_words = self._decoder_words + len(record.decoder_offset)
+        next_option_count = self._option_count + option_count
+        next_action_option_nnz = (
+            self._action_option_nnz + len(record.action_option_index)
+        )
+        next_action_offset_count = (
+            self._action_offset_count + len(record.action_option_offset)
+        )
         uint32_max = np.iinfo(np.uint32).max
-        if max(next_encoder_nnz, next_decoder_nnz, next_decoder_words) > uint32_max:
+        if max(
+            next_encoder_nnz,
+            next_option_count,
+            next_action_option_nnz,
+            next_action_offset_count,
+        ) > uint32_max:
             raise ValueError("cache shard pointer exceeds uint32 range")
 
         self._buffers["encoder_index"].extend(record.encoder_index)
@@ -271,15 +336,27 @@ class PackedShardWriter:
         self._buffers["own_summary"].extend(record.own_summary)
         self._buffers["opponent_summary"].extend(record.opponent_summary)
         self._buffers["global_summary"].extend(record.global_summary)
-        self._buffers["decoder_index"].extend(record.decoder_index)
-        self._buffers["decoder_offset"].extend(record.decoder_offset)
+        self._buffers["option_categorical"].extend(
+            record.option_categorical
+        )
+        self._buffers["option_numeric"].extend(record.option_numeric)
+        self._buffers["action_option_index"].extend(
+            record.action_option_index
+        )
+        self._buffers["action_option_offset"].extend(
+            record.action_option_offset
+        )
 
         self._encoder_nnz = next_encoder_nnz
-        self._decoder_nnz = next_decoder_nnz
-        self._decoder_words = next_decoder_words
+        self._option_count = next_option_count
+        self._action_option_nnz = next_action_option_nnz
+        self._action_offset_count = next_action_offset_count
         self._append("encoder_ptr", self._encoder_nnz)
-        self._append("decoder_ptr", self._decoder_nnz)
-        self._append("decoder_offset_ptr", self._decoder_words)
+        self._append("option_ptr", self._option_count)
+        self._append("action_option_ptr", self._action_option_nnz)
+        self._append(
+            "action_option_offset_ptr", self._action_offset_count
+        )
         self._append("target", int(record.target))
         self._append("action_count", int(record.action_count))
         self._append("episode_key", int(record.episode_key))
@@ -422,10 +499,15 @@ class PackedShard:
         self.samples = int(self.metadata["samples"])
         if self.arrays["encoder_ptr"].size != self.samples + 1:
             raise ValueError("encoder_ptr length does not match sample count")
-        if self.arrays["decoder_ptr"].size != self.samples + 1:
-            raise ValueError("decoder_ptr length does not match sample count")
-        if self.arrays["decoder_offset_ptr"].size != self.samples + 1:
-            raise ValueError("decoder_offset_ptr length does not match sample count")
+        for name in (
+            "option_ptr",
+            "action_option_ptr",
+            "action_option_offset_ptr",
+        ):
+            if self.arrays[name].size != self.samples + 1:
+                raise ValueError(
+                    f"{name} length does not match sample count"
+                )
         if self.arrays["encoder_offset"].size != self.samples * ENCODER_WORDS:
             raise ValueError("encoder_offset length does not match sample count")
         dense_widths = {
@@ -444,10 +526,21 @@ class PackedShard:
             raise ValueError("episode_key length does not match sample count")
         if self.arrays["deck_key"].size != self.samples:
             raise ValueError("deck_key length does not match sample count")
+        option_count = int(self.arrays["option_ptr"][-1])
+        if (
+            self.arrays["option_categorical"].size
+            != option_count * OPTION_CATEGORICAL_DIM
+            or self.arrays["option_numeric"].size
+            != option_count * OPTION_NUMERIC_DIM
+        ):
+            raise ValueError("option feature arrays do not align with option_ptr")
         pointer_targets = {
             "encoder_ptr": self.arrays["encoder_index"].size,
-            "decoder_ptr": self.arrays["decoder_index"].size,
-            "decoder_offset_ptr": self.arrays["decoder_offset"].size,
+            "option_ptr": option_count,
+            "action_option_ptr": self.arrays["action_option_index"].size,
+            "action_option_offset_ptr": self.arrays[
+                "action_option_offset"
+            ].size,
         }
         for pointer_name, final_count in pointer_targets.items():
             pointer = self.arrays[pointer_name]
@@ -461,6 +554,11 @@ class PackedShard:
             raise ValueError("action_count contains an invalid value")
         if np.any(self.arrays["target"] >= self.arrays["action_count"]):
             raise ValueError("target must be smaller than action_count")
+        expected_offsets = int(self.arrays["action_count"].sum()) + self.samples
+        if self.arrays["action_option_offset"].size != expected_offsets:
+            raise ValueError(
+                "action_option_offset length does not match action counts"
+            )
 
     def __len__(self) -> int:
         return self.samples
@@ -471,10 +569,16 @@ class PackedShard:
             raise IndexError(local_id)
         encoder_start = int(self.arrays["encoder_ptr"][local_id])
         encoder_end = int(self.arrays["encoder_ptr"][local_id + 1])
-        decoder_start = int(self.arrays["decoder_ptr"][local_id])
-        decoder_end = int(self.arrays["decoder_ptr"][local_id + 1])
-        offset_start = int(self.arrays["decoder_offset_ptr"][local_id])
-        offset_end = int(self.arrays["decoder_offset_ptr"][local_id + 1])
+        option_start = int(self.arrays["option_ptr"][local_id])
+        option_end = int(self.arrays["option_ptr"][local_id + 1])
+        action_start = int(self.arrays["action_option_ptr"][local_id])
+        action_end = int(self.arrays["action_option_ptr"][local_id + 1])
+        offset_start = int(
+            self.arrays["action_option_offset_ptr"][local_id]
+        )
+        offset_end = int(
+            self.arrays["action_option_offset_ptr"][local_id + 1]
+        )
         encoder_word_start = local_id * ENCODER_WORDS
         own_start = local_id * OWN_SUMMARY_DIM
         opponent_start = local_id * OPPONENT_SUMMARY_DIM
@@ -494,8 +598,20 @@ class PackedShard:
             global_summary=self.arrays["global_summary"][
                 global_start : global_start + GLOBAL_SUMMARY_DIM
             ],
-            decoder_index=self.arrays["decoder_index"][decoder_start:decoder_end],
-            decoder_offset=self.arrays["decoder_offset"][offset_start:offset_end],
+            option_categorical=self.arrays["option_categorical"][
+                option_start * OPTION_CATEGORICAL_DIM:
+                option_end * OPTION_CATEGORICAL_DIM
+            ].reshape(-1, OPTION_CATEGORICAL_DIM),
+            option_numeric=self.arrays["option_numeric"][
+                option_start * OPTION_NUMERIC_DIM:
+                option_end * OPTION_NUMERIC_DIM
+            ].reshape(-1, OPTION_NUMERIC_DIM),
+            action_option_index=self.arrays["action_option_index"][
+                action_start:action_end
+            ],
+            action_option_offset=self.arrays["action_option_offset"][
+                offset_start:offset_end
+            ],
             target=int(self.arrays["target"][local_id]),
             action_count=int(self.arrays["action_count"][local_id]),
             episode_key=int(self.arrays["episode_key"][local_id]),
@@ -854,7 +970,9 @@ class MmapFeatureDataset:
         shard_ids = np.searchsorted(self.ends, global_ids, side="right")
         encoder_indices = []
         encoder_values = []
-        decoder_indices = []
+        option_categorical = []
+        option_numeric = []
+        action_option_indices = []
         encoder_offsets = np.empty(global_ids.size * ENCODER_WORDS, dtype=np.int32)
         own_summaries = np.empty(
             (global_ids.size, OWN_SUMMARY_DIM), dtype=np.float16
@@ -865,18 +983,25 @@ class MmapFeatureDataset:
         global_summaries = np.empty(
             (global_ids.size, GLOBAL_SUMMARY_DIM), dtype=np.float16
         )
-        decoder_offsets = np.empty(global_ids.size * MAX_ACTIONS, dtype=np.int32)
+        action_option_offsets = np.empty(
+            global_ids.size * MAX_ACTIONS + 1, dtype=np.int32
+        )
         targets = np.empty(global_ids.size, dtype=np.int64)
         action_counts = np.empty(global_ids.size, dtype=np.int64)
         encoder_base = 0
-        decoder_base = 0
+        option_base = 0
+        action_option_base = 0
 
         for row, (global_id, shard_id) in enumerate(zip(global_ids, shard_ids)):
             local_id = int(global_id - self.starts[int(shard_id)])
             sample = self.shards[int(shard_id)].sample(local_id)
             encoder_indices.append(sample.encoder_index)
             encoder_values.append(sample.encoder_value)
-            decoder_indices.append(sample.decoder_index)
+            option_categorical.append(sample.option_categorical)
+            option_numeric.append(sample.option_numeric)
+            action_option_indices.append(
+                sample.action_option_index.astype(np.int32) + option_base
+            )
             own_summaries[row] = sample.own_summary
             opponent_summaries[row] = sample.opponent_summary
             global_summaries[row] = sample.global_summary
@@ -885,18 +1010,22 @@ class MmapFeatureDataset:
             encoder_offsets[enc_slice] = (
                 sample.encoder_offset.astype(np.int32) + encoder_base
             )
-            dec_start = row * MAX_ACTIONS
-            dec_end = dec_start + sample.action_count
-            decoder_offsets[dec_start:dec_end] = (
-                sample.decoder_offset.astype(np.int32) + decoder_base
+            action_start = row * MAX_ACTIONS
+            action_end = action_start + sample.action_count + 1
+            action_option_offsets[action_start:action_end] = (
+                sample.action_option_offset.astype(np.int32)
+                + action_option_base
             )
-            decoder_offsets[dec_end : dec_start + MAX_ACTIONS] = (
-                decoder_base + sample.decoder_index.size
+            action_option_offsets[
+                action_end:(row + 1) * MAX_ACTIONS + 1
+            ] = (
+                action_option_base + sample.action_option_index.size
             )
             targets[row] = sample.target
             action_counts[row] = sample.action_count
             encoder_base += int(sample.encoder_index.size)
-            decoder_base += int(sample.decoder_index.size)
+            option_base += int(sample.option_categorical.shape[0])
+            action_option_base += int(sample.action_option_index.size)
 
         return CachedBatch(
             encoder_index=np.concatenate(encoder_indices).astype(np.int32, copy=False),
@@ -905,8 +1034,16 @@ class MmapFeatureDataset:
             own_summary=own_summaries,
             opponent_summary=opponent_summaries,
             global_summary=global_summaries,
-            decoder_index=np.concatenate(decoder_indices).astype(np.int32, copy=False),
-            decoder_offset=decoder_offsets,
+            option_categorical=np.concatenate(option_categorical).astype(
+                np.int64, copy=False
+            ),
+            option_numeric=np.concatenate(option_numeric).astype(
+                np.float16, copy=False
+            ),
+            action_option_index=np.concatenate(action_option_indices).astype(
+                np.int64, copy=False
+            ),
+            action_option_offset=action_option_offsets,
             target=targets,
             action_count=action_counts,
         )

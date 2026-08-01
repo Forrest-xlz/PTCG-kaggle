@@ -37,7 +37,7 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(_cg_path) not in sys.path:
     sys.path.insert(0, str(_cg_path))
 
-from cg.api import SelectContext, all_attack, all_card_data, to_observation_class
+from cg.api import all_attack, all_card_data, to_observation_class
 from model.features import decoder_features, encoder_features, enumerate_actions
 from model.network import ModelConfig
 from training.feature_cache import (
@@ -89,8 +89,9 @@ def feature_signature(config: ModelConfig) -> dict:
         "encoder_tokens": ENCODER_WORDS,
         "encoder_layout": "numeric-summary-20-v1",
         "cache_schema_version": CACHE_SCHEMA_VERSION,
-        "decoder_size": config.decoder_size,
-        "recover_special_condition": config.recover_special_condition,
+        "decoder_layout": "option-components-combination-sum-v1",
+        "option_categorical_dim": 5,
+        "option_numeric_dim": 16,
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
     }
@@ -122,8 +123,6 @@ def _prepare_record(
     decoder = decoder_features(
         obs, actions, config.card_count, config.attack_count
     )
-    if any(value != 1.0 for value in decoder.value):
-        raise ValueError("decoder feature values are no longer all one")
     return (
         FeatureRecord(
             encoder_index=encoder.sparse.index,
@@ -132,8 +131,10 @@ def _prepare_record(
             own_summary=encoder.own_summary,
             opponent_summary=encoder.opponent_summary,
             global_summary=encoder.global_summary,
-            decoder_index=decoder.index,
-            decoder_offset=decoder.offset,
+            option_categorical=decoder.categorical.reshape(-1).tolist(),
+            option_numeric=decoder.numeric.reshape(-1).tolist(),
+            action_option_index=decoder.action_index.tolist(),
+            action_option_offset=decoder.action_offset.tolist(),
             target=target,
             action_count=len(actions),
             episode_key=stable_episode_key(record["episode_id"]),
@@ -351,7 +352,6 @@ def main() -> None:
     config = ModelConfig(
         card_count=max(card.cardId for card in cards) + 1,
         attack_count=max(attack.attackId for attack in all_attack()) + 1,
-        recover_special_condition=int(SelectContext.RECOVER_SPECIAL_CONDITION),
     )
     signature = feature_signature(config)
     jobs = [

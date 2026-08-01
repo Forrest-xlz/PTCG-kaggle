@@ -66,8 +66,10 @@ class CountingModel(torch.nn.Module):
         own_summary,
         opponent_summary,
         global_summary,
-        decoder_index,
-        decoder_offset,
+        option_categorical,
+        option_numeric,
+        action_option_index,
+        action_option_offset,
     ):
         self.forward_calls += 1
         batch_size = encoder_offset.numel() // ENCODER_WORDS
@@ -88,8 +90,12 @@ class DummyDataset:
             global_summary=np.zeros(
                 (size, GLOBAL_SUMMARY_DIM), dtype=np.float16
             ),
-            decoder_index=np.zeros(size, dtype=np.int32),
-            decoder_offset=np.zeros(size * 64, dtype=np.int32),
+            option_categorical=np.zeros((size, 5), dtype=np.int64),
+            option_numeric=np.zeros((size, 16), dtype=np.float16),
+            action_option_index=np.zeros(size, dtype=np.int64),
+            action_option_offset=np.zeros(
+                size * 64 + 1, dtype=np.int32
+            ),
             target=np.full(size, 4, dtype=np.int64),
             action_count=np.full(size, 5, dtype=np.int64),
         )

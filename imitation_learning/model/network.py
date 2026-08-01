@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 import torch
 import torch.nn.functional as F
 
+from model.attack_features import ATTACK_FEATURE_DIM
 from model.card_features import CARD_FEATURE_DIM
 
 
@@ -12,6 +13,9 @@ ENCODER_TOKENS = 20
 OWN_SUMMARY_DIM = 60
 OPPONENT_SUMMARY_DIM = 62
 GLOBAL_SUMMARY_DIM = 73
+OPTION_TYPE_COUNT = 17
+OPTION_CONTEXT_COUNT = 49
+OPTION_NUMERIC_DIM = 16
 
 
 @dataclass(frozen=True)
@@ -19,10 +23,6 @@ class ModelConfig:
     card_count: int
     attack_count: int
     encoder_size: int = 22_000
-    decoder_main_features: int = 8
-    # cg.api.SelectContext.RECOVER_SPECIAL_CONDITION is 48 in the competition
-    # API.  This matches the dynamic constant used by the source notebook.
-    recover_special_condition: int = 48
     d_model: int = 128
     num_heads: int = 2
     d_feedforward: int = 256
@@ -40,18 +40,6 @@ class ModelConfig:
             raise ValueError(
                 "card_feature_ratio * d_model must be at least 1"
             )
-
-    @property
-    def decoder_attack_offset(self) -> int:
-        return 14
-
-    @property
-    def decoder_card_offset(self) -> int:
-        return self.decoder_attack_offset + self.attack_count
-
-    @property
-    def decoder_size(self) -> int:
-        return self.decoder_card_offset + (1 + self.decoder_main_features + self.recover_special_condition) * self.card_count
 
     @property
     def card_feature_dim(self) -> int:
@@ -97,23 +85,6 @@ def _encoder_card_ids(config: ModelConfig) -> torch.Tensor:
         raise ValueError(
             "encoder_size is too small for the configured card vocabulary"
         )
-    return mapping
-
-
-def _decoder_card_ids(config: ModelConfig) -> torch.Tensor:
-    """Map decoder vocabulary indices to Card IDs or the zero sentinel."""
-    mapping = torch.full(
-        (config.decoder_size,),
-        config.card_count,
-        dtype=torch.long,
-    )
-    card_region = torch.arange(
-        config.decoder_size - config.decoder_card_offset,
-        dtype=torch.long,
-    )
-    mapping[config.decoder_card_offset:] = (
-        card_region % config.card_count
-    )
     return mapping
 
 
@@ -207,6 +178,7 @@ class PTCGTransformer(torch.nn.Module):
         self,
         config: ModelConfig,
         card_feature_table: torch.Tensor,
+        attack_feature_table: torch.Tensor,
     ):
         super().__init__()
         self.config = config
@@ -224,6 +196,24 @@ class PTCGTransformer(torch.nn.Module):
         self.register_buffer(
             "card_feature_table",
             card_feature_table.clone(),
+        )
+        attack_feature_table = torch.as_tensor(
+            attack_feature_table,
+            dtype=torch.float32,
+        )
+        expected_attack_shape = (
+            config.attack_count,
+            ATTACK_FEATURE_DIM,
+        )
+        if tuple(attack_feature_table.shape) != expected_attack_shape:
+            raise ValueError(
+                "attack_feature_table must have shape "
+                f"{expected_attack_shape}, found "
+                f"{tuple(attack_feature_table.shape)}"
+            )
+        self.register_buffer(
+            "attack_feature_table",
+            attack_feature_table.clone(),
         )
         self.card_feature_projection = torch.nn.Linear(
             CARD_FEATURE_DIM,
@@ -261,10 +251,35 @@ class PTCGTransformer(torch.nn.Module):
             norm=final_norm,
             enable_nested_tensor=False,
         )
-        self.decoder_bag = CardAwareEmbeddingBag(
-            config.decoder_size,
+        self.option_type_embedding = torch.nn.Embedding(
+            OPTION_TYPE_COUNT, config.d_model
+        )
+        self.option_context_embedding = torch.nn.Embedding(
+            OPTION_CONTEXT_COUNT, config.d_model
+        )
+        self.option_candidate_embedding = torch.nn.Embedding(
+            config.card_count + 1,
             config.d_model,
-            index_to_card_id=_decoder_card_ids(config),
+            padding_idx=config.card_count,
+        )
+        self.option_target_embedding = torch.nn.Embedding(
+            config.card_count + 1,
+            config.d_model,
+            padding_idx=config.card_count,
+        )
+        self.option_attack_embedding = torch.nn.Embedding(
+            config.attack_count + 1,
+            config.d_model,
+            padding_idx=config.attack_count,
+        )
+        self.option_numeric_projection = torch.nn.Linear(
+            OPTION_NUMERIC_DIM, config.d_model
+        )
+        self.attack_feature_projection = torch.nn.Linear(
+            ATTACK_FEATURE_DIM, config.d_model
+        )
+        self.no_action_embedding = torch.nn.Parameter(
+            torch.zeros(config.d_model)
         )
         self.decoder = torch.nn.ModuleList(
             DecoderLayer(
@@ -294,6 +309,61 @@ class PTCGTransformer(torch.nn.Module):
             dim=0,
         )
 
+    def project_attack_features(self) -> torch.Tensor:
+        projected = self.attack_feature_projection(
+            self.attack_feature_table
+        )
+        return torch.cat(
+            [
+                projected,
+                projected.new_zeros((1, self.config.d_model)),
+            ],
+            dim=0,
+        )
+
+    def encode_options(
+        self,
+        categorical: torch.Tensor,
+        numeric: torch.Tensor,
+        projected_card_features: torch.Tensor,
+        projected_attack_features: torch.Tensor,
+    ) -> torch.Tensor:
+        candidate_ids = categorical[:, 2]
+        target_ids = categorical[:, 3]
+        attack_ids = categorical[:, 4]
+        return (
+            self.option_type_embedding(categorical[:, 0])
+            + self.option_context_embedding(categorical[:, 1])
+            + self.option_candidate_embedding(candidate_ids)
+            + self.option_target_embedding(target_ids)
+            + self.option_attack_embedding(attack_ids)
+            + self.option_numeric_projection(numeric)
+            + projected_card_features[candidate_ids]
+            + projected_card_features[target_ids]
+            + projected_attack_features[attack_ids]
+        )
+
+    def combine_actions(
+        self,
+        option_embeddings: torch.Tensor,
+        action_option_index: torch.Tensor,
+        action_option_offset: torch.Tensor,
+    ) -> torch.Tensor:
+        if action_option_index.numel() == 0:
+            action_embeddings = option_embeddings.new_zeros(
+                (action_option_offset.numel() - 1, self.config.d_model)
+            )
+        else:
+            action_embeddings = F.embedding_bag(
+                action_option_index,
+                option_embeddings,
+                action_option_offset,
+                mode="sum",
+                include_last_offset=True,
+            )
+        empty = action_option_offset[1:] == action_option_offset[:-1]
+        return action_embeddings + empty.unsqueeze(1) * self.no_action_embedding
+
     def forward(
         self,
         index_encoder,
@@ -302,11 +372,14 @@ class PTCGTransformer(torch.nn.Module):
         own_summary,
         opponent_summary,
         global_summary,
-        index_decoder,
-        offset_decoder,
+        option_categorical,
+        option_numeric,
+        action_option_index,
+        action_option_offset,
     ):
         cfg = self.config
         projected_card_features = self.project_card_features()
+        projected_attack_features = self.project_attack_features()
         encoded = self.encoder_bag(
             index_encoder,
             offset_encoder,
@@ -330,10 +403,16 @@ class PTCGTransformer(torch.nn.Module):
             dim=1,
         ).transpose(0, 1)
         encoder_out = self.encoder(encoded)
-        policy = self.decoder_bag(
-            index_decoder,
-            offset_decoder,
-            projected_card_features=projected_card_features,
+        option_embeddings = self.encode_options(
+            option_categorical,
+            option_numeric,
+            projected_card_features,
+            projected_attack_features,
+        )
+        policy = self.combine_actions(
+            option_embeddings,
+            action_option_index,
+            action_option_offset,
         )
         policy = policy.reshape(batch_size, -1, cfg.d_model).transpose(0, 1)
         # Every decoder layer cross-attends to the same encoder output. There

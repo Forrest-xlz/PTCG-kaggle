@@ -33,7 +33,7 @@ SIGNATURE = {
     "card_count": 1267,
     "attack_count": 512,
     "encoder_size": 22000,
-    "decoder_size": 72745,
+    "decoder_layout": "option-components-combination-sum-v1",
     "max_actions": 64,
 }
 
@@ -41,6 +41,15 @@ SIGNATURE = {
 def record(marker: int, action_count: int = 2) -> FeatureRecord:
     encoder_offset = [0] * ENCODER_WORDS
     encoder_offset[-1] = 1
+    action_memberships = [[0, 1], [0]][:action_count]
+    action_option_index = [
+        index for action in action_memberships for index in action
+    ]
+    action_option_offset = [0]
+    for action in action_memberships:
+        action_option_offset.append(
+            action_option_offset[-1] + len(action)
+        )
     return FeatureRecord(
         encoder_index=[marker, marker + 1],
         encoder_value=[1.0, 0.25],
@@ -48,8 +57,13 @@ def record(marker: int, action_count: int = 2) -> FeatureRecord:
         own_summary=[float(marker)] * OWN_SUMMARY_DIM,
         opponent_summary=[float(marker + 1)] * OPPONENT_SUMMARY_DIM,
         global_summary=[float(marker + 2)] * GLOBAL_SUMMARY_DIM,
-        decoder_index=[marker + 100, marker + 101],
-        decoder_offset=[0, 1][:action_count],
+        option_categorical=[
+            8, 21, marker, marker + 1, 512,
+            13, 21, 1267, 1267, 1,
+        ],
+        option_numeric=[float(marker) / 100] * (2 * 16),
+        action_option_index=action_option_index,
+        action_option_offset=action_option_offset,
         target=min(1, action_count - 1),
         action_count=action_count,
         episode_key=stable_episode_key(f"episode-{marker}"),
@@ -106,8 +120,14 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
         np.testing.assert_array_equal(sample.own_summary, 11.0)
         np.testing.assert_array_equal(sample.opponent_summary, 12.0)
         np.testing.assert_array_equal(sample.global_summary, 13.0)
-        np.testing.assert_array_equal(sample.decoder_index, [111, 112])
-        np.testing.assert_array_equal(sample.decoder_offset, [0, 1])
+        assert sample.option_categorical.shape == (2, 5)
+        assert sample.option_numeric.shape == (2, 16)
+        assert sample.option_numeric.dtype == np.float16
+        np.testing.assert_array_equal(
+            sample.option_categorical[0], [8, 21, 11, 12, 512]
+        )
+        np.testing.assert_array_equal(sample.action_option_index, [0, 1, 0])
+        np.testing.assert_array_equal(sample.action_option_offset, [0, 2, 3])
         assert sample.target == 1
         assert sample.action_count == 2
         assert sample.episode_key == stable_episode_key("episode-11")
@@ -416,7 +436,7 @@ def test_train_replay_sampling_is_deterministic_and_keeps_replays_together(
         dataset.close()
 
 
-def test_collate_pads_decoder_offsets_without_decoder_values(tmp_path: Path) -> None:
+def test_collate_rebases_options_and_pads_action_offsets(tmp_path: Path) -> None:
     build_shard(tmp_path / "a.cache", [1, 2])
     dataset = MmapFeatureDataset(tmp_path, expected_signature=SIGNATURE)
     try:
@@ -433,10 +453,13 @@ def test_collate_pads_decoder_offsets_without_decoder_values(tmp_path: Path) -> 
         assert batch.own_summary.shape == (2, OWN_SUMMARY_DIM)
         assert batch.opponent_summary.shape == (2, OPPONENT_SUMMARY_DIM)
         assert batch.global_summary.shape == (2, GLOBAL_SUMMARY_DIM)
-        assert batch.decoder_offset.shape == (2 * 64,)
+        assert batch.option_categorical.shape == (4, 5)
+        assert batch.option_numeric.shape == (4, 16)
+        assert batch.action_option_offset.shape == (2 * 64 + 1,)
         assert batch.encoder_index.dtype == np.int32
-        assert batch.decoder_index.dtype == np.int32
+        assert batch.action_option_index.dtype == np.int64
         assert batch.encoder_value.dtype == np.float16
+        assert batch.option_numeric.dtype == np.float16
         assert batch.target.dtype == np.int64
         assert batch.action_count.dtype == np.int64
     finally:

@@ -20,7 +20,6 @@ def tiny_model(norm_mode: str = "postnorm") -> PTCGTransformer:
             card_count=8,
             attack_count=4,
             encoder_size=160,
-            recover_special_condition=1,
             d_model=8,
             num_heads=2,
             d_feedforward=16,
@@ -29,6 +28,7 @@ def tiny_model(norm_mode: str = "postnorm") -> PTCGTransformer:
             norm_mode=norm_mode,
         ),
         torch.zeros((8, 54), dtype=torch.float32),
+        torch.zeros((4, 14), dtype=torch.float32),
     )
 
 
@@ -42,8 +42,12 @@ def test_normalization_modes_preserve_policy_shape(norm_mode: str) -> None:
     own_summary = torch.zeros((1, 60))
     opponent_summary = torch.zeros((1, 62))
     global_summary = torch.zeros((1, 73))
-    decoder_index = torch.tensor([3, 4], dtype=torch.int32)
-    decoder_offset = torch.tensor([0, 1], dtype=torch.int32)
+    option_categorical = torch.tensor(
+        [[8, 0, 1, 8, 4], [13, 0, 8, 8, 1]], dtype=torch.long
+    )
+    option_numeric = torch.zeros((2, 16))
+    action_option_index = torch.tensor([0, 1], dtype=torch.long)
+    action_option_offset = torch.tensor([0, 1, 2], dtype=torch.long)
     logits = model(
         encoder_index,
         encoder_value,
@@ -51,12 +55,30 @@ def test_normalization_modes_preserve_policy_shape(norm_mode: str) -> None:
         own_summary,
         opponent_summary,
         global_summary,
-        decoder_index,
-        decoder_offset,
+        option_categorical,
+        option_numeric,
+        action_option_index,
+        action_option_offset,
     )
     assert logits.shape == (1, 2)
     assert model.encoder.layers[0].norm_first is (norm_mode == "prenorm")
     assert (model.encoder.norm is not None) is (norm_mode == "prenorm")
+
+
+def test_combination_actions_sum_options_and_use_learned_empty_embedding() -> None:
+    model = tiny_model()
+    model.no_action_embedding.data.fill_(4)
+
+    combined = model.combine_actions(
+        torch.tensor([[1.0] * 8, [2.0] * 8]),
+        torch.tensor([0, 1, 0]),
+        torch.tensor([0, 2, 3, 3]),
+    )
+
+    torch.testing.assert_close(
+        combined,
+        torch.tensor([[3.0] * 8, [1.0] * 8, [4.0] * 8]),
+    )
 
 
 def test_invalid_normalization_mode_is_rejected() -> None:

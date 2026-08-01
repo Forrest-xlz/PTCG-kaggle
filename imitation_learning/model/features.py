@@ -35,6 +35,9 @@ OPPONENT_SUMMARY_DIM = 62
 GLOBAL_SUMMARY_DIM = 73
 SELECT_TYPE_DIM = 11
 SELECT_CONTEXT_DIM = 49
+OPTION_CATEGORICAL_DIM = 5
+OPTION_NUMERIC_DIM = 16
+OPTION_TYPE_DIM = 17
 
 
 @dataclass
@@ -74,6 +77,14 @@ class EncoderFeatures:
     own_summary: list[float]
     opponent_summary: list[float]
     global_summary: list[float]
+
+
+@dataclass(frozen=True)
+class OptionFeatures:
+    categorical: np.ndarray
+    numeric: np.ndarray
+    action_index: np.ndarray
+    action_offset: np.ndarray
 
 
 @lru_cache(maxsize=None)
@@ -539,46 +550,243 @@ def encoder_features(
     )
 
 
-def decoder_features(obs: Any, actions: list[list[int]], card_count: int, attack_count: int) -> SparseVector:
-    """Build exact decoder features; enum integer values follow the cg API."""
+def _optional_int(value: Any, default: int = 0) -> int:
+    return default if value is None else int(value)
+
+
+def _area_cards(
+    obs: Any,
+    area: Any,
+    player_index: int,
+) -> list[Any]:
+    from cg.api import AreaType
+
+    player = obs.current.players[player_index]
+    mapping = {
+        AreaType.DECK: obs.select.deck,
+        AreaType.HAND: player.hand,
+        AreaType.DISCARD: player.discard,
+        AreaType.ACTIVE: player.active,
+        AreaType.BENCH: player.bench,
+        AreaType.PRIZE: player.prize,
+        AreaType.STADIUM: obs.current.stadium,
+        AreaType.LOOKING: obs.current.looking,
+    }
+    return list(mapping.get(area) or [])
+
+
+def _area_card(
+    obs: Any,
+    area: Any,
+    index: Any,
+    player_index: int,
+) -> Any | None:
+    cards = _area_cards(obs, area, player_index)
+    position = _optional_int(index, -1)
+    return cards[position] if 0 <= position < len(cards) else None
+
+
+def _valid_card_id(card: Any, card_count: int) -> int:
+    if card is None:
+        return card_count
+    card_id = int(card.id)
+    return card_id if 0 <= card_id < card_count else card_count
+
+
+def _option_entity_ids(
+    obs: Any,
+    option: Any,
+    card_count: int,
+    attack_count: int,
+) -> tuple[int, int, int]:
     from cg.api import AreaType, OptionType
-    sv, yours, ps, ctx = SparseVector(), obs.current.yourIndex, obs.current.players[obs.current.yourIndex], obs.select.context
-    card_offset = 14 + attack_count
-    def get_card(o, area=None, index=None, player_index=None):
-        area = o.area if area is None else area
-        index = o.index if index is None else index
-        # The notebook uses the current player for ordinary actions such as
-        # ATTACH/EVOLVE/ABILITY/DISCARD.  playerIndex is only supplied for
-        # selection options that may explicitly point at either player.
-        player_index = yours if player_index is None else player_index
-        player = obs.current.players[player_index]
-        mapping = {AreaType.DECK: obs.select.deck, AreaType.HAND: player.hand, AreaType.DISCARD: player.discard,
-                   AreaType.ACTIVE: player.active, AreaType.BENCH: player.bench, AreaType.PRIZE: player.prize,
-                   AreaType.STADIUM: obs.current.stadium, AreaType.LOOKING: obs.current.looking}
-        cards = mapping.get(area); return cards[index] if cards is not None else None
-    def main_feature(n, card):
-        if card is not None: sv.add(card_offset + n * card_count + card.id, 1)
-    def context_card(card):
-        if card is not None: sv.add(card_offset + (8 + int(ctx)) * card_count + card.id, 1)
+
+    yours = int(obs.current.yourIndex)
+    player_index = _optional_int(option.playerIndex, yours)
+    player_index = max(0, min(player_index, len(obs.current.players) - 1))
+    candidate = None
+    target = None
+
+    if option.type == OptionType.PLAY:
+        candidate = _area_card(
+            obs, AreaType.HAND, option.index, yours
+        )
+    elif option.type in {
+        OptionType.CARD,
+        OptionType.TOOL_CARD,
+        OptionType.ENERGY_CARD,
+        OptionType.ENERGY,
+        OptionType.ABILITY,
+        OptionType.DISCARD,
+    }:
+        candidate = _area_card(
+            obs, option.area, option.index, player_index
+        )
+        if option.type == OptionType.TOOL_CARD and candidate is not None:
+            tools = list(candidate.tools or [])
+            tool_index = _optional_int(option.toolIndex, -1)
+            candidate = (
+                tools[tool_index]
+                if 0 <= tool_index < len(tools)
+                else None
+            )
+        elif option.type in {
+            OptionType.ENERGY_CARD,
+            OptionType.ENERGY,
+        } and candidate is not None:
+            energies = list(candidate.energyCards or [])
+            energy_index = _optional_int(option.energyIndex, -1)
+            candidate = (
+                energies[energy_index]
+                if 0 <= energy_index < len(energies)
+                else None
+            )
+    elif option.type in {OptionType.ATTACH, OptionType.EVOLVE}:
+        candidate = _area_card(
+            obs, option.area, option.index, player_index
+        )
+        target = _area_card(
+            obs, option.inPlayArea, option.inPlayIndex, yours
+        )
+    elif option.type == OptionType.RETREAT:
+        active = list(obs.current.players[yours].active or [])
+        target = active[0] if active else None
+
+    candidate_id = _valid_card_id(candidate, card_count)
+    if candidate_id == card_count:
+        raw_card_id = _optional_int(option.cardId, 0)
+        if 0 < raw_card_id < card_count:
+            candidate_id = raw_card_id
+    target_id = _valid_card_id(target, card_count)
+    raw_attack_id = option.attackId
+    attack_id = (
+        int(raw_attack_id)
+        if raw_attack_id is not None
+        and 0 <= int(raw_attack_id) < attack_count
+        else attack_count
+    )
+    return candidate_id, target_id, attack_id
+
+
+def decoder_features(
+    obs: Any,
+    actions: list[list[int]],
+    card_count: int,
+    attack_count: int,
+    *,
+    numeric_catalog: NumericFeatureCatalog | None = None,
+) -> OptionFeatures:
+    """Encode raw options once and retain exact action membership."""
+    catalog = numeric_catalog or _default_numeric_catalog(card_count)
+    options = list(obs.select.option)
+    option_count = max(1, len(options))
+    context = int(obs.select.context)
+    if not 0 <= context < SELECT_CONTEXT_DIM:
+        raise ValueError(f"select context {context} is outside the vocabulary")
+
+    categorical = np.empty(
+        (len(options), OPTION_CATEGORICAL_DIM), dtype=np.int64
+    )
+    numeric = np.zeros(
+        (len(options), OPTION_NUMERIC_DIM), dtype=np.float32
+    )
+    yours = int(obs.current.yourIndex)
+    own_active = _active(obs.current.players[yours])
+    opponent_active = _active(obs.current.players[1 - yours])
+    super_effective = 0.0
+    resisted = 0.0
+    if own_active is not None and opponent_active is not None:
+        own_id = _valid_card_id(own_active, card_count)
+        opponent_id = _valid_card_id(opponent_active, card_count)
+        if own_id < card_count and opponent_id < card_count:
+            own_type = int(
+                np.argmax(
+                    catalog.card_features[
+                        own_id,
+                        CARD_TYPE_OFFSET:CARD_TYPE_OFFSET + CARD_TYPE_DIM,
+                    ]
+                )
+            )
+            super_effective = float(
+                catalog.card_features[
+                    opponent_id, CARD_WEAKNESS_OFFSET + own_type
+                ]
+                > 0.5
+            )
+            resisted = float(
+                catalog.card_features[
+                    opponent_id, CARD_RESISTANCE_OFFSET + own_type
+                ]
+                > 0.5
+            )
+
+    for position, option in enumerate(options):
+        option_type = int(option.type)
+        if not 0 <= option_type < OPTION_TYPE_DIM:
+            raise ValueError(
+                f"option type {option_type} is outside the vocabulary"
+            )
+        candidate_id, target_id, attack_id = _option_entity_ids(
+            obs, option, card_count, attack_count
+        )
+        categorical[position] = [
+            option_type,
+            context,
+            candidate_id,
+            target_id,
+            attack_id,
+        ]
+        player_index = _optional_int(option.playerIndex, yours)
+        attack_damage = (
+            float(catalog.attack_damage[attack_id])
+            if 0 <= attack_id < len(catalog.attack_damage)
+            else 0.0
+        )
+        card_type = 0.0
+        if candidate_id < card_count:
+            card_type = float(
+                np.argmax(
+                    catalog.card_features[
+                        candidate_id,
+                        CARD_TYPE_OFFSET:CARD_TYPE_OFFSET + CARD_TYPE_DIM,
+                    ]
+                )
+            ) / (CARD_TYPE_DIM - 1)
+        numeric[position] = [
+            _optional_int(option.number) / 6,
+            _optional_int(option.index) / 60,
+            float(player_index == yours),
+            _optional_int(option.toolIndex) / 4,
+            _optional_int(option.energyIndex) / 10,
+            _optional_int(option.count) / 10,
+            _optional_int(option.area) / 12,
+            _optional_int(option.inPlayArea) / 12,
+            _optional_int(option.inPlayIndex) / 5,
+            _optional_int(option.specialConditionType) / 5,
+            (position + 1) / option_count,
+            float(
+                candidate_id < card_count
+                or target_id < card_count
+                or attack_id < attack_count
+            ),
+            attack_damage,
+            card_type,
+            super_effective,
+            resisted,
+        ]
+
+    action_index: list[int] = []
+    action_offset = [0]
     for action in actions:
-        sv.word_start()
-        if not action: sv.add(0, 1); continue
-        for idx in action:
-            o = obs.select.option[idx]
-            if o.type == OptionType.END: sv.add(1, 1)
-            elif o.type == OptionType.YES: sv.add(2, 1)
-            elif o.type == OptionType.NO: sv.add(3, 1)
-            elif o.type == OptionType.SPECIAL_CONDITION: sv.add(4 + o.specialConditionType, 1)
-            elif o.type == OptionType.NUMBER: sv.add(9 + min(o.number, 4), 1)
-            elif o.type == OptionType.ATTACK: sv.add(14 + o.attackId, 1)
-            elif o.type == OptionType.PLAY: main_feature(0, ps.hand[o.index])
-            elif o.type == OptionType.ATTACH: main_feature(1, get_card(o)); main_feature(2, get_card(o, o.inPlayArea, o.inPlayIndex))
-            elif o.type == OptionType.EVOLVE: main_feature(3, get_card(o)); main_feature(4, get_card(o, o.inPlayArea, o.inPlayIndex))
-            elif o.type == OptionType.ABILITY: main_feature(5, get_card(o))
-            elif o.type == OptionType.DISCARD: main_feature(6, get_card(o))
-            elif o.type == OptionType.RETREAT: main_feature(7, ps.active[0])
-            elif o.type == OptionType.CARD: context_card(get_card(o, player_index=o.playerIndex))
-            elif o.type == OptionType.TOOL_CARD: context_card(get_card(o, player_index=o.playerIndex).tools[o.toolIndex])
-            elif o.type in (OptionType.ENERGY_CARD, OptionType.ENERGY): context_card(get_card(o, player_index=o.playerIndex).energyCards[o.energyIndex])
-            elif o.type == OptionType.SKILL: sv.add(card_offset + (8 + int(ctx)) * card_count + o.cardId, 1)
-    return sv
+        if len(set(action)) != len(action) or any(
+            index < 0 or index >= len(options) for index in action
+        ):
+            raise ValueError("action contains an invalid option index")
+        action_index.extend(action)
+        action_offset.append(len(action_index))
+    return OptionFeatures(
+        categorical=categorical,
+        numeric=numeric,
+        action_index=np.asarray(action_index, dtype=np.int64),
+        action_offset=np.asarray(action_offset, dtype=np.int64),
+    )

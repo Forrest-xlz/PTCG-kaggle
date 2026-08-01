@@ -37,7 +37,8 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(_cg_path) not in sys.path:
     sys.path.insert(0, str(_cg_path))
 
-from cg.api import SelectContext, all_attack, all_card_data
+from cg.api import all_attack, all_card_data
+from model.attack_features import build_attack_feature_table
 from model.card_features import build_card_feature_table
 from model.network import ModelConfig, PTCGTransformer
 from training.expert_validation import load_expert_date_info
@@ -366,8 +367,9 @@ def feature_signature(config: ModelConfig) -> dict:
         "encoder_tokens": ENCODER_WORDS,
         "encoder_layout": "numeric-summary-20-v1",
         "cache_schema_version": CACHE_SCHEMA_VERSION,
-        "decoder_size": config.decoder_size,
-        "recover_special_condition": config.recover_special_condition,
+        "decoder_layout": "option-components-combination-sum-v1",
+        "option_categorical_dim": 5,
+        "option_numeric_dim": 16,
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
     }
@@ -419,8 +421,10 @@ def _forward_batch(
         _to_device(batch.own_summary, device, dtype=torch.float32),
         _to_device(batch.opponent_summary, device, dtype=torch.float32),
         _to_device(batch.global_summary, device, dtype=torch.float32),
-        _to_device(batch.decoder_index, device),
-        _to_device(batch.decoder_offset, device),
+        _to_device(batch.option_categorical, device, dtype=torch.long),
+        _to_device(batch.option_numeric, device, dtype=torch.float32),
+        _to_device(batch.action_option_index, device, dtype=torch.long),
+        _to_device(batch.action_option_offset, device, dtype=torch.long),
     )
     targets = _to_device(batch.target, device, dtype=torch.long)
     action_counts = _to_device(batch.action_count, device, dtype=torch.long)
@@ -655,10 +659,10 @@ def main() -> None:
     torch.manual_seed(train_cfg.seed)
 
     cards = all_card_data()
+    attacks = all_attack()
     config = ModelConfig(
         card_count=max(card.cardId for card in cards) + 1,
-        attack_count=max(attack.attackId for attack in all_attack()) + 1,
-        recover_special_condition=int(SelectContext.RECOVER_SPECIAL_CONDITION),
+        attack_count=max(attack.attackId for attack in attacks) + 1,
         d_model=model_cfg.d_model,
         num_heads=model_cfg.num_heads,
         d_feedforward=int(model_cfg.d_model * model_cfg.ffn_multiplier),
@@ -748,9 +752,14 @@ def main() -> None:
         cards,
         config.card_count,
     )
+    attack_feature_table = build_attack_feature_table(
+        attacks,
+        config.attack_count,
+    )
     model = PTCGTransformer(
         config,
         card_feature_table,
+        attack_feature_table,
     ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),

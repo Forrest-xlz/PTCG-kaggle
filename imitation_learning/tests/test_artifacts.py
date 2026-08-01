@@ -71,7 +71,16 @@ def test_submission_notebook_is_valid_json() -> None:
     assert "model.load_state_dict(checkpoint['model'])" in source
     assert "card_feature_ratio" in source
     assert "build_card_feature_table" in source
+    assert "build_attack_feature_table" in source
     assert "projected_card_features" in source
+    assert "option_categorical" in source
+    assert "option_numeric" in source
+    assert "OPTION_NUMERIC_DIM = 16" in source
+    assert "option_candidate_embedding" in source
+    assert "option_target_embedding" in source
+    assert "option_attack_embedding" in source
+    assert "include_last_offset=True" in source
+    assert "decoder_bag" not in source
     assert "ENCODER_TOKENS = 20" in source
     assert "num_encoder_words" not in source
     assert "own_summary_projection" in source

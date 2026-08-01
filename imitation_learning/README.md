@@ -132,8 +132,18 @@ players, the own hand, remaining-deck estimate, and stadium. The own-player
 (60), opponent-player (62), and global/select (73) numeric summaries replace
 the old sparse summaries through independent `Linear(n, d_model)` projections.
 Prize counts, selection type, and selection context are one-hot encoded.
-Changing this layout requires rebuilding the feature cache (schema 5), but
+Changing this layout requires rebuilding the feature cache (schema 6), but
 does not require replay extraction again.
+
+The decoder stores each raw engine option once using five categorical fields
+(`option_type`, `select_context`, candidate Card ID, target Card ID, and Attack
+ID) plus the reference notebook's 16 numeric fields. Learned ID embeddings,
+the shared static-card projection, numeric projection, and static-attack
+projection are added in `d_model` space. Exact candidate action combinations
+are still enumerated up to 64, and their selected option embeddings are summed
+before the cross-attention-only decoder. The empty combination uses a learned
+no-action embedding. This decoder change requires rebuilding only the feature
+cache; existing winner-only extracted JSONL files remain valid.
 
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the
@@ -151,10 +161,21 @@ IDs, and saves:
 The similarity table contains every unordered exact-deck pair. It reports the
 minimum changed card slots and count-aware Weighted Jaccard similarity.
 
-For Kaggle submission, upload a trained `epoch-*.pt` file as a Kaggle Dataset,
-attach it to `kaggle_submission_imitation_agent.ipynb` together with a Dataset
-containing the `cg` directory. In the first code cell, set the exact
-`MODEL_PATH`, `CG_PATH`, and the agent's 60-card `DECK`, then run all cells.
+Before Kaggle submission, edit `CHECKPOINT_PATH`, `OUTPUT_PATH`, and
+`PRECISION` at the top of `training/export_inference.py`, then strip the
+optimizer and other training-only state:
+
+```bash
+python training/export_inference.py
+```
+
+The command writes `epoch-003.inference-fp16.pt` beside the source checkpoint
+when `OUTPUT_PATH` is `None`, and prints both sizes. `PRECISION` accepts
+`fp16`, `bf16`, or `fp32`. Upload this inference checkpoint as a Kaggle
+Dataset, then attach it to
+`kaggle_submission_imitation_agent.ipynb` together with a Dataset containing
+the `cg` directory. In the first code cell, set the exact `MODEL_PATH`,
+`CG_PATH`, and the agent's 60-card `DECK`, then run all cells.
 The notebook reads width, FFN size, attention heads, encoder/decoder depth,
 normalization mode, and the static-card projection ratio from the checkpoint;
 these architecture fields are not configured twice. It embeds the inference
