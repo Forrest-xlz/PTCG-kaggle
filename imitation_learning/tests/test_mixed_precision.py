@@ -19,8 +19,7 @@ def tiny_model(norm_mode: str = "postnorm") -> PTCGTransformer:
         ModelConfig(
             card_count=8,
             attack_count=4,
-            encoder_size=64,
-            num_encoder_words=2,
+            encoder_size=160,
             recover_special_condition=1,
             d_model=8,
             num_heads=2,
@@ -28,7 +27,8 @@ def tiny_model(norm_mode: str = "postnorm") -> PTCGTransformer:
             encoder_layers=1,
             decoder_layers=1,
             norm_mode=norm_mode,
-        )
+        ),
+        torch.zeros((8, 54), dtype=torch.float32),
     )
 
 
@@ -38,13 +38,19 @@ def test_normalization_modes_preserve_policy_shape(norm_mode: str) -> None:
     model = tiny_model(norm_mode).eval()
     encoder_index = torch.tensor([1, 2], dtype=torch.int32)
     encoder_value = torch.tensor([1.0, 0.5])
-    encoder_offset = torch.tensor([0, 1], dtype=torch.int32)
+    encoder_offset = torch.tensor([0, 1] + [2] * 18, dtype=torch.int32)
+    own_summary = torch.zeros((1, 60))
+    opponent_summary = torch.zeros((1, 62))
+    global_summary = torch.zeros((1, 73))
     decoder_index = torch.tensor([3, 4], dtype=torch.int32)
     decoder_offset = torch.tensor([0, 1], dtype=torch.int32)
     logits = model(
         encoder_index,
         encoder_value,
         encoder_offset,
+        own_summary,
+        opponent_summary,
+        global_summary,
         decoder_index,
         decoder_offset,
     )

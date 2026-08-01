@@ -42,6 +42,8 @@ from model.card_features import build_card_feature_table
 from model.network import ModelConfig, PTCGTransformer
 from training.expert_validation import load_expert_date_info
 from training.feature_cache import (
+    CACHE_SCHEMA_VERSION,
+    ENCODER_WORDS,
     MAX_ACTIONS,
     CachedBatch,
     IndexBatch,
@@ -361,7 +363,9 @@ def feature_signature(config: ModelConfig) -> dict:
         "card_count": config.card_count,
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
-        "num_encoder_words": config.num_encoder_words,
+        "encoder_tokens": ENCODER_WORDS,
+        "encoder_layout": "numeric-summary-20-v1",
+        "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_size": config.decoder_size,
         "recover_special_condition": config.recover_special_condition,
         "max_actions": MAX_ACTIONS,
@@ -412,6 +416,9 @@ def _forward_batch(
         _to_device(batch.encoder_index, device),
         _to_device(batch.encoder_value, device, dtype=torch.float32),
         _to_device(batch.encoder_offset, device),
+        _to_device(batch.own_summary, device, dtype=torch.float32),
+        _to_device(batch.opponent_summary, device, dtype=torch.float32),
+        _to_device(batch.global_summary, device, dtype=torch.float32),
         _to_device(batch.decoder_index, device),
         _to_device(batch.decoder_offset, device),
     )

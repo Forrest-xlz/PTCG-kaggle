@@ -15,6 +15,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from training.feature_cache import (
     ENCODER_WORDS,
+    GLOBAL_SUMMARY_DIM,
+    OPPONENT_SUMMARY_DIM,
+    OWN_SUMMARY_DIM,
     FeatureRecord,
     MmapFeatureDataset,
     PackedShard,
@@ -42,6 +45,9 @@ def record(marker: int, action_count: int = 2) -> FeatureRecord:
         encoder_index=[marker, marker + 1],
         encoder_value=[1.0, 0.25],
         encoder_offset=encoder_offset,
+        own_summary=[float(marker)] * OWN_SUMMARY_DIM,
+        opponent_summary=[float(marker + 1)] * OPPONENT_SUMMARY_DIM,
+        global_summary=[float(marker + 2)] * GLOBAL_SUMMARY_DIM,
         decoder_index=[marker + 100, marker + 101],
         decoder_offset=[0, 1][:action_count],
         target=min(1, action_count - 1),
@@ -93,6 +99,13 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
         np.testing.assert_allclose(sample.encoder_value, [1.0, 0.25])
         assert sample.encoder_value.dtype == np.float16
         assert sample.encoder_offset.shape == (ENCODER_WORDS,)
+        assert sample.own_summary.shape == (OWN_SUMMARY_DIM,)
+        assert sample.opponent_summary.shape == (OPPONENT_SUMMARY_DIM,)
+        assert sample.global_summary.shape == (GLOBAL_SUMMARY_DIM,)
+        assert sample.own_summary.dtype == np.float16
+        np.testing.assert_array_equal(sample.own_summary, 11.0)
+        np.testing.assert_array_equal(sample.opponent_summary, 12.0)
+        np.testing.assert_array_equal(sample.global_summary, 13.0)
         np.testing.assert_array_equal(sample.decoder_index, [111, 112])
         np.testing.assert_array_equal(sample.decoder_offset, [0, 1])
         assert sample.target == 1
@@ -417,6 +430,9 @@ def test_collate_pads_decoder_offsets_without_decoder_values(tmp_path: Path) -> 
         )
         batch = dataset.collate(index_batch)
         assert batch.encoder_offset.shape == (2 * ENCODER_WORDS,)
+        assert batch.own_summary.shape == (2, OWN_SUMMARY_DIM)
+        assert batch.opponent_summary.shape == (2, OPPONENT_SUMMARY_DIM)
+        assert batch.global_summary.shape == (2, GLOBAL_SUMMARY_DIM)
         assert batch.decoder_offset.shape == (2 * 64,)
         assert batch.encoder_index.dtype == np.int32
         assert batch.decoder_index.dtype == np.int32

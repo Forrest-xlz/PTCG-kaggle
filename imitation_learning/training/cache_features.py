@@ -42,6 +42,7 @@ from model.features import decoder_features, encoder_features, enumerate_actions
 from model.network import ModelConfig
 from training.feature_cache import (
     CACHE_SCHEMA_VERSION,
+    ENCODER_WORDS,
     MAX_ACTIONS,
     FeatureRecord,
     PackedShard,
@@ -85,7 +86,9 @@ def feature_signature(config: ModelConfig) -> dict:
         "card_count": config.card_count,
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
-        "num_encoder_words": config.num_encoder_words,
+        "encoder_tokens": ENCODER_WORDS,
+        "encoder_layout": "numeric-summary-20-v1",
+        "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_size": config.decoder_size,
         "recover_special_condition": config.recover_special_condition,
         "max_actions": MAX_ACTIONS,
@@ -123,9 +126,12 @@ def _prepare_record(
         raise ValueError("decoder feature values are no longer all one")
     return (
         FeatureRecord(
-            encoder_index=encoder.index,
-            encoder_value=encoder.value,
-            encoder_offset=encoder.offset,
+            encoder_index=encoder.sparse.index,
+            encoder_value=encoder.sparse.value,
+            encoder_offset=encoder.sparse.offset,
+            own_summary=encoder.own_summary,
+            opponent_summary=encoder.opponent_summary,
+            global_summary=encoder.global_summary,
             decoder_index=decoder.index,
             decoder_offset=decoder.offset,
             target=target,

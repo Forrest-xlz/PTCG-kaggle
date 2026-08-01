@@ -14,6 +14,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from training.feature_cache import CachedBatch
+from training.feature_cache import (
+    ENCODER_WORDS,
+    GLOBAL_SUMMARY_DIM,
+    OPPONENT_SUMMARY_DIM,
+    OWN_SUMMARY_DIM,
+)
 from training.train import (
     ExponentialMovingAverage,
     evaluate_dataset,
@@ -57,11 +63,14 @@ class CountingModel(torch.nn.Module):
         encoder_index,
         encoder_value,
         encoder_offset,
+        own_summary,
+        opponent_summary,
+        global_summary,
         decoder_index,
         decoder_offset,
     ):
         self.forward_calls += 1
-        batch_size = encoder_offset.numel() // 24
+        batch_size = encoder_offset.numel() // ENCODER_WORDS
         return torch.arange(5, dtype=torch.float32).repeat(batch_size, 1)
 
 
@@ -71,7 +80,14 @@ class DummyDataset:
         return CachedBatch(
             encoder_index=np.zeros(size, dtype=np.int32),
             encoder_value=np.ones(size, dtype=np.float16),
-            encoder_offset=np.zeros(size * 24, dtype=np.int32),
+            encoder_offset=np.zeros(size * ENCODER_WORDS, dtype=np.int32),
+            own_summary=np.zeros((size, OWN_SUMMARY_DIM), dtype=np.float16),
+            opponent_summary=np.zeros(
+                (size, OPPONENT_SUMMARY_DIM), dtype=np.float16
+            ),
+            global_summary=np.zeros(
+                (size, GLOBAL_SUMMARY_DIM), dtype=np.float16
+            ),
             decoder_index=np.zeros(size, dtype=np.int32),
             decoder_offset=np.zeros(size * 64, dtype=np.int32),
             target=np.full(size, 4, dtype=np.int64),

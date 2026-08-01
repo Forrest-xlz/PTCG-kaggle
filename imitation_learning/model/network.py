@@ -8,12 +8,17 @@ import torch.nn.functional as F
 from model.card_features import CARD_FEATURE_DIM
 
 
+ENCODER_TOKENS = 20
+OWN_SUMMARY_DIM = 60
+OPPONENT_SUMMARY_DIM = 62
+GLOBAL_SUMMARY_DIM = 73
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     card_count: int
     attack_count: int
     encoder_size: int = 22_000
-    num_encoder_words: int = 24
     decoder_main_features: int = 8
     # cg.api.SelectContext.RECOVER_SPECIAL_CONDITION is 48 in the competition
     # API.  This matches the dynamic constant used by the source notebook.
@@ -84,16 +89,10 @@ def _encoder_card_ids(config: ModelConfig) -> torch.Tensor:
         for _ in range(3):  # Pokemon, tools, attached energies
             position = _fill_card_range(mapping, position, card_count)
 
-    # Two player summaries, each ending in a discard-card block.
-    for _ in range(2):
-        position += 4 + 7 + 5
+    # Own discard, opponent discard, own hand, known deck, and stadium.
+    for _ in range(5):
         position = _fill_card_range(mapping, position, card_count)
 
-    # Own hand, known deck composition, and stadium.
-    for _ in range(3):
-        position = _fill_card_range(mapping, position, card_count)
-
-    position += 3  # global scalar features
     if position > config.encoder_size:
         raise ValueError(
             "encoder_size is too small for the configured card vocabulary"
@@ -211,6 +210,7 @@ class PTCGTransformer(torch.nn.Module):
     ):
         super().__init__()
         self.config = config
+        self.encoder_token_count = ENCODER_TOKENS
         card_feature_table = torch.as_tensor(
             card_feature_table,
             dtype=torch.float32,
@@ -228,6 +228,18 @@ class PTCGTransformer(torch.nn.Module):
         self.card_feature_projection = torch.nn.Linear(
             CARD_FEATURE_DIM,
             config.card_feature_dim,
+        )
+        self.own_summary_projection = torch.nn.Linear(
+            OWN_SUMMARY_DIM,
+            config.d_model,
+        )
+        self.opponent_summary_projection = torch.nn.Linear(
+            OPPONENT_SUMMARY_DIM,
+            config.d_model,
+        )
+        self.global_summary_projection = torch.nn.Linear(
+            GLOBAL_SUMMARY_DIM,
+            config.d_model,
         )
         self.encoder_bag = CardAwareEmbeddingBag(
             config.encoder_size,
@@ -287,6 +299,9 @@ class PTCGTransformer(torch.nn.Module):
         index_encoder,
         value_encoder,
         offset_encoder,
+        own_summary,
+        opponent_summary,
+        global_summary,
         index_decoder,
         offset_decoder,
     ):
@@ -298,8 +313,22 @@ class PTCGTransformer(torch.nn.Module):
             per_sample_weights=value_encoder,
             projected_card_features=projected_card_features,
         )
-        encoded = encoded.reshape(-1, cfg.num_encoder_words, cfg.d_model).transpose(0, 1)
-        batch_size = encoded.size(1)
+        batch_size = own_summary.size(0)
+        encoded = encoded.reshape(
+            batch_size,
+            ENCODER_TOKENS,
+            cfg.d_model,
+        )
+        encoded = torch.cat(
+            (
+                encoded[:, :12],
+                self.own_summary_projection(own_summary).unsqueeze(1),
+                self.opponent_summary_projection(opponent_summary).unsqueeze(1),
+                encoded[:, 14:19],
+                self.global_summary_projection(global_summary).unsqueeze(1),
+            ),
+            dim=1,
+        ).transpose(0, 1)
         encoder_out = self.encoder(encoded)
         policy = self.decoder_bag(
             index_decoder,

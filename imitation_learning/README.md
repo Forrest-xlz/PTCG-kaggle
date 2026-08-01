@@ -126,6 +126,15 @@ LayerNorm; PostNorm preserves the original notebook residual ordering.
 `k = int(d_model * card_feature_ratio)`. The remaining dimensions are zero
 padded before the projection is added to every Card ID embedding.
 
+The encoder has a fixed 20-token layout: five bench slots per player, two
+active Pokémon, three dense summary tokens, separate discard tokens for both
+players, the own hand, remaining-deck estimate, and stadium. The own-player
+(60), opponent-player (62), and global/select (73) numeric summaries replace
+the old sparse summaries through independent `Linear(n, d_model)` projections.
+Prize counts, selection type, and selection context are one-hot encoded.
+Changing this layout requires rebuilding the feature cache (schema 5), but
+does not require replay extraction again.
+
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the
 local run-ID folder without uploading model artifacts. When WandB is disabled,
@@ -149,7 +158,7 @@ containing the `cg` directory. In the first code cell, set the exact
 The notebook reads width, FFN size, attention heads, encoder/decoder depth,
 normalization mode, and the static-card projection ratio from the checkpoint;
 these architecture fields are not configured twice. It embeds the inference
-code and creates
+code, including the fixed 20-token numeric-summary layout, and creates
 `/kaggle/working/submission.tar.gz`.
 
 ## Training records

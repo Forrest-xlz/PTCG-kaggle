@@ -14,8 +14,11 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 4
-ENCODER_WORDS = 24
+CACHE_SCHEMA_VERSION = 5
+ENCODER_WORDS = 20
+OWN_SUMMARY_DIM = 60
+OPPONENT_SUMMARY_DIM = 62
+GLOBAL_SUMMARY_DIM = 73
 MAX_ACTIONS = 64
 ALIGNMENT = 64
 
@@ -24,6 +27,9 @@ SECTION_DTYPES = {
     "encoder_value": np.dtype("<f2"),
     "encoder_ptr": np.dtype("<u4"),
     "encoder_offset": np.dtype("<u2"),
+    "own_summary": np.dtype("<f2"),
+    "opponent_summary": np.dtype("<f2"),
+    "global_summary": np.dtype("<f2"),
     "decoder_index": np.dtype("<u4"),
     "decoder_ptr": np.dtype("<u4"),
     "decoder_offset": np.dtype("<u2"),
@@ -40,6 +46,9 @@ class FeatureRecord:
     encoder_index: list[int]
     encoder_value: list[float]
     encoder_offset: list[int]
+    own_summary: list[float]
+    opponent_summary: list[float]
+    global_summary: list[float]
     decoder_index: list[int]
     decoder_offset: list[int]
     target: int
@@ -53,6 +62,9 @@ class FeatureView:
     encoder_index: np.ndarray
     encoder_value: np.ndarray
     encoder_offset: np.ndarray
+    own_summary: np.ndarray
+    opponent_summary: np.ndarray
+    global_summary: np.ndarray
     decoder_index: np.ndarray
     decoder_offset: np.ndarray
     target: int
@@ -71,6 +83,9 @@ class CachedBatch:
     encoder_index: np.ndarray
     encoder_value: np.ndarray
     encoder_offset: np.ndarray
+    own_summary: np.ndarray
+    opponent_summary: np.ndarray
+    global_summary: np.ndarray
     decoder_index: np.ndarray
     decoder_offset: np.ndarray
     target: np.ndarray
@@ -154,6 +169,15 @@ def _validate_unsigned(name: str, values: Iterable[int], maximum: int) -> None:
             raise ValueError(f"{name} value {value} is outside [0, {maximum}]")
 
 
+def _validate_dense_summary(name: str, values: list[float], width: int) -> None:
+    if len(values) != width:
+        raise ValueError(f"{name} must contain {width} values")
+    full_precision = np.asarray(values, dtype=np.float32)
+    narrowed = full_precision.astype(np.float16)
+    if not np.all(np.isfinite(full_precision)) or not np.all(np.isfinite(narrowed)):
+        raise ValueError(f"{name} contains a non-finite or float16-overflow value")
+
+
 class PackedShardWriter:
     """Stream feature records into one atomic packed cache directory."""
 
@@ -206,6 +230,13 @@ class PackedShardWriter:
             raise ValueError(
                 f"encoder_offset must contain {ENCODER_WORDS} words"
             )
+        _validate_dense_summary("own_summary", record.own_summary, OWN_SUMMARY_DIM)
+        _validate_dense_summary(
+            "opponent_summary", record.opponent_summary, OPPONENT_SUMMARY_DIM
+        )
+        _validate_dense_summary(
+            "global_summary", record.global_summary, GLOBAL_SUMMARY_DIM
+        )
         if not 1 <= int(record.action_count) <= MAX_ACTIONS:
             raise ValueError(f"action_count must be in [1, {MAX_ACTIONS}]")
         if len(record.decoder_offset) != int(record.action_count):
@@ -237,6 +268,9 @@ class PackedShardWriter:
         self._buffers["encoder_index"].extend(record.encoder_index)
         self._buffers["encoder_value"].extend(record.encoder_value)
         self._buffers["encoder_offset"].extend(record.encoder_offset)
+        self._buffers["own_summary"].extend(record.own_summary)
+        self._buffers["opponent_summary"].extend(record.opponent_summary)
+        self._buffers["global_summary"].extend(record.global_summary)
         self._buffers["decoder_index"].extend(record.decoder_index)
         self._buffers["decoder_offset"].extend(record.decoder_offset)
 
@@ -394,6 +428,14 @@ class PackedShard:
             raise ValueError("decoder_offset_ptr length does not match sample count")
         if self.arrays["encoder_offset"].size != self.samples * ENCODER_WORDS:
             raise ValueError("encoder_offset length does not match sample count")
+        dense_widths = {
+            "own_summary": OWN_SUMMARY_DIM,
+            "opponent_summary": OPPONENT_SUMMARY_DIM,
+            "global_summary": GLOBAL_SUMMARY_DIM,
+        }
+        for name, width in dense_widths.items():
+            if self.arrays[name].size != self.samples * width:
+                raise ValueError(f"{name} length does not match sample count")
         if self.arrays["target"].size != self.samples:
             raise ValueError("target length does not match sample count")
         if self.arrays["action_count"].size != self.samples:
@@ -434,11 +476,23 @@ class PackedShard:
         offset_start = int(self.arrays["decoder_offset_ptr"][local_id])
         offset_end = int(self.arrays["decoder_offset_ptr"][local_id + 1])
         encoder_word_start = local_id * ENCODER_WORDS
+        own_start = local_id * OWN_SUMMARY_DIM
+        opponent_start = local_id * OPPONENT_SUMMARY_DIM
+        global_start = local_id * GLOBAL_SUMMARY_DIM
         return FeatureView(
             encoder_index=self.arrays["encoder_index"][encoder_start:encoder_end],
             encoder_value=self.arrays["encoder_value"][encoder_start:encoder_end],
             encoder_offset=self.arrays["encoder_offset"][
                 encoder_word_start : encoder_word_start + ENCODER_WORDS
+            ],
+            own_summary=self.arrays["own_summary"][
+                own_start : own_start + OWN_SUMMARY_DIM
+            ],
+            opponent_summary=self.arrays["opponent_summary"][
+                opponent_start : opponent_start + OPPONENT_SUMMARY_DIM
+            ],
+            global_summary=self.arrays["global_summary"][
+                global_start : global_start + GLOBAL_SUMMARY_DIM
             ],
             decoder_index=self.arrays["decoder_index"][decoder_start:decoder_end],
             decoder_offset=self.arrays["decoder_offset"][offset_start:offset_end],
@@ -802,6 +856,15 @@ class MmapFeatureDataset:
         encoder_values = []
         decoder_indices = []
         encoder_offsets = np.empty(global_ids.size * ENCODER_WORDS, dtype=np.int32)
+        own_summaries = np.empty(
+            (global_ids.size, OWN_SUMMARY_DIM), dtype=np.float16
+        )
+        opponent_summaries = np.empty(
+            (global_ids.size, OPPONENT_SUMMARY_DIM), dtype=np.float16
+        )
+        global_summaries = np.empty(
+            (global_ids.size, GLOBAL_SUMMARY_DIM), dtype=np.float16
+        )
         decoder_offsets = np.empty(global_ids.size * MAX_ACTIONS, dtype=np.int32)
         targets = np.empty(global_ids.size, dtype=np.int64)
         action_counts = np.empty(global_ids.size, dtype=np.int64)
@@ -814,6 +877,9 @@ class MmapFeatureDataset:
             encoder_indices.append(sample.encoder_index)
             encoder_values.append(sample.encoder_value)
             decoder_indices.append(sample.decoder_index)
+            own_summaries[row] = sample.own_summary
+            opponent_summaries[row] = sample.opponent_summary
+            global_summaries[row] = sample.global_summary
 
             enc_slice = slice(row * ENCODER_WORDS, (row + 1) * ENCODER_WORDS)
             encoder_offsets[enc_slice] = (
@@ -836,6 +902,9 @@ class MmapFeatureDataset:
             encoder_index=np.concatenate(encoder_indices).astype(np.int32, copy=False),
             encoder_value=np.concatenate(encoder_values).astype(np.float16, copy=False),
             encoder_offset=encoder_offsets,
+            own_summary=own_summaries,
+            opponent_summary=opponent_summaries,
+            global_summary=global_summaries,
             decoder_index=np.concatenate(decoder_indices).astype(np.int32, copy=False),
             decoder_offset=decoder_offsets,
             target=targets,

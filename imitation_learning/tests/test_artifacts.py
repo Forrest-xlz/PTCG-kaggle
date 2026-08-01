@@ -72,6 +72,16 @@ def test_submission_notebook_is_valid_json() -> None:
     assert "card_feature_ratio" in source
     assert "build_card_feature_table" in source
     assert "projected_card_features" in source
+    assert "ENCODER_TOKENS = 20" in source
+    assert "num_encoder_words" not in source
+    assert "own_summary_projection" in source
+    assert "opponent_summary_projection" in source
+    assert "global_summary_projection" in source
+    assert "SELECT_TYPE_DIM = 11" in source
+    assert "SELECT_CONTEXT_DIM = 49" in source
+    assert "for slot in range(5)" in source
+    assert "players[0].discard, 0.25" in source
+    assert "players[1].discard, 0.25" in source
 
 
 def test_deck_eda_notebook_starts_with_census_and_similarity() -> None:
