@@ -38,17 +38,22 @@ GLOBAL_SUMMARY_DIM = 73
 SELECT_TYPE_DIM = 11
 SELECT_CONTEXT_DIM = 49
 OPTION_CATEGORICAL_DIM = 5
-OPTION_NUMERIC_DIM = 40
+OPTION_NUMERIC_DIM = 259
 OPTION_TYPE_DIM = 17
 
-OPTION_SCALAR_OFFSET = 0
-OPTION_PLAYER_OFFSET = 3
-OPTION_AREA_OFFSET = 6
-OPTION_IN_PLAY_AREA_OFFSET = 19
-OPTION_IN_PLAY_INDEX_OFFSET = 22
-OPTION_SPECIAL_CONDITION_OFFSET = 28
-OPTION_SUPER_EFFECTIVE_OFFSET = 34
-OPTION_RESISTED_OFFSET = 37
+OPTION_ORIGINAL_DIM = 16
+OPTION_INDEX_OFFSET = 16
+OPTION_PLAYER_OFFSET = 77
+OPTION_TOOL_INDEX_OFFSET = 80
+OPTION_ENERGY_INDEX_OFFSET = 141
+OPTION_AREA_OFFSET = 202
+OPTION_IN_PLAY_AREA_OFFSET = 215
+OPTION_IN_PLAY_INDEX_OFFSET = 228
+OPTION_SPECIAL_CONDITION_OFFSET = 237
+OPTION_HAS_ENTITY_OFFSET = 243
+OPTION_CARD_TYPE_OFFSET = 245
+OPTION_SUPER_EFFECTIVE_OFFSET = 253
+OPTION_RESISTED_OFFSET = 256
 
 
 @dataclass
@@ -700,10 +705,9 @@ def decoder_features(
     numeric_catalog: NumericFeatureCatalog | None = None,
 ) -> OptionFeatures:
     """Encode raw options once and retain exact action membership."""
-    from cg.api import AreaType
-
     catalog = numeric_catalog or _default_numeric_catalog(card_count)
     options = list(obs.select.option)
+    option_count = max(1, len(options))
     context = int(obs.select.context)
     if not 0 <= context < SELECT_CONTEXT_DIM:
         raise ValueError(f"select context {context} is outside the vocabulary")
@@ -763,27 +767,81 @@ def decoder_features(
             target_id,
             attack_id,
         ]
+        player_index = _optional_int(option.playerIndex, yours)
         attack_damage = (
             float(catalog.attack_damage[attack_id])
             if 0 <= attack_id < len(catalog.attack_damage)
             else 0.0
         )
+        card_type_index = None
+        card_type = 0.0
+        if candidate_id < card_count:
+            card_type_index = int(
+                np.argmax(
+                    catalog.card_features[
+                        candidate_id,
+                        CARD_TYPE_OFFSET:CARD_TYPE_OFFSET + CARD_TYPE_DIM,
+                    ]
+                )
+            )
+            card_type = float(card_type_index) / (CARD_TYPE_DIM - 1)
+        has_entity = (
+            candidate_id < card_count
+            or target_id < card_count
+            or attack_id < attack_count
+        )
         option_numeric = numeric[position]
-        option_numeric[OPTION_SCALAR_OFFSET:OPTION_SCALAR_OFFSET + 3] = [
+        option_numeric[:OPTION_ORIGINAL_DIM] = [
             _optional_int(option.number) / 6,
+            _optional_int(option.index) / 60,
+            float(player_index == yours),
+            _optional_int(option.toolIndex) / 4,
+            _optional_int(option.energyIndex) / 10,
             _optional_int(option.count) / 10,
+            _optional_int(option.area) / 12,
+            _optional_int(option.inPlayArea) / 12,
+            _optional_int(option.inPlayIndex) / 5,
+            _optional_int(option.specialConditionType) / 5,
+            (position + 1) / option_count,
+            float(has_entity),
             attack_damage,
+            card_type,
+            float(super_effective),
+            float(resisted),
         ]
 
-        player_index = option.playerIndex
+        index = 0 if option.index is None else int(option.index) + 1
+        _set_one_hot(
+            option_numeric, OPTION_INDEX_OFFSET, 61,
+            index, "option index",
+        )
+
         player_relation = (
-            0 if player_index is None
-            else 1 if int(player_index) == yours
+            0 if option.playerIndex is None
+            else 1 if int(option.playerIndex) == yours
             else 2
         )
         _set_one_hot(
             option_numeric, OPTION_PLAYER_OFFSET, 3,
             player_relation, "player relation",
+        )
+
+        tool_index = (
+            0 if option.toolIndex is None
+            else int(option.toolIndex) + 1
+        )
+        _set_one_hot(
+            option_numeric, OPTION_TOOL_INDEX_OFFSET, 61,
+            tool_index, "tool index",
+        )
+
+        energy_index = (
+            0 if option.energyIndex is None
+            else int(option.energyIndex) + 1
+        )
+        _set_one_hot(
+            option_numeric, OPTION_ENERGY_INDEX_OFFSET, 61,
+            energy_index, "energy index",
         )
 
         area_index = 0 if option.area is None else int(option.area)
@@ -792,15 +850,12 @@ def decoder_features(
             area_index, "area",
         )
 
-        in_play_area = option.inPlayArea
         in_play_area_index = (
-            0 if in_play_area is None
-            else 1 if int(in_play_area) == int(AreaType.ACTIVE)
-            else 2 if int(in_play_area) == int(AreaType.BENCH)
-            else -1
+            0 if option.inPlayArea is None
+            else int(option.inPlayArea)
         )
         _set_one_hot(
-            option_numeric, OPTION_IN_PLAY_AREA_OFFSET, 3,
+            option_numeric, OPTION_IN_PLAY_AREA_OFFSET, 13,
             in_play_area_index, "in-play area",
         )
 
@@ -809,7 +864,7 @@ def decoder_features(
             else int(option.inPlayIndex) + 1
         )
         _set_one_hot(
-            option_numeric, OPTION_IN_PLAY_INDEX_OFFSET, 6,
+            option_numeric, OPTION_IN_PLAY_INDEX_OFFSET, 9,
             in_play_index, "in-play index",
         )
 
@@ -820,6 +875,20 @@ def decoder_features(
         _set_one_hot(
             option_numeric, OPTION_SPECIAL_CONDITION_OFFSET, 6,
             special_condition, "special condition",
+        )
+
+        _set_one_hot(
+            option_numeric, OPTION_HAS_ENTITY_OFFSET, 2,
+            int(has_entity), "has entity",
+        )
+
+        card_type_one_hot = (
+            0 if card_type_index is None
+            else card_type_index + 1
+        )
+        _set_one_hot(
+            option_numeric, OPTION_CARD_TYPE_OFFSET, 8,
+            card_type_one_hot, "card type",
         )
 
         attack_applicable = attack_id < attack_count and matchup_known

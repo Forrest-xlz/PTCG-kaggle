@@ -90,7 +90,7 @@ def test_option_features_keep_entities_numeric_values_and_action_membership() ->
     )
     own = SimpleNamespace(
         hand=[_card(3)], discard=[], active=[_card(1)],
-        bench=[_card(4)], prize=[],
+        bench=[_card(4)] * 8, prize=[],
     )
     opponent = SimpleNamespace(
         hand=[], discard=[], active=[_card(2)], bench=[], prize=[],
@@ -101,7 +101,7 @@ def test_option_features_keep_entities_numeric_values_and_action_membership() ->
     )
     options = [
         SimpleNamespace(
-            type=8, area=2, index=0, inPlayArea=5, inPlayIndex=0,
+            type=8, area=2, index=0, inPlayArea=5, inPlayIndex=7,
             attackId=None, **common,
         ),
         SimpleNamespace(
@@ -124,14 +124,21 @@ def test_option_features_keep_entities_numeric_values_and_action_membership() ->
         encoded.categorical,
         [[8, 21, 3, 4, 3], [13, 21, 8, 8, 1]],
     )
-    assert encoded.numeric.shape == (2, 40)
-    assert encoded.numeric[0, 3] == 1  # player N/A
-    assert encoded.numeric[0, 8] == 1  # HAND
-    assert encoded.numeric[0, 21] == 1  # BENCH target
-    assert encoded.numeric[0, 23] == 1  # target index 0
-    assert encoded.numeric[0, 34] == 1  # matchup N/A
-    assert encoded.numeric[1, 2] == pytest.approx(0.4)
-    assert encoded.numeric[1, 36] == 1  # super effective
-    assert encoded.numeric[1, 38] == 1  # not resisted
+    assert encoded.numeric.shape == (2, 259)
+    # The original 16 values remain at the start of the vector.
+    assert encoded.numeric[0, 1] == 0
+    assert encoded.numeric[0, 7] == pytest.approx(5 / 12)
+    assert encoded.numeric[0, 8] == pytest.approx(7 / 5)
+    assert encoded.numeric[1, 12] == pytest.approx(0.4)
+    assert encoded.numeric[1, 14] == 1
+    # One-hot groups are appended after the original values.
+    assert encoded.numeric[0, 16 + 1] == 1  # option index 0
+    assert encoded.numeric[0, 77] == 1  # player N/A
+    assert encoded.numeric[0, 202 + 2] == 1  # HAND
+    assert encoded.numeric[0, 215 + 5] == 1  # BENCH target
+    assert encoded.numeric[0, 228 + 8] == 1  # target index 7
+    assert encoded.numeric[0, 253] == 1  # matchup N/A
+    assert encoded.numeric[1, 253 + 2] == 1  # super effective
+    assert encoded.numeric[1, 256 + 1] == 1  # not resisted
     np.testing.assert_array_equal(encoded.action_index, [0, 1, 0])
     np.testing.assert_array_equal(encoded.action_offset, [0, 2, 3, 3])
