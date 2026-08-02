@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from model.network import ModelConfig, PTCGTransformer
+from model.network import OPTION_NUMERIC_DIM, ModelConfig, PTCGTransformer
 from training.precision import PrecisionContext
 
 
@@ -45,7 +45,7 @@ def test_normalization_modes_preserve_policy_shape(norm_mode: str) -> None:
     option_categorical = torch.tensor(
         [[8, 0, 1, 8, 4], [13, 0, 8, 8, 1]], dtype=torch.long
     )
-    option_numeric = torch.zeros((2, 16))
+    option_numeric = torch.zeros((2, OPTION_NUMERIC_DIM))
     action_option_index = torch.tensor([0, 1], dtype=torch.long)
     action_option_offset = torch.tensor([0, 1, 2], dtype=torch.long)
     logits = model(

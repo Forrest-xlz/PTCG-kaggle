@@ -75,7 +75,8 @@ def test_submission_notebook_is_valid_json() -> None:
     assert "projected_card_features" in source
     assert "option_categorical" in source
     assert "option_numeric" in source
-    assert "OPTION_NUMERIC_DIM = 16" in source
+    assert "OPTION_NUMERIC_DIM = 40" in source
+    assert "set_one_hot" in source
     assert "option_candidate_embedding" in source
     assert "option_target_embedding" in source
     assert "option_attack_embedding" in source

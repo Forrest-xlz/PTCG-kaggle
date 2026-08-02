@@ -18,6 +18,7 @@ from training.feature_cache import (
     ENCODER_WORDS,
     GLOBAL_SUMMARY_DIM,
     OPPONENT_SUMMARY_DIM,
+    OPTION_NUMERIC_DIM,
     OWN_SUMMARY_DIM,
 )
 from training.train import (
@@ -91,7 +92,9 @@ class DummyDataset:
                 (size, GLOBAL_SUMMARY_DIM), dtype=np.float16
             ),
             option_categorical=np.zeros((size, 5), dtype=np.int64),
-            option_numeric=np.zeros((size, 16), dtype=np.float16),
+            option_numeric=np.zeros(
+                (size, OPTION_NUMERIC_DIM), dtype=np.float16
+            ),
             action_option_index=np.zeros(size, dtype=np.int64),
             action_option_offset=np.zeros(
                 size * 64 + 1, dtype=np.int32

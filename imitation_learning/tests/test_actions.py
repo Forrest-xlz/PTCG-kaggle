@@ -19,6 +19,7 @@ if str(CG_ROOT) not in sys.path:
 from model import features as feature_module
 from model.attack_features import ATTACK_FEATURE_DIM, build_attack_feature_table
 from model.card_features import (
+    CARD_ENERGY_TYPE_OFFSET,
     CARD_FEATURE_DIM,
     CARD_RESISTANCE_OFFSET,
     CARD_TYPE_OFFSET,
@@ -78,6 +79,7 @@ def test_attack_static_table_matches_reference_contract() -> None:
 def test_option_features_keep_entities_numeric_values_and_action_membership() -> None:
     card_features = np.zeros((8, CARD_FEATURE_DIM), dtype=np.float32)
     card_features[1, CARD_TYPE_OFFSET + 2] = 1
+    card_features[1, CARD_ENERGY_TYPE_OFFSET + 2] = 1
     card_features[2, CARD_WEAKNESS_OFFSET + 2] = 1
     card_features[2, CARD_RESISTANCE_OFFSET + 12] = 1
     card_features[3, CARD_TYPE_OFFSET + 4] = 1
@@ -122,10 +124,14 @@ def test_option_features_keep_entities_numeric_values_and_action_membership() ->
         encoded.categorical,
         [[8, 21, 3, 4, 3], [13, 21, 8, 8, 1]],
     )
-    assert encoded.numeric.shape == (2, 16)
-    assert encoded.numeric[0, 10] == pytest.approx(0.5)
-    assert encoded.numeric[0, 13] == pytest.approx(4 / 6)
-    assert encoded.numeric[0, 14] == 1
-    assert encoded.numeric[1, 12] == pytest.approx(0.4)
+    assert encoded.numeric.shape == (2, 40)
+    assert encoded.numeric[0, 3] == 1  # player N/A
+    assert encoded.numeric[0, 8] == 1  # HAND
+    assert encoded.numeric[0, 21] == 1  # BENCH target
+    assert encoded.numeric[0, 23] == 1  # target index 0
+    assert encoded.numeric[0, 34] == 1  # matchup N/A
+    assert encoded.numeric[1, 2] == pytest.approx(0.4)
+    assert encoded.numeric[1, 36] == 1  # super effective
+    assert encoded.numeric[1, 38] == 1  # not resisted
     np.testing.assert_array_equal(encoded.action_index, [0, 1, 0])
     np.testing.assert_array_equal(encoded.action_offset, [0, 2, 3, 3])
