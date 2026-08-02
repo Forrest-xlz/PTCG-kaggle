@@ -34,7 +34,7 @@ SIGNATURE = {
     "card_count": 1267,
     "attack_count": 512,
     "encoder_size": 22000,
-    "decoder_layout": "option-components-original16-plus-one-hot-v4",
+    "decoder_layout": "option-components-original16-plus-one-hot-v5",
     "max_actions": 64,
 }
 

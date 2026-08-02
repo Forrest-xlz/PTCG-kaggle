@@ -124,7 +124,7 @@ def test_option_features_keep_entities_numeric_values_and_action_membership() ->
         encoded.categorical,
         [[8, 21, 3, 4, 3], [13, 21, 8, 8, 1]],
     )
-    assert encoded.numeric.shape == (2, 259)
+    assert encoded.numeric.shape == (2, 76)
     # The original 16 values remain at the start of the vector.
     assert encoded.numeric[0, 1] == 0
     assert encoded.numeric[0, 7] == pytest.approx(5 / 12)
@@ -132,13 +132,12 @@ def test_option_features_keep_entities_numeric_values_and_action_membership() ->
     assert encoded.numeric[1, 12] == pytest.approx(0.4)
     assert encoded.numeric[1, 14] == 1
     # One-hot groups are appended after the original values.
-    assert encoded.numeric[0, 16 + 1] == 1  # option index 0
-    assert encoded.numeric[0, 77] == 1  # player N/A
-    assert encoded.numeric[0, 202 + 2] == 1  # HAND
-    assert encoded.numeric[0, 215 + 5] == 1  # BENCH target
-    assert encoded.numeric[0, 228 + 8] == 1  # target index 7
-    assert encoded.numeric[0, 253] == 1  # matchup N/A
-    assert encoded.numeric[1, 253 + 2] == 1  # super effective
-    assert encoded.numeric[1, 256 + 1] == 1  # not resisted
+    assert encoded.numeric[0, 16] == 1  # player N/A
+    assert encoded.numeric[0, 19 + 2] == 1  # HAND
+    assert encoded.numeric[0, 32 + 5] == 1  # BENCH target
+    assert encoded.numeric[0, 45 + 8] == 1  # target index 7
+    assert encoded.numeric[0, 70] == 1  # matchup N/A
+    assert encoded.numeric[1, 70 + 2] == 1  # super effective
+    assert encoded.numeric[1, 73 + 1] == 1  # not resisted
     np.testing.assert_array_equal(encoded.action_index, [0, 1, 0])
     np.testing.assert_array_equal(encoded.action_offset, [0, 2, 3, 3])

@@ -38,22 +38,19 @@ GLOBAL_SUMMARY_DIM = 73
 SELECT_TYPE_DIM = 11
 SELECT_CONTEXT_DIM = 49
 OPTION_CATEGORICAL_DIM = 5
-OPTION_NUMERIC_DIM = 259
+OPTION_NUMERIC_DIM = 76
 OPTION_TYPE_DIM = 17
 
 OPTION_ORIGINAL_DIM = 16
-OPTION_INDEX_OFFSET = 16
-OPTION_PLAYER_OFFSET = 77
-OPTION_TOOL_INDEX_OFFSET = 80
-OPTION_ENERGY_INDEX_OFFSET = 141
-OPTION_AREA_OFFSET = 202
-OPTION_IN_PLAY_AREA_OFFSET = 215
-OPTION_IN_PLAY_INDEX_OFFSET = 228
-OPTION_SPECIAL_CONDITION_OFFSET = 237
-OPTION_HAS_ENTITY_OFFSET = 243
-OPTION_CARD_TYPE_OFFSET = 245
-OPTION_SUPER_EFFECTIVE_OFFSET = 253
-OPTION_RESISTED_OFFSET = 256
+OPTION_PLAYER_OFFSET = 16
+OPTION_AREA_OFFSET = 19
+OPTION_IN_PLAY_AREA_OFFSET = 32
+OPTION_IN_PLAY_INDEX_OFFSET = 45
+OPTION_SPECIAL_CONDITION_OFFSET = 54
+OPTION_HAS_ENTITY_OFFSET = 60
+OPTION_CARD_TYPE_OFFSET = 62
+OPTION_SUPER_EFFECTIVE_OFFSET = 70
+OPTION_RESISTED_OFFSET = 73
 
 
 @dataclass
@@ -810,12 +807,6 @@ def decoder_features(
             float(resisted),
         ]
 
-        index = 0 if option.index is None else int(option.index) + 1
-        _set_one_hot(
-            option_numeric, OPTION_INDEX_OFFSET, 61,
-            index, "option index",
-        )
-
         player_relation = (
             0 if option.playerIndex is None
             else 1 if int(option.playerIndex) == yours
@@ -824,24 +815,6 @@ def decoder_features(
         _set_one_hot(
             option_numeric, OPTION_PLAYER_OFFSET, 3,
             player_relation, "player relation",
-        )
-
-        tool_index = (
-            0 if option.toolIndex is None
-            else int(option.toolIndex) + 1
-        )
-        _set_one_hot(
-            option_numeric, OPTION_TOOL_INDEX_OFFSET, 61,
-            tool_index, "tool index",
-        )
-
-        energy_index = (
-            0 if option.energyIndex is None
-            else int(option.energyIndex) + 1
-        )
-        _set_one_hot(
-            option_numeric, OPTION_ENERGY_INDEX_OFFSET, 61,
-            energy_index, "energy index",
         )
 
         area_index = 0 if option.area is None else int(option.area)
