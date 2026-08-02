@@ -34,7 +34,7 @@ SIGNATURE = {
     "card_count": 1267,
     "attack_count": 512,
     "encoder_size": 22000,
-    "decoder_layout": "option-components-original16-plus-one-hot-v5",
+    "decoder_layout": "option-components-effect-context-v6",
     "max_actions": 64,
 }
 
@@ -59,8 +59,8 @@ def record(marker: int, action_count: int = 2) -> FeatureRecord:
         opponent_summary=[float(marker + 1)] * OPPONENT_SUMMARY_DIM,
         global_summary=[float(marker + 2)] * GLOBAL_SUMMARY_DIM,
         option_categorical=[
-            8, 21, marker, marker + 1, 512,
-            13, 21, 1267, 1267, 1,
+            8, 21, marker, marker + 1, 512, marker + 2, marker + 3,
+            13, 21, 1267, 1267, 1, 1267, 1267,
         ],
         option_numeric=[float(marker) / 100] * (2 * OPTION_NUMERIC_DIM),
         action_option_index=action_option_index,
@@ -121,11 +121,11 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
         np.testing.assert_array_equal(sample.own_summary, 11.0)
         np.testing.assert_array_equal(sample.opponent_summary, 12.0)
         np.testing.assert_array_equal(sample.global_summary, 13.0)
-        assert sample.option_categorical.shape == (2, 5)
+        assert sample.option_categorical.shape == (2, 7)
         assert sample.option_numeric.shape == (2, OPTION_NUMERIC_DIM)
         assert sample.option_numeric.dtype == np.float16
         np.testing.assert_array_equal(
-            sample.option_categorical[0], [8, 21, 11, 12, 512]
+            sample.option_categorical[0], [8, 21, 11, 12, 512, 13, 14]
         )
         np.testing.assert_array_equal(sample.action_option_index, [0, 1, 0])
         np.testing.assert_array_equal(sample.action_option_offset, [0, 2, 3])
@@ -454,7 +454,7 @@ def test_collate_rebases_options_and_pads_action_offsets(tmp_path: Path) -> None
         assert batch.own_summary.shape == (2, OWN_SUMMARY_DIM)
         assert batch.opponent_summary.shape == (2, OPPONENT_SUMMARY_DIM)
         assert batch.global_summary.shape == (2, GLOBAL_SUMMARY_DIM)
-        assert batch.option_categorical.shape == (4, 5)
+        assert batch.option_categorical.shape == (4, 7)
         assert batch.option_numeric.shape == (4, OPTION_NUMERIC_DIM)
         assert batch.action_option_offset.shape == (2 * 64 + 1,)
         assert batch.encoder_index.dtype == np.int32

@@ -80,6 +80,10 @@ def test_submission_notebook_is_valid_json() -> None:
     assert "option_candidate_embedding" in source
     assert "option_target_embedding" in source
     assert "option_attack_embedding" in source
+    assert "option_effect_embedding" in source
+    assert "option_context_card_embedding" in source
+    assert "effect_id" in source
+    assert "context_card_id" in source
     assert "include_last_offset=True" in source
     assert "decoder_bag" not in source
     assert "ENCODER_TOKENS = 20" in source

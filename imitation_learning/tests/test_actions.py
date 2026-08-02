@@ -115,6 +115,8 @@ def test_option_features_keep_entities_numeric_values_and_action_membership() ->
         ),
         select=SimpleNamespace(context=21, option=options, deck=[]),
     )
+    obs.select.effect = _card(6)
+    obs.select.contextCard = _card(5)
 
     encoded = feature_module.decoder_features(
         obs, [[0, 1], [0], []], 8, 3, numeric_catalog=catalog
@@ -122,7 +124,7 @@ def test_option_features_keep_entities_numeric_values_and_action_membership() ->
 
     np.testing.assert_array_equal(
         encoded.categorical,
-        [[8, 21, 3, 4, 3], [13, 21, 8, 8, 1]],
+        [[8, 21, 3, 4, 3, 6, 5], [13, 21, 8, 8, 1, 6, 5]],
     )
     assert encoded.numeric.shape == (2, 76)
     # The original 16 values remain at the start of the vector.
@@ -141,3 +143,10 @@ def test_option_features_keep_entities_numeric_values_and_action_membership() ->
     assert encoded.numeric[1, 73 + 1] == 1  # not resisted
     np.testing.assert_array_equal(encoded.action_index, [0, 1, 0])
     np.testing.assert_array_equal(encoded.action_offset, [0, 2, 3, 3])
+
+    obs.select.effect = None
+    obs.select.contextCard = None
+    missing = feature_module.decoder_features(
+        obs, [[0]], 8, 3, numeric_catalog=catalog
+    )
+    np.testing.assert_array_equal(missing.categorical[:, 5:], [[8, 8], [8, 8]])

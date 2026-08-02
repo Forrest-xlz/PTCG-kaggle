@@ -37,7 +37,7 @@ OPPONENT_SUMMARY_DIM = 62
 GLOBAL_SUMMARY_DIM = 73
 SELECT_TYPE_DIM = 11
 SELECT_CONTEXT_DIM = 49
-OPTION_CATEGORICAL_DIM = 5
+OPTION_CATEGORICAL_DIM = 7
 OPTION_NUMERIC_DIM = 76
 OPTION_TYPE_DIM = 17
 
@@ -716,6 +716,12 @@ def decoder_features(
         (len(options), OPTION_NUMERIC_DIM), dtype=np.float32
     )
     yours = int(obs.current.yourIndex)
+    effect_id = _valid_card_id(
+        getattr(obs.select, "effect", None), card_count
+    )
+    context_card_id = _valid_card_id(
+        getattr(obs.select, "contextCard", None), card_count
+    )
     own_active = _active(obs.current.players[yours])
     opponent_active = _active(obs.current.players[1 - yours])
     matchup_known = False
@@ -763,6 +769,8 @@ def decoder_features(
             candidate_id,
             target_id,
             attack_id,
+            effect_id,
+            context_card_id,
         ]
         player_index = _optional_int(option.playerIndex, yours)
         attack_damage = (
