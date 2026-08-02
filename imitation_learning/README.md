@@ -132,18 +132,20 @@ players, the own hand, remaining-deck estimate, and stadium. The own-player
 (60), opponent-player (62), and global/select (73) numeric summaries replace
 the old sparse summaries through independent `Linear(n, d_model)` projections.
 Prize counts, selection type, and selection context are one-hot encoded.
-Changing this layout requires rebuilding the feature cache (schema 6), but
+Changing this layout requires rebuilding the feature cache (schema 7), but
 does not require replay extraction again.
 
-The decoder stores each raw engine option once using five categorical fields
-(`option_type`, `select_context`, candidate Card ID, target Card ID, and Attack
-ID) plus the reference notebook's 16 numeric fields. Learned ID embeddings,
-the shared static-card projection, numeric projection, and static-attack
-projection are added in `d_model` space. Exact candidate action combinations
-are still enumerated up to 64, and their selected option embeddings are summed
-before the cross-attention-only decoder. The empty combination uses a learned
-no-action embedding. This decoder change requires rebuilding only the feature
-cache; existing winner-only extracted JSONL files remain valid.
+The decoder stores each raw engine option as 11 compact categorical IDs and
+three scalars. Low-cardinality states expand to a 28-dimensional scalar/one-hot
+vector during forward. Encoder tokens and options share learned location
+embeddings, so spatial options can identify their candidate and target tokens.
+Learned ID embeddings, the shared static-card projection, auxiliary projection,
+and static-attack projection are added in `d_model` space. Exact candidate
+action combinations are still enumerated up to 64, and their selected option
+embeddings are summed before the cross-attention-only decoder. The empty
+combination uses a learned no-action embedding. This decoder change requires
+rebuilding only the feature cache; existing winner-only extracted JSONL files
+remain valid.
 
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the

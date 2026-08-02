@@ -367,9 +367,10 @@ def feature_signature(config: ModelConfig) -> dict:
         "encoder_tokens": ENCODER_WORDS,
         "encoder_layout": "numeric-summary-20-v1",
         "cache_schema_version": CACHE_SCHEMA_VERSION,
-        "decoder_layout": "option-components-combination-sum-v1",
-        "option_categorical_dim": 5,
-        "option_numeric_dim": 16,
+        "decoder_layout": "option-location-auxiliary-v2",
+        "option_categorical_dim": 11,
+        "option_numeric_dim": 3,
+        "option_auxiliary_dim": 28,
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
     }

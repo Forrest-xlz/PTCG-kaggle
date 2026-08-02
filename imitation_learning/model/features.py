@@ -14,6 +14,7 @@ from typing import Any, Iterable
 import numpy as np
 
 from model.card_features import (
+    CARD_ENERGY_TYPE_OFFSET,
     CARD_FEATURE_DIM,
     CARD_HP_INDEX,
     CARD_RESISTANCE_DIM,
@@ -25,6 +26,7 @@ from model.card_features import (
     CARD_TYPE_OFFSET,
     CARD_WEAKNESS_DIM,
     CARD_WEAKNESS_OFFSET,
+    ENERGY_TYPE_DIM,
     build_card_feature_table,
 )
 
@@ -35,9 +37,24 @@ OPPONENT_SUMMARY_DIM = 62
 GLOBAL_SUMMARY_DIM = 73
 SELECT_TYPE_DIM = 11
 SELECT_CONTEXT_DIM = 49
-OPTION_CATEGORICAL_DIM = 5
-OPTION_NUMERIC_DIM = 16
+OPTION_CATEGORICAL_DIM = 11
+OPTION_NUMERIC_DIM = 3
+OPTION_AUXILIARY_DIM = 28
 OPTION_TYPE_DIM = 17
+
+OWN_BENCH_START = 0
+OPPONENT_BENCH_START = 5
+OWN_ACTIVE_LOCATION = 10
+OPPONENT_ACTIVE_LOCATION = 11
+OWN_SUMMARY_LOCATION = 12
+OPPONENT_SUMMARY_LOCATION = 13
+OWN_DISCARD_LOCATION = 14
+OPPONENT_DISCARD_LOCATION = 15
+OWN_HAND_LOCATION = 16
+OWN_DECK_LOCATION = 17
+STADIUM_LOCATION = 18
+GLOBAL_SUMMARY_LOCATION = 19
+NO_ENCODER_LOCATION = ENCODER_TOKENS
 
 
 @dataclass
@@ -586,6 +603,92 @@ def _area_card(
     return cards[position] if 0 <= position < len(cards) else None
 
 
+def _player_location(
+    player_index: int,
+    yours: int,
+    own_location: int,
+    opponent_location: int,
+) -> int:
+    return own_location if player_index == yours else opponent_location
+
+
+def _area_location(
+    obs: Any,
+    area: Any,
+    index: Any,
+    player_index: int,
+) -> int:
+    from cg.api import AreaType
+
+    yours = int(obs.current.yourIndex)
+    own = player_index == yours
+    summary = OWN_SUMMARY_LOCATION if own else OPPONENT_SUMMARY_LOCATION
+    if area == AreaType.ACTIVE:
+        return OWN_ACTIVE_LOCATION if own else OPPONENT_ACTIVE_LOCATION
+    if area == AreaType.BENCH:
+        slot = _optional_int(index, -1)
+        if 0 <= slot < 5:
+            return (OWN_BENCH_START if own else OPPONENT_BENCH_START) + slot
+        return summary
+    if area == AreaType.HAND:
+        return OWN_HAND_LOCATION if own else OPPONENT_SUMMARY_LOCATION
+    if area == AreaType.DISCARD:
+        return _player_location(
+            player_index,
+            yours,
+            OWN_DISCARD_LOCATION,
+            OPPONENT_DISCARD_LOCATION,
+        )
+    if area == AreaType.DECK:
+        return OWN_DECK_LOCATION if own else OPPONENT_SUMMARY_LOCATION
+    if area == AreaType.STADIUM:
+        return STADIUM_LOCATION
+    if area is not None:
+        return summary
+    return NO_ENCODER_LOCATION
+
+
+def _option_location_ids(obs: Any, option: Any) -> tuple[int, int]:
+    from cg.api import AreaType, OptionType
+
+    yours = int(obs.current.yourIndex)
+    player_index = _optional_int(option.playerIndex, yours)
+    player_index = max(0, min(player_index, len(obs.current.players) - 1))
+    candidate_location = NO_ENCODER_LOCATION
+    target_location = NO_ENCODER_LOCATION
+
+    if option.type == OptionType.PLAY:
+        candidate_location = OWN_HAND_LOCATION
+    elif option.type in {
+        OptionType.CARD,
+        OptionType.TOOL_CARD,
+        OptionType.ENERGY_CARD,
+        OptionType.ENERGY,
+        OptionType.ABILITY,
+        OptionType.DISCARD,
+    }:
+        candidate_location = _area_location(
+            obs, option.area, option.index, player_index
+        )
+    elif option.type in {OptionType.ATTACH, OptionType.EVOLVE}:
+        candidate_location = _area_location(
+            obs, option.area, option.index, player_index
+        )
+        target_location = _area_location(
+            obs, option.inPlayArea, option.inPlayIndex, yours
+        )
+    elif option.type == OptionType.RETREAT:
+        target_location = _area_location(
+            obs, AreaType.ACTIVE, 0, yours
+        )
+    elif option.type == OptionType.ATTACK:
+        candidate_location = _area_location(
+            obs, AreaType.ACTIVE, 0, yours
+        )
+
+    return candidate_location, target_location
+
+
 def _valid_card_id(card: Any, card_count: int) -> int:
     if card is None:
         return card_count
@@ -677,9 +780,10 @@ def decoder_features(
     numeric_catalog: NumericFeatureCatalog | None = None,
 ) -> OptionFeatures:
     """Encode raw options once and retain exact action membership."""
+    from cg.api import OptionType
+
     catalog = numeric_catalog or _default_numeric_catalog(card_count)
     options = list(obs.select.option)
-    option_count = max(1, len(options))
     context = int(obs.select.context)
     if not 0 <= context < SELECT_CONTEXT_DIM:
         raise ValueError(f"select context {context} is outside the vocabulary")
@@ -693,32 +797,31 @@ def decoder_features(
     yours = int(obs.current.yourIndex)
     own_active = _active(obs.current.players[yours])
     opponent_active = _active(obs.current.players[1 - yours])
-    super_effective = 0.0
-    resisted = 0.0
+    super_effective: bool | None = None
+    resisted: bool | None = None
     if own_active is not None and opponent_active is not None:
         own_id = _valid_card_id(own_active, card_count)
         opponent_id = _valid_card_id(opponent_active, card_count)
         if own_id < card_count and opponent_id < card_count:
-            own_type = int(
-                np.argmax(
+            energy_types = catalog.card_features[
+                own_id,
+                CARD_ENERGY_TYPE_OFFSET:CARD_ENERGY_TYPE_OFFSET
+                + ENERGY_TYPE_DIM,
+            ]
+            own_type = int(np.argmax(energy_types))
+            if float(energy_types[own_type]) > 0.5:
+                super_effective = bool(
                     catalog.card_features[
-                        own_id,
-                        CARD_TYPE_OFFSET:CARD_TYPE_OFFSET + CARD_TYPE_DIM,
+                        opponent_id, CARD_WEAKNESS_OFFSET + own_type
                     ]
+                    > 0.5
                 )
-            )
-            super_effective = float(
-                catalog.card_features[
-                    opponent_id, CARD_WEAKNESS_OFFSET + own_type
-                ]
-                > 0.5
-            )
-            resisted = float(
-                catalog.card_features[
-                    opponent_id, CARD_RESISTANCE_OFFSET + own_type
-                ]
-                > 0.5
-            )
+                resisted = bool(
+                    catalog.card_features[
+                        opponent_id, CARD_RESISTANCE_OFFSET + own_type
+                    ]
+                    > 0.5
+                )
 
     for position, option in enumerate(options):
         option_type = int(option.type)
@@ -729,50 +832,47 @@ def decoder_features(
         candidate_id, target_id, attack_id = _option_entity_ids(
             obs, option, card_count, attack_count
         )
+        candidate_location, target_location = _option_location_ids(obs, option)
+        area_state = _optional_int(option.area)
+        if not 0 <= area_state <= 12:
+            raise ValueError(f"option area {area_state} is outside the vocabulary")
+        special_condition_state = (
+            0
+            if option.specialConditionType is None
+            else int(option.specialConditionType) + 1
+        )
+        if not 0 <= special_condition_state < 6:
+            raise ValueError(
+                "special condition is outside the option vocabulary"
+            )
+        if option.type == OptionType.ATTACK and super_effective is not None:
+            super_effective_state = 2 if super_effective else 1
+            resisted_state = 2 if resisted else 1
+        else:
+            super_effective_state = 0
+            resisted_state = 0
         categorical[position] = [
             option_type,
             context,
             candidate_id,
             target_id,
             attack_id,
+            candidate_location,
+            target_location,
+            area_state,
+            special_condition_state,
+            super_effective_state,
+            resisted_state,
         ]
-        player_index = _optional_int(option.playerIndex, yours)
         attack_damage = (
             float(catalog.attack_damage[attack_id])
             if 0 <= attack_id < len(catalog.attack_damage)
             else 0.0
         )
-        card_type = 0.0
-        if candidate_id < card_count:
-            card_type = float(
-                np.argmax(
-                    catalog.card_features[
-                        candidate_id,
-                        CARD_TYPE_OFFSET:CARD_TYPE_OFFSET + CARD_TYPE_DIM,
-                    ]
-                )
-            ) / (CARD_TYPE_DIM - 1)
         numeric[position] = [
             _optional_int(option.number) / 6,
-            _optional_int(option.index) / 60,
-            float(player_index == yours),
-            _optional_int(option.toolIndex) / 4,
-            _optional_int(option.energyIndex) / 10,
             _optional_int(option.count) / 10,
-            _optional_int(option.area) / 12,
-            _optional_int(option.inPlayArea) / 12,
-            _optional_int(option.inPlayIndex) / 5,
-            _optional_int(option.specialConditionType) / 5,
-            (position + 1) / option_count,
-            float(
-                candidate_id < card_count
-                or target_id < card_count
-                or attack_id < attack_count
-            ),
             attack_damage,
-            card_type,
-            super_effective,
-            resisted,
         ]
 
     action_index: list[int] = []

@@ -15,7 +15,12 @@ OPPONENT_SUMMARY_DIM = 62
 GLOBAL_SUMMARY_DIM = 73
 OPTION_TYPE_COUNT = 17
 OPTION_CONTEXT_COUNT = 49
-OPTION_NUMERIC_DIM = 16
+OPTION_NUMERIC_DIM = 3
+OPTION_AUXILIARY_DIM = 28
+OPTION_AREA_COUNT = 13
+OPTION_SPECIAL_CONDITION_COUNT = 6
+OPTION_MATCHUP_STATE_COUNT = 3
+NO_ENCODER_LOCATION = ENCODER_TOKENS
 
 
 @dataclass(frozen=True)
@@ -236,6 +241,11 @@ class PTCGTransformer(torch.nn.Module):
             config.d_model,
             index_to_card_id=_encoder_card_ids(config),
         )
+        self.encoder_location_embedding = torch.nn.Embedding(
+            ENCODER_TOKENS + 1,
+            config.d_model,
+            padding_idx=NO_ENCODER_LOCATION,
+        )
         prenorm = config.norm_mode == "prenorm"
         layer = torch.nn.TransformerEncoderLayer(
             config.d_model,
@@ -273,7 +283,7 @@ class PTCGTransformer(torch.nn.Module):
             padding_idx=config.attack_count,
         )
         self.option_numeric_projection = torch.nn.Linear(
-            OPTION_NUMERIC_DIM, config.d_model
+            OPTION_AUXILIARY_DIM, config.d_model
         )
         self.attack_feature_projection = torch.nn.Linear(
             ATTACK_FEATURE_DIM, config.d_model
@@ -331,17 +341,54 @@ class PTCGTransformer(torch.nn.Module):
         candidate_ids = categorical[:, 2]
         target_ids = categorical[:, 3]
         attack_ids = categorical[:, 4]
+        auxiliary = self.expand_option_auxiliary(categorical, numeric)
         return (
             self.option_type_embedding(categorical[:, 0])
             + self.option_context_embedding(categorical[:, 1])
             + self.option_candidate_embedding(candidate_ids)
             + self.option_target_embedding(target_ids)
             + self.option_attack_embedding(attack_ids)
-            + self.option_numeric_projection(numeric)
+            + self.encoder_location_embedding(categorical[:, 5])
+            + self.encoder_location_embedding(categorical[:, 6])
+            + self.option_numeric_projection(auxiliary)
             + projected_card_features[candidate_ids]
             + projected_card_features[target_ids]
             + projected_attack_features[attack_ids]
         )
+
+    @staticmethod
+    def expand_option_auxiliary(
+        categorical: torch.Tensor,
+        numeric: torch.Tensor,
+    ) -> torch.Tensor:
+        if categorical.ndim != 2 or categorical.size(1) != 11:
+            raise ValueError("option categorical features must have width 11")
+        if numeric.ndim != 2 or numeric.size(1) != OPTION_NUMERIC_DIM:
+            raise ValueError(
+                f"option numeric features must have width {OPTION_NUMERIC_DIM}"
+            )
+        auxiliary = torch.cat(
+            (
+                numeric[:, 0:2],
+                F.one_hot(
+                    categorical[:, 7], OPTION_AREA_COUNT
+                ).to(dtype=numeric.dtype),
+                F.one_hot(
+                    categorical[:, 8], OPTION_SPECIAL_CONDITION_COUNT
+                ).to(dtype=numeric.dtype),
+                numeric[:, 2:3],
+                F.one_hot(
+                    categorical[:, 9], OPTION_MATCHUP_STATE_COUNT
+                ).to(dtype=numeric.dtype),
+                F.one_hot(
+                    categorical[:, 10], OPTION_MATCHUP_STATE_COUNT
+                ).to(dtype=numeric.dtype),
+            ),
+            dim=1,
+        )
+        if auxiliary.size(1) != OPTION_AUXILIARY_DIM:
+            raise RuntimeError("option auxiliary features must have width 28")
+        return auxiliary
 
     def combine_actions(
         self,
@@ -401,7 +448,12 @@ class PTCGTransformer(torch.nn.Module):
                 self.global_summary_projection(global_summary).unsqueeze(1),
             ),
             dim=1,
-        ).transpose(0, 1)
+        )
+        location_ids = torch.arange(ENCODER_TOKENS, device=encoded.device)
+        encoded = encoded + self.encoder_location_embedding(
+            location_ids
+        ).unsqueeze(0)
+        encoded = encoded.transpose(0, 1)
         encoder_out = self.encoder(encoded)
         option_embeddings = self.encode_options(
             option_categorical,
