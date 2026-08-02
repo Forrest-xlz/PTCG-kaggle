@@ -14,7 +14,7 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 12
+CACHE_SCHEMA_VERSION = 13
 ENCODER_WORDS = 20
 OWN_SUMMARY_DIM = 60
 OPPONENT_SUMMARY_DIM = 62

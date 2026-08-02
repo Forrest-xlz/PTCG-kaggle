@@ -267,7 +267,7 @@ class PTCGTransformer(torch.nn.Module):
             config.d_model,
             padding_idx=config.card_count,
         )
-        self.option_context_card_embedding = torch.nn.Embedding(
+        self.option_effect_embedding = torch.nn.Embedding(
             config.card_count + 1,
             config.d_model,
             padding_idx=config.card_count,
@@ -336,18 +336,18 @@ class PTCGTransformer(torch.nn.Module):
         candidate_ids = categorical[:, 2]
         target_ids = categorical[:, 3]
         attack_ids = categorical[:, 4]
-        context_card_ids = categorical[:, 5]
+        effect_ids = categorical[:, 5]
         return (
             self.option_type_embedding(categorical[:, 0])
             + self.option_context_embedding(categorical[:, 1])
             + self.option_candidate_embedding(candidate_ids)
             + self.option_target_embedding(target_ids)
-            + self.option_context_card_embedding(context_card_ids)
+            + self.option_effect_embedding(effect_ids)
             + self.option_attack_embedding(attack_ids)
             + self.option_numeric_projection(numeric)
             + projected_card_features[candidate_ids]
             + projected_card_features[target_ids]
-            + projected_card_features[context_card_ids]
+            + projected_card_features[effect_ids]
             + projected_attack_features[attack_ids]
         )
 
