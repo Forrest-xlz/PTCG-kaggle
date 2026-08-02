@@ -43,7 +43,7 @@ def test_normalization_modes_preserve_policy_shape(norm_mode: str) -> None:
     opponent_summary = torch.zeros((1, 62))
     global_summary = torch.zeros((1, 73))
     option_categorical = torch.tensor(
-        [[8, 0, 1, 8, 4, 8, 8], [13, 0, 8, 8, 1, 8, 8]],
+        [[8, 0, 1, 8, 4, 8], [13, 0, 8, 8, 1, 8]],
         dtype=torch.long,
     )
     option_numeric = torch.zeros((2, OPTION_NUMERIC_DIM))

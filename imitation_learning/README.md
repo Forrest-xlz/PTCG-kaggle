@@ -132,19 +132,21 @@ players, the own hand, remaining-deck estimate, and stadium. The own-player
 (60), opponent-player (62), and global/select (73) numeric summaries replace
 the old sparse summaries through independent `Linear(n, d_model)` projections.
 Prize counts, selection type, and selection context are one-hot encoded.
-Changing this layout requires rebuilding the feature cache (schema 11), but
+Changing this layout requires rebuilding the feature cache (schema 12), but
 does not require replay extraction again.
 
-The decoder stores each raw engine option once using seven categorical fields:
+The decoder stores each raw engine option once using six categorical fields:
 `option_type`, `select_context`, candidate Card ID, target Card ID, Attack ID,
-effect Card ID, and context Card ID. Candidate, target, effect, and context-card
-roles have independent learned embeddings while sharing the same static-card
-projection. These embeddings, the 16 numeric fields, and static-attack features
-are added in `d_model` space. Exact candidate action combinations are still
-enumerated up to 64, and their selected option embeddings are summed before the
-cross-attention-only decoder. The empty combination uses a learned no-action
-embedding. This decoder change requires rebuilding only the feature cache;
-existing winner-only extracted JSONL files remain valid.
+and context Card ID. Candidate, target, and context-card roles have independent
+learned embeddings while sharing the same static-card projection. The effect
+card is deliberately excluded because legal options already encode the
+currently processed effect. These embeddings, the 16 numeric fields, and
+static-attack features are added in `d_model` space. Exact candidate action
+combinations are still enumerated up to 64, and their selected option
+embeddings are summed before the cross-attention-only decoder. The empty
+combination uses a learned no-action embedding. This decoder change requires
+rebuilding only the feature cache; existing winner-only extracted JSONL files
+remain valid.
 
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the

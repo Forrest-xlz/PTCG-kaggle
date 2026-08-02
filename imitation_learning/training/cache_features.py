@@ -91,7 +91,7 @@ def feature_signature(config: ModelConfig) -> dict:
         "encoder_tokens": ENCODER_WORDS,
         "encoder_layout": "numeric-summary-20-v1",
         "cache_schema_version": CACHE_SCHEMA_VERSION,
-        "decoder_layout": "option-components-effect-context-v6",
+        "decoder_layout": "option-components-context-card-v7",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,
         "option_numeric_dim": OPTION_NUMERIC_DIM,
         "max_actions": MAX_ACTIONS,

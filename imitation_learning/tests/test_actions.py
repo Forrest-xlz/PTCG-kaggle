@@ -124,7 +124,7 @@ def test_option_features_keep_entities_numeric_values_and_action_membership() ->
 
     np.testing.assert_array_equal(
         encoded.categorical,
-        [[8, 21, 3, 4, 3, 6, 5], [13, 21, 8, 8, 1, 6, 5]],
+        [[8, 21, 3, 4, 3, 5], [13, 21, 8, 8, 1, 5]],
     )
     assert encoded.numeric.shape == (2, 76)
     # The original 16 values remain at the start of the vector.
@@ -149,4 +149,4 @@ def test_option_features_keep_entities_numeric_values_and_action_membership() ->
     missing = feature_module.decoder_features(
         obs, [[0]], 8, 3, numeric_catalog=catalog
     )
-    np.testing.assert_array_equal(missing.categorical[:, 5:], [[8, 8], [8, 8]])
+    np.testing.assert_array_equal(missing.categorical[:, 5:], [[8], [8]])
