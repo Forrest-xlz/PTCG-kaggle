@@ -9,9 +9,9 @@ from model.attack_features import ATTACK_FEATURE_DIM
 from model.card_features import CARD_FEATURE_DIM
 
 
-ENCODER_TOKENS = 20
-OWN_SUMMARY_DIM = 60
-OPPONENT_SUMMARY_DIM = 62
+ENCODER_TOKENS = 26
+OWN_SUMMARY_DIM = 69
+OPPONENT_SUMMARY_DIM = 71
 GLOBAL_SUMMARY_DIM = 73
 OPTION_TYPE_COUNT = 17
 OPTION_CONTEXT_COUNT = 49
@@ -394,10 +394,10 @@ class PTCGTransformer(torch.nn.Module):
         )
         encoded = torch.cat(
             (
-                encoded[:, :12],
+                encoded[:, :18],
                 self.own_summary_projection(own_summary).unsqueeze(1),
                 self.opponent_summary_projection(opponent_summary).unsqueeze(1),
-                encoded[:, 14:19],
+                encoded[:, 20:25],
                 self.global_summary_projection(global_summary).unsqueeze(1),
             ),
             dim=1,

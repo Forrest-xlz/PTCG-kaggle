@@ -31,9 +31,9 @@ from model.card_features import (
 )
 
 
-ENCODER_TOKENS = 20
-OWN_SUMMARY_DIM = 60
-OPPONENT_SUMMARY_DIM = 62
+ENCODER_TOKENS = 26
+OWN_SUMMARY_DIM = 69
+OPPONENT_SUMMARY_DIM = 71
 GLOBAL_SUMMARY_DIM = 73
 SELECT_TYPE_DIM = 11
 SELECT_CONTEXT_DIM = 49
@@ -193,7 +193,7 @@ def _player_summary(
     catalog: NumericFeatureCatalog,
 ) -> list[float]:
     active = _active(player)
-    bench = list(player.bench[:5])
+    bench = list(player.bench[:8])
     bench_energy = sum(len(pokemon.energyCards) for pokemon in bench)
     bench_hp = sum(float(pokemon.hp) for pokemon in bench)
     bench_max_hp = sum(float(pokemon.maxHp) for pokemon in bench)
@@ -243,7 +243,7 @@ def _player_summary(
     features.extend(_one_hot(len(player.prize), 7, "prize_count"))
     features.extend(
         [
-            len(bench) / 5.0,
+            len(bench) / 8.0,
             float(active is not None),
             float(bool(player.poisoned)),
             float(bool(player.burned)),
@@ -262,7 +262,7 @@ def _player_summary(
             resistance_norm,
         ]
     )
-    for slot in range(5):
+    for slot in range(8):
         if slot < len(bench):
             pokemon = bench[slot]
             features.extend(
@@ -276,12 +276,12 @@ def _player_summary(
             features.extend([0.0, 0.0, 0.0])
     features.extend(
         [
-            bench_energy / 20.0,
-            bench_hp / 2000.0,
-            bench_max_hp / 2000.0,
+            bench_energy / 32.0,
+            bench_hp / 3200.0,
+            bench_max_hp / 3200.0,
         ]
     )
-    if len(features) != 45:
+    if len(features) != 54:
         raise RuntimeError(f"player summary has {len(features)} dimensions")
     return features
 
@@ -441,7 +441,7 @@ def _opponent_revealed_summary(
             average_hp,
             average_stage / 2.0,
             len(player.discard) / 20.0,
-            len(player.bench) / 5.0,
+            len(player.bench) / 8.0,
             energy_in_play / 10.0,
         ]
     )
@@ -505,7 +505,7 @@ def encoder_features(
     ]
 
     for player in relative_players:
-        for slot in range(5):
+        for slot in range(8):
             sparse.word_start()
             position = sparse.pos
             _add_pokemon(
@@ -513,7 +513,7 @@ def encoder_features(
                 player.bench[slot] if slot < len(player.bench) else None,
                 card_count,
             )
-            if slot != 4:
+            if slot != 7:
                 sparse.pos = position
     for player in relative_players:
         sparse.word_start()
