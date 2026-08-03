@@ -367,7 +367,7 @@ def feature_signature(config: ModelConfig) -> dict:
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
         "encoder_tokens": ENCODER_WORDS,
-        "encoder_layout": "numeric-summary-20-v1",
+        "encoder_layout": "numeric-summary-26-v1",
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_layout": "option-components-original16-plus-one-hot-v5",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,

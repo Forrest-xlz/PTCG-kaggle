@@ -10,6 +10,8 @@ from model.card_features import CARD_FEATURE_DIM
 
 
 ENCODER_TOKENS = 26
+BENCH_SLOTS = 8
+PLAYER_BENCH_COUNT_INDEX = 10
 OWN_SUMMARY_DIM = 69
 OPPONENT_SUMMARY_DIM = 71
 GLOBAL_SUMMARY_DIM = 73
@@ -157,17 +159,32 @@ class DecoderLayer(torch.nn.Module):
         self.norm1 = torch.nn.LayerNorm(d_model)
         self.norm2 = torch.nn.LayerNorm(d_model)
 
-    def forward(self, x: torch.Tensor, encoder_out: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        encoder_out: torch.Tensor,
+        encoder_padding_mask: torch.Tensor,
+    ) -> torch.Tensor:
         if self.prenorm:
             query = self.norm1(x)
             attended, _ = self.attention(
-                query, encoder_out, encoder_out, need_weights=False
+                query,
+                encoder_out,
+                encoder_out,
+                key_padding_mask=encoder_padding_mask,
+                need_weights=False,
             )
             x = x + attended
             return x + self.fc2(
                 torch.nn.functional.relu(self.fc1(self.norm2(x)))
             )
-        y, _ = self.attention(x, encoder_out, encoder_out, need_weights=False)
+        y, _ = self.attention(
+            x,
+            encoder_out,
+            encoder_out,
+            key_padding_mask=encoder_padding_mask,
+            need_weights=False,
+        )
         residual = self.norm1(x + y)
         y = self.fc2(torch.nn.functional.relu(self.fc1(residual)))
         return self.norm2(residual + y)
@@ -364,6 +381,31 @@ class PTCGTransformer(torch.nn.Module):
         empty = action_option_offset[1:] == action_option_offset[:-1]
         return action_embeddings + empty.unsqueeze(1) * self.no_action_embedding
 
+    @staticmethod
+    def _encoder_padding_mask(
+        own_summary: torch.Tensor,
+        opponent_summary: torch.Tensor,
+    ) -> torch.Tensor:
+        slots = torch.arange(BENCH_SLOTS, device=own_summary.device)
+        own_count = torch.round(
+            own_summary[:, PLAYER_BENCH_COUNT_INDEX] * BENCH_SLOTS
+        ).to(torch.long).clamp(0, BENCH_SLOTS)
+        opponent_count = torch.round(
+            opponent_summary[:, PLAYER_BENCH_COUNT_INDEX] * BENCH_SLOTS
+        ).to(torch.long).clamp(0, BENCH_SLOTS)
+        own_padding = slots.unsqueeze(0) >= own_count.unsqueeze(1)
+        opponent_padding = (
+            slots.unsqueeze(0) >= opponent_count.unsqueeze(1)
+        )
+        fixed_tokens = torch.zeros(
+            (own_summary.size(0), ENCODER_TOKENS - 2 * BENCH_SLOTS),
+            dtype=torch.bool,
+            device=own_summary.device,
+        )
+        return torch.cat(
+            (own_padding, opponent_padding, fixed_tokens), dim=1
+        )
+
     def forward(
         self,
         index_encoder,
@@ -402,7 +444,13 @@ class PTCGTransformer(torch.nn.Module):
             ),
             dim=1,
         ).transpose(0, 1)
-        encoder_out = self.encoder(encoded)
+        encoder_padding_mask = self._encoder_padding_mask(
+            own_summary, opponent_summary
+        )
+        encoder_out = self.encoder(
+            encoded,
+            src_key_padding_mask=encoder_padding_mask,
+        )
         option_embeddings = self.encode_options(
             option_categorical,
             option_numeric,
@@ -418,7 +466,7 @@ class PTCGTransformer(torch.nn.Module):
         # Every decoder layer cross-attends to the same encoder output. There
         # is deliberately no self-attention between candidate actions.
         for layer in self.decoder:
-            policy = layer(policy, encoder_out)
+            policy = layer(policy, encoder_out, encoder_padding_mask)
         # Return raw logits. Cross entropy applies log-softmax internally, and
         # argmax(logits) is identical to argmax(softmax(logits)) at inference.
         return self.decoder_fc(policy).transpose(0, 1).reshape(batch_size, -1)

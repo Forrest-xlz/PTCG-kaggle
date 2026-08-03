@@ -131,6 +131,8 @@ active Pokémon, three dense summary tokens, separate discard tokens for both
 players, the own hand, remaining-deck estimate, and stadium. The own-player
 (69), opponent-player (71), and global/select (73) numeric summaries replace
 the old sparse summaries through independent `Linear(n, d_model)` projections.
+Missing bench slots remain in the fixed layout but are excluded from encoder
+self-attention and decoder cross-attention by a boolean key-padding mask.
 Prize counts, selection type, and selection context are one-hot encoded.
 Changing this layout requires rebuilding the feature cache (schema 11), but
 does not require replay extraction again.
