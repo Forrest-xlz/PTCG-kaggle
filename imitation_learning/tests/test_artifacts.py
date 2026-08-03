@@ -50,7 +50,8 @@ def test_train_yaml_uses_validation_and_step_configuration() -> None:
     assert all(len(deck) == 60 for deck in train["top_decks"])
     assert train["ema_alpha"] == pytest.approx(0.99)
     assert config["model"]["norm_mode"] in {"prenorm", "postnorm"}
-    assert 0 < config["model"]["card_feature_ratio"] <= 1
+    assert config["model"]["card_mlp_layers"] >= 0
+    assert config["model"]["card_mlp_scope"] in {"shared", "region"}
 
 
 def test_submission_notebook_is_valid_json() -> None:
@@ -69,7 +70,10 @@ def test_submission_notebook_is_valid_json() -> None:
     assert "CG_PATHS" not in source
     assert "ModelConfig(**checkpoint['config'])" in source
     assert "model.load_state_dict(checkpoint['model'])" in source
-    assert "card_feature_ratio" in source
+    assert "card_mlp_layers" in source
+    assert "card_mlp_scope" in source
+    assert "card_feature_projections" in source
+    assert "index_to_card_region" in source
     assert "build_card_feature_table" in source
     assert "build_attack_feature_table" in source
     assert "projected_card_features" in source
@@ -82,14 +86,14 @@ def test_submission_notebook_is_valid_json() -> None:
     assert "option_attack_embedding" in source
     assert "include_last_offset=True" in source
     assert "decoder_bag" not in source
-    assert "ENCODER_TOKENS = 20" in source
+    assert "ENCODER_TOKENS = 26" in source
     assert "num_encoder_words" not in source
     assert "own_summary_projection" in source
     assert "opponent_summary_projection" in source
     assert "global_summary_projection" in source
     assert "SELECT_TYPE_DIM = 11" in source
     assert "SELECT_CONTEXT_DIM = 49" in source
-    assert "for slot in range(5)" in source
+    assert "for slot in range(8)" in source
     assert "players[0].discard, 0.25" in source
     assert "players[1].discard, 0.25" in source
 

@@ -123,11 +123,14 @@ normalization before every encoder/decoder sublayer and adds a final encoder
 LayerNorm; PostNorm preserves the original notebook residual ordering.
 `model.summary_mlp_layers`, `model.card_mlp_layers`, and
 `model.option_numeric_mlp_layers` control the projection depths for the three
-numeric-summary tokens, the globally shared static-card features, and decoder
-option-numeric features. The first layer maps the input width to `d_model`;
-additional layers are `ReLU -> Linear(d_model, d_model)`. Setting
-`card_mlp_layers` to zero disables static-card embeddings while preserving all
-learned Card ID embeddings.
+numeric-summary tokens, static-card features, and decoder option-numeric
+features. The first layer maps the input width to `d_model`; additional layers
+are `ReLU -> Linear(d_model, d_model)`. `model.card_mlp_scope: shared` keeps one
+static-card MLP for the whole model. `model.card_mlp_scope: region` gives each
+semantic card region its own MLP while sharing it among Pokemon, Tools, and
+Energy cards inside that region; decoder cards reuse the corresponding encoder
+region MLP. Setting `card_mlp_layers` to zero disables static-card embeddings
+while preserving all learned Card ID embeddings.
 
 The encoder has a fixed 26-token layout: eight bench slots per player, two
 active Pokémon, three dense summary tokens, separate discard tokens for both

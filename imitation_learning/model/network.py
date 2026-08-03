@@ -19,6 +19,69 @@ OPTION_TYPE_COUNT = 17
 OPTION_CONTEXT_COUNT = 49
 OPTION_NUMERIC_DIM = 76
 
+OPTION_PLAYER_OFFSET = 16
+OPTION_AREA_OFFSET = 19
+OPTION_IN_PLAY_AREA_OFFSET = 32
+
+OPTION_TYPE_PLAY = 7
+OPTION_TYPE_ATTACH = 8
+OPTION_TYPE_EVOLVE = 9
+OPTION_TYPE_RETREAT = 12
+
+CARD_REGION_NAMES = (
+    "own_bench",
+    "opponent_bench",
+    "own_active",
+    "opponent_active",
+    "own_discard",
+    "opponent_discard",
+    "own_hand",
+    "opponent_hand",
+    "own_deck",
+    "opponent_deck",
+    "own_prize",
+    "opponent_prize",
+    "stadium",
+    "looking",
+    "unknown",
+)
+CARD_REGION_INDEX = {
+    name: index for index, name in enumerate(CARD_REGION_NAMES)
+}
+
+# AreaType values 0..12 mapped to relative card regions. Attached tools and
+# Energy cards inherit the Active/Bench region of their Pokemon.
+_OWN_AREA_REGIONS = (
+    CARD_REGION_INDEX["unknown"],
+    CARD_REGION_INDEX["own_deck"],
+    CARD_REGION_INDEX["own_hand"],
+    CARD_REGION_INDEX["own_discard"],
+    CARD_REGION_INDEX["own_active"],
+    CARD_REGION_INDEX["own_bench"],
+    CARD_REGION_INDEX["own_prize"],
+    CARD_REGION_INDEX["stadium"],
+    CARD_REGION_INDEX["unknown"],
+    CARD_REGION_INDEX["unknown"],
+    CARD_REGION_INDEX["unknown"],
+    CARD_REGION_INDEX["unknown"],
+    CARD_REGION_INDEX["looking"],
+)
+_OPPONENT_AREA_REGIONS = (
+    CARD_REGION_INDEX["unknown"],
+    CARD_REGION_INDEX["opponent_deck"],
+    CARD_REGION_INDEX["opponent_hand"],
+    CARD_REGION_INDEX["opponent_discard"],
+    CARD_REGION_INDEX["opponent_active"],
+    CARD_REGION_INDEX["opponent_bench"],
+    CARD_REGION_INDEX["opponent_prize"],
+    CARD_REGION_INDEX["stadium"],
+    CARD_REGION_INDEX["unknown"],
+    CARD_REGION_INDEX["unknown"],
+    CARD_REGION_INDEX["unknown"],
+    CARD_REGION_INDEX["unknown"],
+    CARD_REGION_INDEX["looking"],
+)
+
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -34,6 +97,7 @@ class ModelConfig:
     summary_mlp_layers: int = 1
     card_mlp_layers: int = 1
     option_numeric_mlp_layers: int = 1
+    card_mlp_scope: str = "shared"
 
     def __post_init__(self) -> None:
         if self.norm_mode not in {"prenorm", "postnorm"}:
@@ -42,6 +106,8 @@ class ModelConfig:
             raise ValueError("summary_mlp_layers must be >= 1")
         if self.card_mlp_layers < 0:
             raise ValueError("card_mlp_layers must be >= 0")
+        if self.card_mlp_scope not in {"shared", "region"}:
+            raise ValueError("card_mlp_scope must be shared or region")
         if self.option_numeric_mlp_layers < 1:
             raise ValueError("option_numeric_mlp_layers must be >= 1")
 
@@ -67,46 +133,86 @@ def _projection_mlp(
 
 
 def _fill_card_range(
-    mapping: torch.Tensor,
+    card_mapping: torch.Tensor,
+    region_mapping: torch.Tensor,
     start: int,
     card_count: int,
+    region: int,
 ) -> int:
     end = start + card_count
-    if end > mapping.numel():
+    if end > card_mapping.numel():
         raise ValueError("card feature range exceeds embedding vocabulary")
-    mapping[start:end] = torch.arange(card_count)
+    card_mapping[start:end] = torch.arange(card_count)
+    region_mapping[start:end] = region
     return end
 
 
-def _encoder_card_ids(config: ModelConfig) -> torch.Tensor:
-    """Map encoder vocabulary indices to Card IDs or the zero sentinel."""
+def _encoder_card_mappings(
+    config: ModelConfig,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Map encoder vocabulary indices to Card IDs and semantic regions."""
     card_count = config.card_count
-    mapping = torch.full(
+    card_mapping = torch.full(
         (config.encoder_size,),
         card_count,
+        dtype=torch.long,
+    )
+    region_mapping = torch.full(
+        (config.encoder_size,),
+        CARD_REGION_INDEX["unknown"],
         dtype=torch.long,
     )
     position = 0
 
     # Two shared bench layouts and two active-Pokemon layouts.
-    for _ in range(4):
+    field_regions = (
+        CARD_REGION_INDEX["own_bench"],
+        CARD_REGION_INDEX["opponent_bench"],
+        CARD_REGION_INDEX["own_active"],
+        CARD_REGION_INDEX["opponent_active"],
+    )
+    for region in field_regions:
         position += 2  # null flag and HP
         for _ in range(3):  # Pokemon, tools, attached energies
-            position = _fill_card_range(mapping, position, card_count)
+            position = _fill_card_range(
+                card_mapping,
+                region_mapping,
+                position,
+                card_count,
+                region,
+            )
 
     # Own discard, opponent discard, own hand, known deck, and stadium.
-    for _ in range(5):
-        position = _fill_card_range(mapping, position, card_count)
+    zone_regions = (
+        CARD_REGION_INDEX["own_discard"],
+        CARD_REGION_INDEX["opponent_discard"],
+        CARD_REGION_INDEX["own_hand"],
+        CARD_REGION_INDEX["own_deck"],
+        CARD_REGION_INDEX["stadium"],
+    )
+    for region in zone_regions:
+        position = _fill_card_range(
+            card_mapping,
+            region_mapping,
+            position,
+            card_count,
+            region,
+        )
 
     if position > config.encoder_size:
         raise ValueError(
             "encoder_size is too small for the configured card vocabulary"
         )
-    return mapping
+    return card_mapping, region_mapping
+
+
+def _encoder_card_ids(config: ModelConfig) -> torch.Tensor:
+    """Backward-compatible helper returning only encoder Card IDs."""
+    return _encoder_card_mappings(config)[0]
 
 
 class CardAwareEmbeddingBag(torch.nn.EmbeddingBag):
-    """EmbeddingBag that adds a caller-supplied shared card representation."""
+    """EmbeddingBag that adds shared or region-specific card features."""
 
     def __init__(
         self,
@@ -114,6 +220,7 @@ class CardAwareEmbeddingBag(torch.nn.EmbeddingBag):
         embedding_dim: int,
         *,
         index_to_card_id: torch.Tensor,
+        index_to_card_region: torch.Tensor,
     ):
         super().__init__(num_embeddings, embedding_dim, mode="sum")
         if index_to_card_id.shape != (num_embeddings,):
@@ -123,6 +230,15 @@ class CardAwareEmbeddingBag(torch.nn.EmbeddingBag):
         self.register_buffer(
             "index_to_card_id",
             index_to_card_id,
+            persistent=False,
+        )
+        if index_to_card_region.shape != (num_embeddings,):
+            raise ValueError(
+                "index_to_card_region must match the embedding vocabulary"
+            )
+        self.register_buffer(
+            "index_to_card_region",
+            index_to_card_region,
             persistent=False,
         )
 
@@ -140,6 +256,18 @@ class CardAwareEmbeddingBag(torch.nn.EmbeddingBag):
             per_sample_weights=per_sample_weights,
         )
         card_ids = self.index_to_card_id[input]
+        if projected_card_features.ndim == 2:
+            static_indices = card_ids
+            static_table = projected_card_features
+        elif projected_card_features.ndim == 3:
+            region_ids = self.index_to_card_region[input]
+            card_vocabulary = projected_card_features.size(1)
+            static_indices = region_ids * card_vocabulary + card_ids
+            static_table = projected_card_features.flatten(0, 1)
+        else:
+            raise ValueError(
+                "projected_card_features must have two or three dimensions"
+            )
         static_weights = (
             None
             if per_sample_weights is None
@@ -148,8 +276,8 @@ class CardAwareEmbeddingBag(torch.nn.EmbeddingBag):
             )
         )
         static = F.embedding_bag(
-            card_ids,
-            projected_card_features,
+            static_indices,
+            static_table,
             offsets,
             mode="sum",
             per_sample_weights=static_weights,
@@ -247,15 +375,25 @@ class PTCGTransformer(torch.nn.Module):
             "attack_feature_table",
             attack_feature_table.clone(),
         )
-        self.card_feature_projection = (
-            None
-            if config.card_mlp_layers == 0
-            else _projection_mlp(
+        self.card_feature_projection: torch.nn.Module | None = None
+        self.card_feature_projections: torch.nn.ModuleDict | None = None
+        if config.card_mlp_layers > 0 and config.card_mlp_scope == "shared":
+            self.card_feature_projection = _projection_mlp(
                 CARD_FEATURE_DIM,
                 config.d_model,
                 config.card_mlp_layers,
             )
-        )
+        elif config.card_mlp_layers > 0:
+            self.card_feature_projections = torch.nn.ModuleDict(
+                {
+                    name: _projection_mlp(
+                        CARD_FEATURE_DIM,
+                        config.d_model,
+                        config.card_mlp_layers,
+                    )
+                    for name in CARD_REGION_NAMES
+                }
+            )
         self.own_summary_projection = _projection_mlp(
             OWN_SUMMARY_DIM,
             config.d_model,
@@ -271,10 +409,24 @@ class PTCGTransformer(torch.nn.Module):
             config.d_model,
             config.summary_mlp_layers,
         )
+        encoder_card_ids, encoder_card_regions = _encoder_card_mappings(
+            config
+        )
         self.encoder_bag = CardAwareEmbeddingBag(
             config.encoder_size,
             config.d_model,
-            index_to_card_id=_encoder_card_ids(config),
+            index_to_card_id=encoder_card_ids,
+            index_to_card_region=encoder_card_regions,
+        )
+        self.register_buffer(
+            "own_area_card_regions",
+            torch.tensor(_OWN_AREA_REGIONS, dtype=torch.long),
+            persistent=False,
+        )
+        self.register_buffer(
+            "opponent_area_card_regions",
+            torch.tensor(_OPPONENT_AREA_REGIONS, dtype=torch.long),
+            persistent=False,
         )
         prenorm = config.norm_mode == "prenorm"
         layer = torch.nn.TransformerEncoderLayer(
@@ -335,22 +487,90 @@ class PTCGTransformer(torch.nn.Module):
         self.decoder_fc = torch.nn.Linear(config.d_model, 1)
 
     def project_card_features(self) -> torch.Tensor:
-        if self.card_feature_projection is None:
+        if (
+            self.card_feature_projection is None
+            and self.card_feature_projections is None
+        ):
             projected = self.card_feature_table.new_zeros(
                 (self.config.card_count, self.config.d_model)
             )
-        else:
+        elif self.card_feature_projection is not None:
             projected = self.card_feature_projection(
                 self.card_feature_table
             )
+        else:
+            assert self.card_feature_projections is not None
+            projected = torch.stack(
+                [
+                    self.card_feature_projections[name](
+                        self.card_feature_table
+                    )
+                    for name in CARD_REGION_NAMES
+                ],
+                dim=0,
+            )
         # The last row is the sentinel used by every non-card bag index.
-        return torch.cat(
-            [
-                projected,
-                projected.new_zeros((1, self.config.d_model)),
-            ],
-            dim=0,
+        if projected.ndim == 2:
+            sentinel = projected.new_zeros((1, self.config.d_model))
+            return torch.cat((projected, sentinel), dim=0)
+        sentinel = projected.new_zeros(
+            (projected.size(0), 1, self.config.d_model)
         )
+        return torch.cat((projected, sentinel), dim=1)
+
+    def decoder_card_regions(
+        self,
+        categorical: torch.Tensor,
+        numeric: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        option_types = categorical[:, 0]
+        player_relation = numeric[
+            :, OPTION_PLAYER_OFFSET:OPTION_PLAYER_OFFSET + 3
+        ].argmax(dim=1)
+        areas = numeric[
+            :, OPTION_AREA_OFFSET:OPTION_AREA_OFFSET + 13
+        ].argmax(dim=1)
+        in_play_areas = numeric[
+            :, OPTION_IN_PLAY_AREA_OFFSET:OPTION_IN_PLAY_AREA_OFFSET + 13
+        ].argmax(dim=1)
+
+        candidate_regions = self.own_area_card_regions[areas]
+        candidate_regions = torch.where(
+            player_relation == 2,
+            self.opponent_area_card_regions[areas],
+            candidate_regions,
+        )
+        candidate_regions = torch.where(
+            option_types == OPTION_TYPE_PLAY,
+            torch.full_like(
+                candidate_regions,
+                CARD_REGION_INDEX["own_hand"],
+            ),
+            candidate_regions,
+        )
+
+        target_regions = torch.full_like(
+            candidate_regions,
+            CARD_REGION_INDEX["unknown"],
+        )
+        has_in_play_target = (
+            (option_types == OPTION_TYPE_ATTACH)
+            | (option_types == OPTION_TYPE_EVOLVE)
+        )
+        target_regions = torch.where(
+            has_in_play_target,
+            self.own_area_card_regions[in_play_areas],
+            target_regions,
+        )
+        target_regions = torch.where(
+            option_types == OPTION_TYPE_RETREAT,
+            torch.full_like(
+                target_regions,
+                CARD_REGION_INDEX["own_active"],
+            ),
+            target_regions,
+        )
+        return candidate_regions, target_regions
 
     def project_attack_features(self) -> torch.Tensor:
         projected = self.attack_feature_projection(
@@ -374,6 +594,19 @@ class PTCGTransformer(torch.nn.Module):
         candidate_ids = categorical[:, 2]
         target_ids = categorical[:, 3]
         attack_ids = categorical[:, 4]
+        if projected_card_features.ndim == 3:
+            candidate_regions, target_regions = self.decoder_card_regions(
+                categorical, numeric
+            )
+            candidate_static = projected_card_features[
+                candidate_regions, candidate_ids
+            ]
+            target_static = projected_card_features[
+                target_regions, target_ids
+            ]
+        else:
+            candidate_static = projected_card_features[candidate_ids]
+            target_static = projected_card_features[target_ids]
         return (
             self.option_type_embedding(categorical[:, 0])
             + self.option_context_embedding(categorical[:, 1])
@@ -381,8 +614,8 @@ class PTCGTransformer(torch.nn.Module):
             + self.option_target_embedding(target_ids)
             + self.option_attack_embedding(attack_ids)
             + self.option_numeric_projection(numeric)
-            + projected_card_features[candidate_ids]
-            + projected_card_features[target_ids]
+            + candidate_static
+            + target_static
             + projected_attack_features[attack_ids]
         )
 

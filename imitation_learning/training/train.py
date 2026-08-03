@@ -113,6 +113,7 @@ class ModelSettings:
     summary_mlp_layers: int
     card_mlp_layers: int
     option_numeric_mlp_layers: int
+    card_mlp_scope: str = "shared"
 
 
 @dataclass(frozen=True)
@@ -331,6 +332,10 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
     if type(model.card_mlp_layers) is not int or model.card_mlp_layers < 0:
         raise ValueError(
             "model.card_mlp_layers must be an integer >= 0"
+        )
+    if model.card_mlp_scope not in {"shared", "region"}:
+        raise ValueError(
+            "model.card_mlp_scope must be shared or region"
         )
     if (
         type(model.option_numeric_mlp_layers) is not int
@@ -685,6 +690,7 @@ def main() -> None:
         summary_mlp_layers=model_cfg.summary_mlp_layers,
         card_mlp_layers=model_cfg.card_mlp_layers,
         option_numeric_mlp_layers=model_cfg.option_numeric_mlp_layers,
+        card_mlp_scope=model_cfg.card_mlp_scope,
     )
     invalid_card_ids = sorted(
         {
