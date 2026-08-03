@@ -31,24 +31,39 @@ class ModelConfig:
     encoder_layers: int = 1
     decoder_layers: int = 1
     norm_mode: str = "postnorm"
-    card_feature_ratio: float = 0.5
+    summary_mlp_layers: int = 1
+    card_mlp_layers: int = 1
+    option_numeric_mlp_layers: int = 1
 
     def __post_init__(self) -> None:
         if self.norm_mode not in {"prenorm", "postnorm"}:
             raise ValueError("norm_mode must be prenorm or postnorm")
-        if not 0 < self.card_feature_ratio <= 1:
-            raise ValueError("card_feature_ratio must be in (0, 1]")
-        if self.card_feature_dim < 1:
-            raise ValueError(
-                "card_feature_ratio * d_model must be at least 1"
-            )
-
-    @property
-    def card_feature_dim(self) -> int:
-        return int(self.d_model * self.card_feature_ratio)
+        if self.summary_mlp_layers < 1:
+            raise ValueError("summary_mlp_layers must be >= 1")
+        if self.card_mlp_layers < 0:
+            raise ValueError("card_mlp_layers must be >= 0")
+        if self.option_numeric_mlp_layers < 1:
+            raise ValueError("option_numeric_mlp_layers must be >= 1")
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _projection_mlp(
+    input_dim: int,
+    d_model: int,
+    layers: int,
+) -> torch.nn.Module:
+    if layers < 1:
+        raise ValueError("projection MLP must contain at least one layer")
+    modules: list[torch.nn.Module] = [
+        torch.nn.Linear(input_dim, d_model)
+    ]
+    for _ in range(layers - 1):
+        modules.extend(
+            [torch.nn.ReLU(), torch.nn.Linear(d_model, d_model)]
+        )
+    return modules[0] if len(modules) == 1 else torch.nn.Sequential(*modules)
 
 
 def _fill_card_range(
@@ -232,21 +247,29 @@ class PTCGTransformer(torch.nn.Module):
             "attack_feature_table",
             attack_feature_table.clone(),
         )
-        self.card_feature_projection = torch.nn.Linear(
-            CARD_FEATURE_DIM,
-            config.card_feature_dim,
+        self.card_feature_projection = (
+            None
+            if config.card_mlp_layers == 0
+            else _projection_mlp(
+                CARD_FEATURE_DIM,
+                config.d_model,
+                config.card_mlp_layers,
+            )
         )
-        self.own_summary_projection = torch.nn.Linear(
+        self.own_summary_projection = _projection_mlp(
             OWN_SUMMARY_DIM,
             config.d_model,
+            config.summary_mlp_layers,
         )
-        self.opponent_summary_projection = torch.nn.Linear(
+        self.opponent_summary_projection = _projection_mlp(
             OPPONENT_SUMMARY_DIM,
             config.d_model,
+            config.summary_mlp_layers,
         )
-        self.global_summary_projection = torch.nn.Linear(
+        self.global_summary_projection = _projection_mlp(
             GLOBAL_SUMMARY_DIM,
             config.d_model,
+            config.summary_mlp_layers,
         )
         self.encoder_bag = CardAwareEmbeddingBag(
             config.encoder_size,
@@ -289,8 +312,10 @@ class PTCGTransformer(torch.nn.Module):
             config.d_model,
             padding_idx=config.attack_count,
         )
-        self.option_numeric_projection = torch.nn.Linear(
-            OPTION_NUMERIC_DIM, config.d_model
+        self.option_numeric_projection = _projection_mlp(
+            OPTION_NUMERIC_DIM,
+            config.d_model,
+            config.option_numeric_mlp_layers,
         )
         self.attack_feature_projection = torch.nn.Linear(
             ATTACK_FEATURE_DIM, config.d_model
@@ -310,13 +335,14 @@ class PTCGTransformer(torch.nn.Module):
         self.decoder_fc = torch.nn.Linear(config.d_model, 1)
 
     def project_card_features(self) -> torch.Tensor:
-        projected = self.card_feature_projection(
-            self.card_feature_table
-        )
-        projected = F.pad(
-            projected,
-            (0, self.config.d_model - self.config.card_feature_dim),
-        )
+        if self.card_feature_projection is None:
+            projected = self.card_feature_table.new_zeros(
+                (self.config.card_count, self.config.d_model)
+            )
+        else:
+            projected = self.card_feature_projection(
+                self.card_feature_table
+            )
         # The last row is the sentinel used by every non-card bag index.
         return torch.cat(
             [

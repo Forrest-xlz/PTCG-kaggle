@@ -110,7 +110,9 @@ class ModelSettings:
     encoder_layers: int
     decoder_layers: int
     norm_mode: str
-    card_feature_ratio: float
+    summary_mlp_layers: int
+    card_mlp_layers: int
+    option_numeric_mlp_layers: int
 
 
 @dataclass(frozen=True)
@@ -322,11 +324,20 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError("encoder_layers and decoder_layers must be >= 1")
     if model.norm_mode not in {"prenorm", "postnorm"}:
         raise ValueError("model.norm_mode must be prenorm or postnorm")
-    if not 0 < model.card_feature_ratio <= 1:
-        raise ValueError("model.card_feature_ratio must be in (0, 1]")
-    if int(model.d_model * model.card_feature_ratio) < 1:
+    if type(model.summary_mlp_layers) is not int or model.summary_mlp_layers < 1:
         raise ValueError(
-            "model.card_feature_ratio * model.d_model must be at least 1"
+            "model.summary_mlp_layers must be an integer >= 1"
+        )
+    if type(model.card_mlp_layers) is not int or model.card_mlp_layers < 0:
+        raise ValueError(
+            "model.card_mlp_layers must be an integer >= 0"
+        )
+    if (
+        type(model.option_numeric_mlp_layers) is not int
+        or model.option_numeric_mlp_layers < 1
+    ):
+        raise ValueError(
+            "model.option_numeric_mlp_layers must be an integer >= 1"
         )
     if settings.wandb.enabled and not settings.wandb.project:
         raise ValueError("wandb.project is required when wandb.enabled is true")
@@ -671,7 +682,9 @@ def main() -> None:
         encoder_layers=model_cfg.encoder_layers,
         decoder_layers=model_cfg.decoder_layers,
         norm_mode=model_cfg.norm_mode,
-        card_feature_ratio=model_cfg.card_feature_ratio,
+        summary_mlp_layers=model_cfg.summary_mlp_layers,
+        card_mlp_layers=model_cfg.card_mlp_layers,
+        option_numeric_mlp_layers=model_cfg.option_numeric_mlp_layers,
     )
     invalid_card_ids = sorted(
         {
