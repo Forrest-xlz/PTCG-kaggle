@@ -132,36 +132,37 @@ Energy cards inside that region; decoder cards reuse the corresponding encoder
 region MLP. Setting `card_mlp_layers` to zero disables static-card embeddings
 while preserving all learned Card ID embeddings.
 
-The encoder has a fixed 26-token layout: eight bench slots per player, two
-active Pokémon, three dense summary tokens, separate discard tokens for both
-players, the own hand, remaining-deck estimate, and stadium. The own-player
-(69), opponent-player (71), and global/select (73) numeric summaries replace
-the old sparse summaries through independent `Linear(n, d_model)` projections.
-Missing bench slots remain in the fixed layout but are excluded from encoder
-self-attention and decoder cross-attention by a boolean key-padding mask.
-Prize counts, selection type, and selection context are one-hot encoded.
-`pokemon_appear_embedding` adds one shared three-state embedding (absent,
-present from an earlier turn, present this turn) to the 18 Bench/Active Pokemon
-tokens. Five `*_token_mlp_layers` settings control eight independent post-token
-MLPs: own/opponent Bench, Active, and discard plus own hand and own deck. The
-two sides share configured depths but not weights. `region_token_mlp_residual`
-selects `token + MLP(token)` or `MLP(token)` globally for these modules.
-Changing these features requires rebuilding the feature cache (schema 12), but
-does not require replay extraction again.
+The main encoder has a fixed 26-position outer layout: eight Bench positions
+per player, two Active positions, three dense summary positions, separate
+discard positions for both players, own hand, own known-deck list, and
+stadium. Each Bench/Active position first receives a dynamic component
+sequence: Pokemon Card, current HP, first-turn appearance state, Tool cards,
+and attached Energy cards. Discard, hand, and deck regions receive one token
+per physical card instance. Their internal Transformer depths are configured
+with the five `*_region_encoder_layers` settings; own and opponent modules have
+independent weights. A positive depth uses a CLS result for card zones and the
+Pokemon-card result for Bench/Active. A zero depth performs a masked sum.
+
+The own-player (69), opponent-player (71), and global/select (73) summaries use
+independent `MLP(n, d_model)` projections. Both the internal region encoders
+and the main encoder receive boolean padding masks. Missing Bench/Active,
+empty card zones, and absent stadium positions are therefore excluded from
+main self-attention and decoder cross-attention. Prize counts, selection type,
+and selection context are one-hot encoded. Rebuilding these explicit dynamic
+components requires rebuilding the feature cache (schema 13), but not replay
+extraction.
 
 The decoder stores each raw engine option once using five categorical fields
 (`option_type`, `select_context`, candidate Card ID, target Card ID, and Attack
-ID) plus the reference notebook's 16 numeric fields. Learned ID embeddings,
-the shared static-card projection, numeric projection, and static-attack
-projection are added in `d_model` space. Exact candidate action combinations
-are still enumerated up to 64, and their selected option embeddings are summed
-before the cross-attention-only decoder. The empty combination uses a learned
-no-action embedding. `model.action_mlp_layers` applies one shared
-`d_model -> d_model` MLP to every summed action embedding before
-cross-attention. Zero disables it; positive depths reuse
-`region_token_mlp_residual` to select residual or direct output. This Action
-MLP changes only model parameters, so it does not require replay extraction or
-feature-cache rebuilding.
+ID) plus the reference notebook's 16 numeric fields and derived one-hot fields.
+Each option is represented as six component tokens: type, context, candidate
+Card, target Card, Attack, and numeric features. Candidate/target tokens add
+their learned Card ID and static-card projections; the Attack token adds its
+learned ID and static-attack projections. `option_encoder_layers > 0` prepends
+a learned CLS token and runs a masked internal Transformer; zero uses a masked
+sum. Exact candidate action combinations are still enumerated up to 64 and sum
+their selected option embeddings before the cross-attention-only decoder. The
+empty combination uses a learned no-action embedding.
 
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the

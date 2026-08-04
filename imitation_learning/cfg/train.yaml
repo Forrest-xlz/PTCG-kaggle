@@ -55,13 +55,12 @@ model:
   card_mlp_scope: region        # shared or region-specific projection MLPs.
   option_numeric_mlp_layers: 1  # Decoder numeric-feature projection.
   pokemon_appear_embedding: true
-  bench_token_mlp_layers: 1     # Separate own/opponent weights.
-  active_token_mlp_layers: 1    # Separate own/opponent weights.
-  discard_token_mlp_layers: 1   # Separate own/opponent weights.
-  hand_token_mlp_layers: 1      # Own hand token only.
-  deck_token_mlp_layers: 1      # Own remaining-deck token only.
-  action_mlp_layers: 1          # Shared MLP after summing each action's options.
-  region_token_mlp_residual: true
+  bench_region_encoder_layers: 1    # Separate own/opponent weights.
+  active_region_encoder_layers: 1   # Separate own/opponent weights.
+  discard_region_encoder_layers: 1  # Separate own/opponent weights.
+  hand_region_encoder_layers: 1     # Own hand only.
+  deck_region_encoder_layers: 1     # Own known deck only.
+  option_encoder_layers: 1          # Shared by all raw options.
 
 wandb:
   enabled: true

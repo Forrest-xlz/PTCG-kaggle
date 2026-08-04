@@ -15,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from training.feature_cache import (
     ENCODER_WORDS,
-    POKEMON_ENCODER_TOKENS,
+    COMPONENT_AREA_CARD,
     GLOBAL_SUMMARY_DIM,
     OPPONENT_SUMMARY_DIM,
     OPTION_NUMERIC_DIM,
@@ -41,8 +41,7 @@ SIGNATURE = {
 
 
 def record(marker: int, action_count: int = 2) -> FeatureRecord:
-    encoder_offset = [0] * ENCODER_WORDS
-    encoder_offset[-1] = 1
+    encoder_component_offset = [0, 2] + [2] * (ENCODER_WORDS - 1)
     action_memberships = [[0, 1], [0]][:action_count]
     action_option_index = [
         index for action in action_memberships for index in action
@@ -53,12 +52,10 @@ def record(marker: int, action_count: int = 2) -> FeatureRecord:
             action_option_offset[-1] + len(action)
         )
     return FeatureRecord(
-        encoder_index=[marker, marker + 1],
-        encoder_value=[1.0, 0.25],
-        encoder_offset=encoder_offset,
-        encoder_pokemon_appear=(
-            [2, 1] + [0] * (POKEMON_ENCODER_TOKENS - 2)
-        ),
+        encoder_component_kind=[COMPONENT_AREA_CARD] * 2,
+        encoder_component_id=[marker, marker + 1],
+        encoder_component_value=[1.0, 1.0],
+        encoder_component_offset=encoder_component_offset,
         own_summary=[float(marker)] * OWN_SUMMARY_DIM,
         opponent_summary=[float(marker + 1)] * OPPONENT_SUMMARY_DIM,
         global_summary=[float(marker + 2)] * GLOBAL_SUMMARY_DIM,
@@ -114,14 +111,13 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
     try:
         assert len(shard) == 2
         sample = shard.sample(1)
-        np.testing.assert_array_equal(sample.encoder_index, [11, 12])
-        np.testing.assert_allclose(sample.encoder_value, [1.0, 0.25])
-        assert sample.encoder_value.dtype == np.float16
-        assert sample.encoder_offset.shape == (ENCODER_WORDS,)
+        np.testing.assert_array_equal(sample.encoder_component_id, [11, 12])
         np.testing.assert_array_equal(
-            sample.encoder_pokemon_appear,
-            [2, 1] + [0] * (POKEMON_ENCODER_TOKENS - 2),
+            sample.encoder_component_kind, [COMPONENT_AREA_CARD] * 2
         )
+        np.testing.assert_allclose(sample.encoder_component_value, [1.0, 1.0])
+        assert sample.encoder_component_value.dtype == np.float16
+        assert sample.encoder_component_offset.shape == (ENCODER_WORDS + 1,)
         assert sample.own_summary.shape == (OWN_SUMMARY_DIM,)
         assert sample.opponent_summary.shape == (OPPONENT_SUMMARY_DIM,)
         assert sample.global_summary.shape == (GLOBAL_SUMMARY_DIM,)
@@ -147,11 +143,11 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
         shard.close()
 
 
-def test_writer_rejects_encoder_index_outside_uint16(tmp_path: Path) -> None:
+def test_writer_rejects_component_id_outside_uint16(tmp_path: Path) -> None:
     writer = PackedShardWriter(tmp_path / "bad.cache", SIGNATURE, {})
     bad = record(7)
-    bad.encoder_index[0] = 65536
-    with pytest.raises(ValueError, match="encoder_index"):
+    bad.encoder_component_id[0] = 65536
+    with pytest.raises(ValueError, match="encoder_component_id"):
         writer.add(bad)
     writer.abort()
 
@@ -458,20 +454,18 @@ def test_collate_rebases_options_and_pads_action_offsets(tmp_path: Path) -> None
             )
         )
         batch = dataset.collate(index_batch)
-        assert batch.encoder_offset.shape == (2 * ENCODER_WORDS,)
-        assert batch.encoder_pokemon_appear.shape == (
-            2,
-            POKEMON_ENCODER_TOKENS,
-        )
+        assert batch.encoder_component_mask.shape[:2] == (2, ENCODER_WORDS)
+        assert batch.encoder_component_kind.shape == batch.encoder_component_mask.shape
         assert batch.own_summary.shape == (2, OWN_SUMMARY_DIM)
         assert batch.opponent_summary.shape == (2, OPPONENT_SUMMARY_DIM)
         assert batch.global_summary.shape == (2, GLOBAL_SUMMARY_DIM)
         assert batch.option_categorical.shape == (4, 5)
         assert batch.option_numeric.shape == (4, OPTION_NUMERIC_DIM)
         assert batch.action_option_offset.shape == (2 * 64 + 1,)
-        assert batch.encoder_index.dtype == np.int32
+        assert batch.encoder_component_id.dtype == np.uint16
+        assert batch.encoder_component_kind.dtype == np.uint8
         assert batch.action_option_index.dtype == np.int64
-        assert batch.encoder_value.dtype == np.float16
+        assert batch.encoder_component_value.dtype == np.float16
         assert batch.option_numeric.dtype == np.float16
         assert batch.target.dtype == np.int64
         assert batch.action_count.dtype == np.int64

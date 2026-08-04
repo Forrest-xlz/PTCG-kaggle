@@ -1,4 +1,4 @@
-"""Sparse feature construction adapted from the competition notebook.
+"""Feature construction adapted from the competition notebook.
 
 The public functions accept the typed objects returned by
 ``cg.api.to_observation_class``.  Keeping this module separate makes feature
@@ -32,7 +32,6 @@ from model.card_features import (
 
 
 ENCODER_TOKENS = 26
-POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
 OPPONENT_SUMMARY_DIM = 71
 GLOBAL_SUMMARY_DIM = 73
@@ -53,21 +52,29 @@ OPTION_CARD_TYPE_OFFSET = 62
 OPTION_SUPER_EFFECTIVE_OFFSET = 70
 OPTION_RESISTED_OFFSET = 73
 
+COMPONENT_POKEMON_CARD = 0
+COMPONENT_HP = 1
+COMPONENT_APPEAR = 2
+COMPONENT_TOOL_CARD = 3
+COMPONENT_ENERGY_CARD = 4
+COMPONENT_AREA_CARD = 5
+COMPONENT_KIND_COUNT = 6
+
 
 @dataclass
-class SparseVector:
-    index: list[int] = field(default_factory=list)
+class EncoderComponents:
+    kind: list[int] = field(default_factory=list)
+    entity_id: list[int] = field(default_factory=list)
     value: list[float] = field(default_factory=list)
-    offset: list[int] = field(default_factory=list)
-    pos: int = 0
+    offset: list[int] = field(default_factory=lambda: [0])
 
-    def add(self, index: int, value: float) -> None:
-        if float(value) != 0.0:
-            self.index.append(self.pos + int(index)); self.value.append(float(value))
-    def add_pos(self, count: int) -> None: self.pos += count
-    def add_single(self, value: float) -> None:
-        self.add(0, value); self.pos += 1
-    def word_start(self) -> None: self.offset.append(len(self.index))
+    def add(self, kind: int, entity_id: int = 0, value: float = 1.0) -> None:
+        self.kind.append(int(kind))
+        self.entity_id.append(int(entity_id))
+        self.value.append(float(value))
+
+    def region_end(self) -> None:
+        self.offset.append(len(self.kind))
 
 
 @dataclass(frozen=True)
@@ -87,8 +94,7 @@ class NumericFeatureCatalog:
 
 @dataclass(frozen=True)
 class EncoderFeatures:
-    sparse: SparseVector
-    pokemon_appear: list[int]
+    components: EncoderComponents
     own_summary: list[float]
     opponent_summary: list[float]
     global_summary: list[float]
@@ -154,23 +160,51 @@ def enumerate_actions(
     return actions
 
 
-def _add_card(sv: SparseVector, card: Any, card_count: int) -> None:
-    if card is not None: sv.add(card.id, 1)
-    sv.add_pos(card_count)
+def _add_component_card(
+    components: EncoderComponents,
+    kind: int,
+    card: Any,
+    card_count: int,
+) -> None:
+    if card is None:
+        return
+    card_id = int(card.id)
+    if 0 <= card_id < card_count:
+        components.add(kind, card_id)
 
 
-def _add_cards(sv: SparseVector, cards: Any, weight: float, card_count: int) -> None:
-    if cards is not None:
-        for card in cards: sv.add(card.id, weight)
-    sv.add_pos(card_count)
+def _add_component_cards(
+    components: EncoderComponents,
+    kind: int,
+    cards: Any,
+    card_count: int,
+) -> None:
+    for card in cards or []:
+        _add_component_card(components, kind, card, card_count)
 
 
-def _add_pokemon(sv: SparseVector, poke: Any, card_count: int) -> None:
-    if poke is None:
-        sv.add_single(1); sv.add_pos(1 + 3 * card_count); return
-    sv.add_single(0); sv.add_single(poke.hp / 400)
-    _add_card(sv, poke, card_count); _add_cards(sv, poke.tools, 1, card_count)
-    _add_cards(sv, poke.energyCards, .5, card_count)
+def _add_pokemon_components(
+    components: EncoderComponents,
+    pokemon: Any | None,
+    card_count: int,
+) -> None:
+    if pokemon is None:
+        return
+    _add_component_card(
+        components, COMPONENT_POKEMON_CARD, pokemon, card_count
+    )
+    components.add(COMPONENT_HP, value=float(pokemon.hp) / 400.0)
+    appear = 2 if bool(getattr(pokemon, "appearThisTurn", False)) else 1
+    components.add(COMPONENT_APPEAR, appear)
+    _add_component_cards(
+        components, COMPONENT_TOOL_CARD, pokemon.tools, card_count
+    )
+    _add_component_cards(
+        components,
+        COMPONENT_ENERGY_CARD,
+        pokemon.energyCards,
+        card_count,
+    )
 
 
 def _active(player: Any) -> Any | None:
@@ -500,13 +534,13 @@ def encoder_features(
     numeric_catalog: NumericFeatureCatalog | None = None,
 ) -> EncoderFeatures:
     catalog = numeric_catalog or _default_numeric_catalog(card_count)
-    state, yours, sparse = obs.current, obs.current.yourIndex, SparseVector()
+    state = obs.current
+    yours = obs.current.yourIndex
+    components = EncoderComponents()
     relative_players = [
         state.players[yours],
         state.players[1 - yours],
     ]
-    pokemon_appear = []
-
     for player in relative_players:
         for slot in range(8):
             pokemon = (
@@ -514,56 +548,53 @@ def encoder_features(
                 if slot < len(player.bench)
                 else None
             )
-            pokemon_appear.append(
-                0 if pokemon is None
-                else 2 if bool(pokemon.appearThisTurn)
-                else 1
-            )
-            sparse.word_start()
-            position = sparse.pos
-            _add_pokemon(
-                sparse,
-                pokemon,
-                card_count,
-            )
-            if slot != 7:
-                sparse.pos = position
+            _add_pokemon_components(components, pokemon, card_count)
+            components.region_end()
     for player in relative_players:
         pokemon = _active(player)
-        pokemon_appear.append(
-            0 if pokemon is None
-            else 2 if bool(pokemon.appearThisTurn)
-            else 1
-        )
-        sparse.word_start()
-        _add_pokemon(sparse, pokemon, card_count)
+        _add_pokemon_components(components, pokemon, card_count)
+        components.region_end()
 
     # Dense own and opponent summary placeholders.
-    sparse.word_start()
-    sparse.word_start()
+    components.region_end()
+    components.region_end()
 
-    sparse.word_start()
-    _add_cards(sparse, relative_players[0].discard, 0.25, card_count)
-    sparse.word_start()
-    _add_cards(sparse, relative_players[1].discard, 0.25, card_count)
-    sparse.word_start()
-    _add_cards(sparse, relative_players[0].hand, 0.25, card_count)
-    sparse.word_start()
+    _add_component_cards(
+        components,
+        COMPONENT_AREA_CARD,
+        relative_players[0].discard,
+        card_count,
+    )
+    components.region_end()
+    _add_component_cards(
+        components,
+        COMPONENT_AREA_CARD,
+        relative_players[1].discard,
+        card_count,
+    )
+    components.region_end()
+    _add_component_cards(
+        components,
+        COMPONENT_AREA_CARD,
+        relative_players[0].hand,
+        card_count,
+    )
+    components.region_end()
     for card_id in deck:
-        sparse.add(card_id, 0.25)
-    sparse.add_pos(card_count)
-    sparse.word_start()
-    _add_cards(sparse, state.stadium, 1.0, card_count)
+        card_id = int(card_id)
+        if 0 <= card_id < card_count:
+            components.add(COMPONENT_AREA_CARD, card_id)
+    components.region_end()
+    _add_component_cards(
+        components, COMPONENT_AREA_CARD, state.stadium, card_count
+    )
+    components.region_end()
 
     # Dense global summary placeholder.
-    sparse.word_start()
-    if len(sparse.offset) != ENCODER_TOKENS:
+    components.region_end()
+    if len(components.offset) != ENCODER_TOKENS + 1:
         raise RuntimeError(
-            f"encoder produced {len(sparse.offset)} tokens"
-        )
-    if len(pokemon_appear) != POKEMON_ENCODER_TOKENS:
-        raise RuntimeError(
-            "encoder Pokemon appear state must contain 18 values"
+            f"encoder produced {len(components.offset) - 1} regions"
         )
 
     own_summary = _player_summary(relative_players[0], catalog)
@@ -579,8 +610,7 @@ def encoder_features(
     if len(opponent_summary) != OPPONENT_SUMMARY_DIM:
         raise RuntimeError("opponent summary must contain 62 values")
     return EncoderFeatures(
-        sparse=sparse,
-        pokemon_appear=pokemon_appear,
+        components=components,
         own_summary=own_summary,
         opponent_summary=opponent_summary,
         global_summary=_global_summary(obs, yours),

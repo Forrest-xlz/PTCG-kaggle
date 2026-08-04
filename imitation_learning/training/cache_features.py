@@ -89,7 +89,7 @@ def feature_signature(config: ModelConfig) -> dict:
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
         "encoder_tokens": ENCODER_WORDS,
-        "encoder_layout": "numeric-summary-26-appear-v2",
+        "encoder_layout": "explicit-region-components-v1",
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_layout": "option-components-original16-plus-one-hot-v5",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,
@@ -127,10 +127,10 @@ def _prepare_record(
     )
     return (
         FeatureRecord(
-            encoder_index=encoder.sparse.index,
-            encoder_value=encoder.sparse.value,
-            encoder_offset=encoder.sparse.offset,
-            encoder_pokemon_appear=encoder.pokemon_appear,
+            encoder_component_kind=encoder.components.kind,
+            encoder_component_id=encoder.components.entity_id,
+            encoder_component_value=encoder.components.value,
+            encoder_component_offset=encoder.components.offset,
             own_summary=encoder.own_summary,
             opponent_summary=encoder.opponent_summary,
             global_summary=encoder.global_summary,

@@ -14,9 +14,15 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 12
+CACHE_SCHEMA_VERSION = 13
 ENCODER_WORDS = 26
-POKEMON_ENCODER_TOKENS = 18
+COMPONENT_POKEMON_CARD = 0
+COMPONENT_HP = 1
+COMPONENT_APPEAR = 2
+COMPONENT_TOOL_CARD = 3
+COMPONENT_ENERGY_CARD = 4
+COMPONENT_AREA_CARD = 5
+COMPONENT_KIND_COUNT = 6
 OWN_SUMMARY_DIM = 69
 OPPONENT_SUMMARY_DIM = 71
 GLOBAL_SUMMARY_DIM = 73
@@ -26,11 +32,11 @@ MAX_ACTIONS = 64
 ALIGNMENT = 64
 
 SECTION_DTYPES = {
-    "encoder_index": np.dtype("<u2"),
-    "encoder_value": np.dtype("<f2"),
-    "encoder_ptr": np.dtype("<u4"),
-    "encoder_offset": np.dtype("<u2"),
-    "encoder_pokemon_appear": np.dtype("u1"),
+    "encoder_component_kind": np.dtype("u1"),
+    "encoder_component_id": np.dtype("<u2"),
+    "encoder_component_value": np.dtype("<f2"),
+    "encoder_component_ptr": np.dtype("<u4"),
+    "encoder_component_offset": np.dtype("<u2"),
     "own_summary": np.dtype("<f2"),
     "opponent_summary": np.dtype("<f2"),
     "global_summary": np.dtype("<f2"),
@@ -50,10 +56,10 @@ SECTION_DTYPES = {
 
 @dataclass(slots=True)
 class FeatureRecord:
-    encoder_index: list[int]
-    encoder_value: list[float]
-    encoder_offset: list[int]
-    encoder_pokemon_appear: list[int]
+    encoder_component_kind: list[int]
+    encoder_component_id: list[int]
+    encoder_component_value: list[float]
+    encoder_component_offset: list[int]
     own_summary: list[float]
     opponent_summary: list[float]
     global_summary: list[float]
@@ -69,10 +75,10 @@ class FeatureRecord:
 
 @dataclass(frozen=True, slots=True)
 class FeatureView:
-    encoder_index: np.ndarray
-    encoder_value: np.ndarray
-    encoder_offset: np.ndarray
-    encoder_pokemon_appear: np.ndarray
+    encoder_component_kind: np.ndarray
+    encoder_component_id: np.ndarray
+    encoder_component_value: np.ndarray
+    encoder_component_offset: np.ndarray
     own_summary: np.ndarray
     opponent_summary: np.ndarray
     global_summary: np.ndarray
@@ -93,10 +99,10 @@ class IndexBatch:
 
 @dataclass(frozen=True, slots=True)
 class CachedBatch:
-    encoder_index: np.ndarray
-    encoder_value: np.ndarray
-    encoder_offset: np.ndarray
-    encoder_pokemon_appear: np.ndarray
+    encoder_component_kind: np.ndarray
+    encoder_component_id: np.ndarray
+    encoder_component_value: np.ndarray
+    encoder_component_mask: np.ndarray
     own_summary: np.ndarray
     opponent_summary: np.ndarray
     global_summary: np.ndarray
@@ -225,13 +231,13 @@ class PackedShardWriter:
         self._counts = {name: 0 for name in SECTION_DTYPES}
         self._samples = 0
         self._buffered_samples = 0
-        self._encoder_nnz = 0
+        self._encoder_component_count = 0
         self._option_count = 0
         self._action_option_nnz = 0
         self._action_offset_count = 0
         self._closed = False
 
-        self._append("encoder_ptr", 0)
+        self._append("encoder_component_ptr", 0)
         self._append("option_ptr", 0)
         self._append("action_option_ptr", 0)
         self._append("action_option_offset_ptr", 0)
@@ -242,23 +248,30 @@ class PackedShardWriter:
     def add(self, record: FeatureRecord) -> None:
         if self._closed:
             raise RuntimeError("cannot add to a closed cache writer")
-        if len(record.encoder_index) != len(record.encoder_value):
-            raise ValueError("encoder_index and encoder_value lengths differ")
-        if len(record.encoder_offset) != ENCODER_WORDS:
-            raise ValueError(
-                f"encoder_offset must contain {ENCODER_WORDS} words"
-            )
-        if len(record.encoder_pokemon_appear) != POKEMON_ENCODER_TOKENS:
-            raise ValueError(
-                "encoder_pokemon_appear must contain 18 values"
-            )
-        if any(
-            value < 0 or value > 2
-            for value in record.encoder_pokemon_appear
+        component_count = len(record.encoder_component_kind)
+        if not (
+            component_count == len(record.encoder_component_id)
+            == len(record.encoder_component_value)
         ):
+            raise ValueError("encoder component array lengths differ")
+        if len(record.encoder_component_offset) != ENCODER_WORDS + 1:
             raise ValueError(
-                "encoder_pokemon_appear values must be in [0, 2]"
+                f"encoder_component_offset must contain {ENCODER_WORDS + 1} boundaries"
             )
+        component_offsets = np.asarray(
+            record.encoder_component_offset, dtype=np.int64
+        )
+        if (
+            component_offsets[0] != 0
+            or component_offsets[-1] != component_count
+            or np.any(component_offsets[1:] < component_offsets[:-1])
+        ):
+            raise ValueError("encoder_component_offset boundaries are invalid")
+        if any(
+            kind < 0 or kind >= COMPONENT_KIND_COUNT
+            for kind in record.encoder_component_kind
+        ):
+            raise ValueError("encoder_component_kind contains an invalid value")
         _validate_dense_summary("own_summary", record.own_summary, OWN_SUMMARY_DIM)
         _validate_dense_summary(
             "opponent_summary", record.opponent_summary, OPPONENT_SUMMARY_DIM
@@ -298,8 +311,21 @@ class PackedShardWriter:
         if not 0 <= int(record.deck_key) <= np.iinfo(np.uint64).max:
             raise ValueError("deck_key must fit uint64")
 
-        _validate_unsigned("encoder_index", record.encoder_index, np.iinfo(np.uint16).max)
-        _validate_unsigned("encoder_offset", record.encoder_offset, np.iinfo(np.uint16).max)
+        _validate_unsigned(
+            "encoder_component_kind",
+            record.encoder_component_kind,
+            np.iinfo(np.uint8).max,
+        )
+        _validate_unsigned(
+            "encoder_component_id",
+            record.encoder_component_id,
+            np.iinfo(np.uint16).max,
+        )
+        _validate_unsigned(
+            "encoder_component_offset",
+            record.encoder_component_offset,
+            np.iinfo(np.uint16).max,
+        )
         _validate_unsigned(
             "option_categorical",
             record.option_categorical,
@@ -316,10 +342,12 @@ class PackedShardWriter:
             np.iinfo(np.uint16).max,
         )
 
-        encoder_values = np.asarray(record.encoder_value, dtype=np.float32)
-        narrowed = encoder_values.astype(np.float16)
-        if not np.all(np.isfinite(encoder_values)) or not np.all(np.isfinite(narrowed)):
-            raise ValueError("encoder_value contains a non-finite or float16-overflow value")
+        component_values = np.asarray(
+            record.encoder_component_value, dtype=np.float32
+        )
+        narrowed = component_values.astype(np.float16)
+        if not np.all(np.isfinite(component_values)) or not np.all(np.isfinite(narrowed)):
+            raise ValueError("encoder_component_value contains a non-finite or float16-overflow value")
         option_numeric = np.asarray(record.option_numeric, dtype=np.float32)
         narrowed_numeric = option_numeric.astype(np.float16)
         if not np.all(np.isfinite(option_numeric)) or not np.all(
@@ -329,7 +357,7 @@ class PackedShardWriter:
                 "option_numeric contains a non-finite or float16-overflow value"
             )
 
-        next_encoder_nnz = self._encoder_nnz + len(record.encoder_index)
+        next_component_count = self._encoder_component_count + component_count
         next_option_count = self._option_count + option_count
         next_action_option_nnz = (
             self._action_option_nnz + len(record.action_option_index)
@@ -339,18 +367,24 @@ class PackedShardWriter:
         )
         uint32_max = np.iinfo(np.uint32).max
         if max(
-            next_encoder_nnz,
+            next_component_count,
             next_option_count,
             next_action_option_nnz,
             next_action_offset_count,
         ) > uint32_max:
             raise ValueError("cache shard pointer exceeds uint32 range")
 
-        self._buffers["encoder_index"].extend(record.encoder_index)
-        self._buffers["encoder_value"].extend(record.encoder_value)
-        self._buffers["encoder_offset"].extend(record.encoder_offset)
-        self._buffers["encoder_pokemon_appear"].extend(
-            record.encoder_pokemon_appear
+        self._buffers["encoder_component_kind"].extend(
+            record.encoder_component_kind
+        )
+        self._buffers["encoder_component_id"].extend(
+            record.encoder_component_id
+        )
+        self._buffers["encoder_component_value"].extend(
+            record.encoder_component_value
+        )
+        self._buffers["encoder_component_offset"].extend(
+            record.encoder_component_offset
         )
         self._buffers["own_summary"].extend(record.own_summary)
         self._buffers["opponent_summary"].extend(record.opponent_summary)
@@ -366,11 +400,13 @@ class PackedShardWriter:
             record.action_option_offset
         )
 
-        self._encoder_nnz = next_encoder_nnz
+        self._encoder_component_count = next_component_count
         self._option_count = next_option_count
         self._action_option_nnz = next_action_option_nnz
         self._action_offset_count = next_action_offset_count
-        self._append("encoder_ptr", self._encoder_nnz)
+        self._append(
+            "encoder_component_ptr", self._encoder_component_count
+        )
         self._append("option_ptr", self._option_count)
         self._append("action_option_ptr", self._action_option_nnz)
         self._append(
@@ -516,8 +552,10 @@ class PackedShard:
             )
 
         self.samples = int(self.metadata["samples"])
-        if self.arrays["encoder_ptr"].size != self.samples + 1:
-            raise ValueError("encoder_ptr length does not match sample count")
+        if self.arrays["encoder_component_ptr"].size != self.samples + 1:
+            raise ValueError(
+                "encoder_component_ptr length does not match sample count"
+            )
         for name in (
             "option_ptr",
             "action_option_ptr",
@@ -527,19 +565,17 @@ class PackedShard:
                 raise ValueError(
                     f"{name} length does not match sample count"
                 )
-        if self.arrays["encoder_offset"].size != self.samples * ENCODER_WORDS:
-            raise ValueError("encoder_offset length does not match sample count")
         if (
-            self.arrays["encoder_pokemon_appear"].size
-            != self.samples * POKEMON_ENCODER_TOKENS
+            self.arrays["encoder_component_offset"].size
+            != self.samples * (ENCODER_WORDS + 1)
         ):
             raise ValueError(
-                "encoder_pokemon_appear length does not match sample count"
+                "encoder_component_offset length does not match sample count"
             )
-        if np.any(self.arrays["encoder_pokemon_appear"] > 2):
-            raise ValueError(
-                "encoder_pokemon_appear contains an invalid value"
-            )
+        if np.any(
+            self.arrays["encoder_component_kind"] >= COMPONENT_KIND_COUNT
+        ):
+            raise ValueError("encoder_component_kind contains an invalid value")
         dense_widths = {
             "own_summary": OWN_SUMMARY_DIM,
             "opponent_summary": OPPONENT_SUMMARY_DIM,
@@ -565,13 +601,21 @@ class PackedShard:
         ):
             raise ValueError("option feature arrays do not align with option_ptr")
         pointer_targets = {
-            "encoder_ptr": self.arrays["encoder_index"].size,
+            "encoder_component_ptr": self.arrays[
+                "encoder_component_id"
+            ].size,
             "option_ptr": option_count,
             "action_option_ptr": self.arrays["action_option_index"].size,
             "action_option_offset_ptr": self.arrays[
                 "action_option_offset"
             ].size,
         }
+        component_count = self.arrays["encoder_component_id"].size
+        if (
+            self.arrays["encoder_component_kind"].size != component_count
+            or self.arrays["encoder_component_value"].size != component_count
+        ):
+            raise ValueError("encoder component arrays do not align")
         for pointer_name, final_count in pointer_targets.items():
             pointer = self.arrays[pointer_name]
             if int(pointer[0]) != 0 or int(pointer[-1]) != final_count:
@@ -597,8 +641,12 @@ class PackedShard:
         local_id = int(local_id)
         if not 0 <= local_id < self.samples:
             raise IndexError(local_id)
-        encoder_start = int(self.arrays["encoder_ptr"][local_id])
-        encoder_end = int(self.arrays["encoder_ptr"][local_id + 1])
+        encoder_start = int(
+            self.arrays["encoder_component_ptr"][local_id]
+        )
+        encoder_end = int(
+            self.arrays["encoder_component_ptr"][local_id + 1]
+        )
         option_start = int(self.arrays["option_ptr"][local_id])
         option_end = int(self.arrays["option_ptr"][local_id + 1])
         action_start = int(self.arrays["action_option_ptr"][local_id])
@@ -609,22 +657,25 @@ class PackedShard:
         offset_end = int(
             self.arrays["action_option_offset_ptr"][local_id + 1]
         )
-        encoder_word_start = local_id * ENCODER_WORDS
-        pokemon_start = local_id * POKEMON_ENCODER_TOKENS
+        encoder_word_start = local_id * (ENCODER_WORDS + 1)
         own_start = local_id * OWN_SUMMARY_DIM
         opponent_start = local_id * OPPONENT_SUMMARY_DIM
         global_start = local_id * GLOBAL_SUMMARY_DIM
         return FeatureView(
-            encoder_index=self.arrays["encoder_index"][encoder_start:encoder_end],
-            encoder_value=self.arrays["encoder_value"][encoder_start:encoder_end],
-            encoder_offset=self.arrays["encoder_offset"][
-                encoder_word_start : encoder_word_start + ENCODER_WORDS
-            ],
-            encoder_pokemon_appear=self.arrays[
-                "encoder_pokemon_appear"
+            encoder_component_kind=self.arrays[
+                "encoder_component_kind"
+            ][encoder_start:encoder_end],
+            encoder_component_id=self.arrays[
+                "encoder_component_id"
+            ][encoder_start:encoder_end],
+            encoder_component_value=self.arrays[
+                "encoder_component_value"
+            ][encoder_start:encoder_end],
+            encoder_component_offset=self.arrays[
+                "encoder_component_offset"
             ][
-                pokemon_start:
-                pokemon_start + POKEMON_ENCODER_TOKENS
+                encoder_word_start:
+                encoder_word_start + ENCODER_WORDS + 1
             ],
             own_summary=self.arrays["own_summary"][
                 own_start : own_start + OWN_SUMMARY_DIM
@@ -1005,15 +1056,14 @@ class MmapFeatureDataset:
     def collate(self, index_batch: IndexBatch) -> CachedBatch:
         global_ids = np.asarray(index_batch.global_ids, dtype=np.int64)
         shard_ids = np.searchsorted(self.ends, global_ids, side="right")
-        encoder_indices = []
-        encoder_values = []
+        encoder_component_kinds = []
+        encoder_component_ids = []
+        encoder_component_values = []
         option_categorical = []
         option_numeric = []
         action_option_indices = []
-        encoder_offsets = np.empty(global_ids.size * ENCODER_WORDS, dtype=np.int32)
-        encoder_pokemon_appear = np.empty(
-            (global_ids.size, POKEMON_ENCODER_TOKENS),
-            dtype=np.uint8,
+        encoder_component_offsets = np.empty(
+            (global_ids.size, ENCODER_WORDS + 1), dtype=np.int32
         )
         own_summaries = np.empty(
             (global_ids.size, OWN_SUMMARY_DIM), dtype=np.float16
@@ -1036,9 +1086,9 @@ class MmapFeatureDataset:
         for row, (global_id, shard_id) in enumerate(zip(global_ids, shard_ids)):
             local_id = int(global_id - self.starts[int(shard_id)])
             sample = self.shards[int(shard_id)].sample(local_id)
-            encoder_indices.append(sample.encoder_index)
-            encoder_values.append(sample.encoder_value)
-            encoder_pokemon_appear[row] = sample.encoder_pokemon_appear
+            encoder_component_kinds.append(sample.encoder_component_kind)
+            encoder_component_ids.append(sample.encoder_component_id)
+            encoder_component_values.append(sample.encoder_component_value)
             option_categorical.append(sample.option_categorical)
             option_numeric.append(sample.option_numeric)
             action_option_indices.append(
@@ -1048,9 +1098,9 @@ class MmapFeatureDataset:
             opponent_summaries[row] = sample.opponent_summary
             global_summaries[row] = sample.global_summary
 
-            enc_slice = slice(row * ENCODER_WORDS, (row + 1) * ENCODER_WORDS)
-            encoder_offsets[enc_slice] = (
-                sample.encoder_offset.astype(np.int32) + encoder_base
+            encoder_component_offsets[row] = (
+                sample.encoder_component_offset.astype(np.int32)
+                + encoder_base
             )
             action_start = row * MAX_ACTIONS
             action_end = action_start + sample.action_count + 1
@@ -1065,15 +1115,37 @@ class MmapFeatureDataset:
             )
             targets[row] = sample.target
             action_counts[row] = sample.action_count
-            encoder_base += int(sample.encoder_index.size)
+            encoder_base += int(sample.encoder_component_id.size)
             option_base += int(sample.option_categorical.shape[0])
             action_option_base += int(sample.action_option_index.size)
 
+        flat_kind = np.concatenate(encoder_component_kinds)
+        flat_id = np.concatenate(encoder_component_ids)
+        flat_value = np.concatenate(encoder_component_values)
+        widths = np.diff(encoder_component_offsets, axis=1)
+        max_width = max(1, int(widths.max()))
+        component_shape = (global_ids.size, ENCODER_WORDS, max_width)
+        padded_kind = np.zeros(component_shape, dtype=np.uint8)
+        padded_id = np.zeros(component_shape, dtype=np.uint16)
+        padded_value = np.zeros(component_shape, dtype=np.float16)
+        padded_mask = np.ones(component_shape, dtype=np.bool_)
+        for row in range(global_ids.size):
+            for word in range(ENCODER_WORDS):
+                start = int(encoder_component_offsets[row, word])
+                end = int(encoder_component_offsets[row, word + 1])
+                width = end - start
+                if width == 0:
+                    continue
+                padded_kind[row, word, :width] = flat_kind[start:end]
+                padded_id[row, word, :width] = flat_id[start:end]
+                padded_value[row, word, :width] = flat_value[start:end]
+                padded_mask[row, word, :width] = False
+
         return CachedBatch(
-            encoder_index=np.concatenate(encoder_indices).astype(np.int32, copy=False),
-            encoder_value=np.concatenate(encoder_values).astype(np.float16, copy=False),
-            encoder_offset=encoder_offsets,
-            encoder_pokemon_appear=encoder_pokemon_appear,
+            encoder_component_kind=padded_kind,
+            encoder_component_id=padded_id,
+            encoder_component_value=padded_value,
+            encoder_component_mask=padded_mask,
             own_summary=own_summaries,
             opponent_summary=opponent_summaries,
             global_summary=global_summaries,
