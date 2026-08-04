@@ -107,8 +107,8 @@ Discard, hand, and known-deck regions contain one token per physical card:
 - Depth zero: do not create CLS; sum the Card tokens. An empty collection
   returns a zero vector.
 - Positive depth: prepend a learned CLS owned by that region module, apply the
-  masked internal encoder, and return the CLS output. An empty collection is a
-  one-token CLS sequence.
+  masked internal encoder, and return the CLS output. Empty collections are
+  zero-filled for batching and masked from the outer encoder.
 
 Own and opponent discard use independent encoders and CLS parameters. Own hand
 and own deck each have their own encoder and CLS. These component sequences are
@@ -156,6 +156,14 @@ The main Transformer encoder processes these 26 tokens as before. Each summed
 candidate action independently cross-attends to that main encoder output; there
 is still no self-attention between candidate actions.
 
+Both encoder levels use per-sample dynamic masks. Internal encoders mask every
+padding component; depth-zero aggregation uses the same validity information
+for a masked sum. The outer 26-token mask excludes missing Bench positions,
+missing Active positions, empty discard/hand/deck regions, and an absent
+stadium. Player summaries and the global summary are always valid. Decoder
+cross-attention reuses this outer mask. Emptiness counts already available in
+the summary features remain the canonical representation of an empty region.
+
 ## Training and Kaggle Inference
 
 Training YAML, checkpoint serialization, model construction, and the embedded
@@ -178,6 +186,7 @@ Behavioral tests cover:
 - masking invariance when padded components change;
 - independent own/opponent parameters;
 - missing and empty regions;
+- dynamic outer masking for missing Active and empty card/stadium regions;
 - preservation of duplicate card instances;
 - YAML validation and checkpoint configuration round trips;
 - cache-schema rejection of stale shards; and
