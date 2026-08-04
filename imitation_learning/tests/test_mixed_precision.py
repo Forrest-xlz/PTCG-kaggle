@@ -139,6 +139,37 @@ def test_region_token_mlp_residual_switch() -> None:
         torch.full_like(token, 2),
     )
 
+
+def test_action_mlp_depth_zero_is_identity() -> None:
+    model = tiny_model(action_mlp_layers=0)
+    actions = torch.randn((3, 8))
+
+    assert model.action_mlp is None
+    assert model.apply_action_mlp(actions) is actions
+
+
+@pytest.mark.parametrize(
+    ("residual", "expected_value"),
+    [(True, 3.0), (False, 2.0)],
+)
+def test_action_mlp_reuses_region_residual_switch(
+    residual: bool,
+    expected_value: float,
+) -> None:
+    model = tiny_model(
+        action_mlp_layers=1,
+        region_token_mlp_residual=residual,
+    )
+    model.action_mlp.weight.data.zero_()
+    model.action_mlp.bias.data.fill_(2)
+    actions = torch.ones((3, 8))
+
+    torch.testing.assert_close(
+        model.apply_action_mlp(actions),
+        torch.full_like(actions, expected_value),
+    )
+
+
 def test_invalid_normalization_mode_is_rejected() -> None:
     with pytest.raises(ValueError, match="norm_mode"):
         tiny_model("sandwich")

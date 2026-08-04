@@ -105,6 +105,7 @@ class ModelConfig:
     discard_token_mlp_layers: int = 0
     hand_token_mlp_layers: int = 0
     deck_token_mlp_layers: int = 0
+    action_mlp_layers: int = 0
     region_token_mlp_residual: bool = True
 
     def __post_init__(self) -> None:
@@ -126,6 +127,7 @@ class ModelConfig:
             "discard_token_mlp_layers",
             "hand_token_mlp_layers",
             "deck_token_mlp_layers",
+            "action_mlp_layers",
         ):
             value = getattr(self, name)
             if type(value) is not int or value < 0:
@@ -526,6 +528,7 @@ class PTCGTransformer(torch.nn.Module):
         self.no_action_embedding = torch.nn.Parameter(
             torch.zeros(config.d_model)
         )
+        self.action_mlp = self._make_token_mlp(config.action_mlp_layers)
         self.decoder = torch.nn.ModuleList(
             DecoderLayer(
                 config.d_model,
@@ -557,6 +560,9 @@ class PTCGTransformer(torch.nn.Module):
         if self.config.region_token_mlp_residual:
             return tokens + transformed
         return transformed
+
+    def apply_action_mlp(self, actions: torch.Tensor) -> torch.Tensor:
+        return self._apply_token_mlp(actions, self.action_mlp)
 
     def apply_region_token_mlps(
         self,
@@ -846,6 +852,7 @@ class PTCGTransformer(torch.nn.Module):
             action_option_index,
             action_option_offset,
         )
+        policy = self.apply_action_mlp(policy)
         policy = policy.reshape(batch_size, -1, cfg.d_model).transpose(0, 1)
         # Every decoder layer cross-attends to the same encoder output. There
         # is deliberately no self-attention between candidate actions.

@@ -60,6 +60,7 @@ model:
   discard_token_mlp_layers: 1   # Separate own/opponent weights.
   hand_token_mlp_layers: 1      # Own hand token only.
   deck_token_mlp_layers: 1      # Own remaining-deck token only.
+  action_mlp_layers: 1          # Shared MLP after summing each action's options.
   region_token_mlp_residual: true
 
 wandb:

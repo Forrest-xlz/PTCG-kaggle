@@ -156,8 +156,12 @@ the shared static-card projection, numeric projection, and static-attack
 projection are added in `d_model` space. Exact candidate action combinations
 are still enumerated up to 64, and their selected option embeddings are summed
 before the cross-attention-only decoder. The empty combination uses a learned
-no-action embedding. This decoder change requires rebuilding only the feature
-cache; existing winner-only extracted JSONL files remain valid.
+no-action embedding. `model.action_mlp_layers` applies one shared
+`d_model -> d_model` MLP to every summed action embedding before
+cross-attention. Zero disables it; positive depths reuse
+`region_token_mlp_residual` to select residual or direct output. This Action
+MLP changes only model parameters, so it does not require replay extraction or
+feature-cache rebuilding.
 
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the

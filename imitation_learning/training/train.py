@@ -120,6 +120,7 @@ class ModelSettings:
     discard_token_mlp_layers: int = 0
     hand_token_mlp_layers: int = 0
     deck_token_mlp_layers: int = 0
+    action_mlp_layers: int = 0
     region_token_mlp_residual: bool = True
 
 
@@ -354,6 +355,7 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         "discard_token_mlp_layers",
         "hand_token_mlp_layers",
         "deck_token_mlp_layers",
+        "action_mlp_layers",
     ):
         value = getattr(model, name)
         if type(value) is not int or value < 0:
@@ -727,6 +729,7 @@ def main() -> None:
         discard_token_mlp_layers=model_cfg.discard_token_mlp_layers,
         hand_token_mlp_layers=model_cfg.hand_token_mlp_layers,
         deck_token_mlp_layers=model_cfg.deck_token_mlp_layers,
+        action_mlp_layers=model_cfg.action_mlp_layers,
         region_token_mlp_residual=model_cfg.region_token_mlp_residual,
     )
     invalid_card_ids = sorted(

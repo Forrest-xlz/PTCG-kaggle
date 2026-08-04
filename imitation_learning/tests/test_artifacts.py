@@ -59,6 +59,7 @@ def test_train_yaml_uses_validation_and_step_configuration() -> None:
         "discard_token_mlp_layers",
         "hand_token_mlp_layers",
         "deck_token_mlp_layers",
+        "action_mlp_layers",
     ):
         assert config["model"][name] >= 0
     assert config["model"]["region_token_mlp_residual"] is True
@@ -90,6 +91,7 @@ def test_submission_notebook_is_valid_json() -> None:
     assert "own_bench_token_mlp" in source
     assert "opponent_bench_token_mlp" in source
     assert "region_token_mlp_residual" in source
+    assert "apply_action_mlp" in source
     assert "build_card_feature_table" in source
     assert "build_attack_feature_table" in source
     assert "projected_card_features" in source
