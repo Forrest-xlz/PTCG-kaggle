@@ -14,8 +14,9 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 11
+CACHE_SCHEMA_VERSION = 12
 ENCODER_WORDS = 26
+POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
 OPPONENT_SUMMARY_DIM = 71
 GLOBAL_SUMMARY_DIM = 73
@@ -29,6 +30,7 @@ SECTION_DTYPES = {
     "encoder_value": np.dtype("<f2"),
     "encoder_ptr": np.dtype("<u4"),
     "encoder_offset": np.dtype("<u2"),
+    "encoder_pokemon_appear": np.dtype("u1"),
     "own_summary": np.dtype("<f2"),
     "opponent_summary": np.dtype("<f2"),
     "global_summary": np.dtype("<f2"),
@@ -51,6 +53,7 @@ class FeatureRecord:
     encoder_index: list[int]
     encoder_value: list[float]
     encoder_offset: list[int]
+    encoder_pokemon_appear: list[int]
     own_summary: list[float]
     opponent_summary: list[float]
     global_summary: list[float]
@@ -69,6 +72,7 @@ class FeatureView:
     encoder_index: np.ndarray
     encoder_value: np.ndarray
     encoder_offset: np.ndarray
+    encoder_pokemon_appear: np.ndarray
     own_summary: np.ndarray
     opponent_summary: np.ndarray
     global_summary: np.ndarray
@@ -92,6 +96,7 @@ class CachedBatch:
     encoder_index: np.ndarray
     encoder_value: np.ndarray
     encoder_offset: np.ndarray
+    encoder_pokemon_appear: np.ndarray
     own_summary: np.ndarray
     opponent_summary: np.ndarray
     global_summary: np.ndarray
@@ -243,6 +248,17 @@ class PackedShardWriter:
             raise ValueError(
                 f"encoder_offset must contain {ENCODER_WORDS} words"
             )
+        if len(record.encoder_pokemon_appear) != POKEMON_ENCODER_TOKENS:
+            raise ValueError(
+                "encoder_pokemon_appear must contain 18 values"
+            )
+        if any(
+            value < 0 or value > 2
+            for value in record.encoder_pokemon_appear
+        ):
+            raise ValueError(
+                "encoder_pokemon_appear values must be in [0, 2]"
+            )
         _validate_dense_summary("own_summary", record.own_summary, OWN_SUMMARY_DIM)
         _validate_dense_summary(
             "opponent_summary", record.opponent_summary, OPPONENT_SUMMARY_DIM
@@ -333,6 +349,9 @@ class PackedShardWriter:
         self._buffers["encoder_index"].extend(record.encoder_index)
         self._buffers["encoder_value"].extend(record.encoder_value)
         self._buffers["encoder_offset"].extend(record.encoder_offset)
+        self._buffers["encoder_pokemon_appear"].extend(
+            record.encoder_pokemon_appear
+        )
         self._buffers["own_summary"].extend(record.own_summary)
         self._buffers["opponent_summary"].extend(record.opponent_summary)
         self._buffers["global_summary"].extend(record.global_summary)
@@ -510,6 +529,17 @@ class PackedShard:
                 )
         if self.arrays["encoder_offset"].size != self.samples * ENCODER_WORDS:
             raise ValueError("encoder_offset length does not match sample count")
+        if (
+            self.arrays["encoder_pokemon_appear"].size
+            != self.samples * POKEMON_ENCODER_TOKENS
+        ):
+            raise ValueError(
+                "encoder_pokemon_appear length does not match sample count"
+            )
+        if np.any(self.arrays["encoder_pokemon_appear"] > 2):
+            raise ValueError(
+                "encoder_pokemon_appear contains an invalid value"
+            )
         dense_widths = {
             "own_summary": OWN_SUMMARY_DIM,
             "opponent_summary": OPPONENT_SUMMARY_DIM,
@@ -580,6 +610,7 @@ class PackedShard:
             self.arrays["action_option_offset_ptr"][local_id + 1]
         )
         encoder_word_start = local_id * ENCODER_WORDS
+        pokemon_start = local_id * POKEMON_ENCODER_TOKENS
         own_start = local_id * OWN_SUMMARY_DIM
         opponent_start = local_id * OPPONENT_SUMMARY_DIM
         global_start = local_id * GLOBAL_SUMMARY_DIM
@@ -588,6 +619,12 @@ class PackedShard:
             encoder_value=self.arrays["encoder_value"][encoder_start:encoder_end],
             encoder_offset=self.arrays["encoder_offset"][
                 encoder_word_start : encoder_word_start + ENCODER_WORDS
+            ],
+            encoder_pokemon_appear=self.arrays[
+                "encoder_pokemon_appear"
+            ][
+                pokemon_start:
+                pokemon_start + POKEMON_ENCODER_TOKENS
             ],
             own_summary=self.arrays["own_summary"][
                 own_start : own_start + OWN_SUMMARY_DIM
@@ -974,6 +1011,10 @@ class MmapFeatureDataset:
         option_numeric = []
         action_option_indices = []
         encoder_offsets = np.empty(global_ids.size * ENCODER_WORDS, dtype=np.int32)
+        encoder_pokemon_appear = np.empty(
+            (global_ids.size, POKEMON_ENCODER_TOKENS),
+            dtype=np.uint8,
+        )
         own_summaries = np.empty(
             (global_ids.size, OWN_SUMMARY_DIM), dtype=np.float16
         )
@@ -997,6 +1038,7 @@ class MmapFeatureDataset:
             sample = self.shards[int(shard_id)].sample(local_id)
             encoder_indices.append(sample.encoder_index)
             encoder_values.append(sample.encoder_value)
+            encoder_pokemon_appear[row] = sample.encoder_pokemon_appear
             option_categorical.append(sample.option_categorical)
             option_numeric.append(sample.option_numeric)
             action_option_indices.append(
@@ -1031,6 +1073,7 @@ class MmapFeatureDataset:
             encoder_index=np.concatenate(encoder_indices).astype(np.int32, copy=False),
             encoder_value=np.concatenate(encoder_values).astype(np.float16, copy=False),
             encoder_offset=encoder_offsets,
+            encoder_pokemon_appear=encoder_pokemon_appear,
             own_summary=own_summaries,
             opponent_summary=opponent_summaries,
             global_summary=global_summaries,

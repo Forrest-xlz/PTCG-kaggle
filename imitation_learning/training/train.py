@@ -114,6 +114,13 @@ class ModelSettings:
     card_mlp_layers: int
     option_numeric_mlp_layers: int
     card_mlp_scope: str = "shared"
+    pokemon_appear_embedding: bool = False
+    bench_token_mlp_layers: int = 0
+    active_token_mlp_layers: int = 0
+    discard_token_mlp_layers: int = 0
+    hand_token_mlp_layers: int = 0
+    deck_token_mlp_layers: int = 0
+    region_token_mlp_residual: bool = True
 
 
 @dataclass(frozen=True)
@@ -337,6 +344,24 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError(
             "model.card_mlp_scope must be shared or region"
         )
+    if type(model.pokemon_appear_embedding) is not bool:
+        raise ValueError(
+            "model.pokemon_appear_embedding must be true or false"
+        )
+    for name in (
+        "bench_token_mlp_layers",
+        "active_token_mlp_layers",
+        "discard_token_mlp_layers",
+        "hand_token_mlp_layers",
+        "deck_token_mlp_layers",
+    ):
+        value = getattr(model, name)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"model.{name} must be an integer >= 0")
+    if type(model.region_token_mlp_residual) is not bool:
+        raise ValueError(
+            "model.region_token_mlp_residual must be true or false"
+        )
     if (
         type(model.option_numeric_mlp_layers) is not int
         or model.option_numeric_mlp_layers < 1
@@ -383,7 +408,7 @@ def feature_signature(config: ModelConfig) -> dict:
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
         "encoder_tokens": ENCODER_WORDS,
-        "encoder_layout": "numeric-summary-26-v1",
+        "encoder_layout": "numeric-summary-26-appear-v2",
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_layout": "option-components-original16-plus-one-hot-v5",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,
@@ -436,6 +461,11 @@ def _forward_batch(
         _to_device(batch.encoder_index, device),
         _to_device(batch.encoder_value, device, dtype=torch.float32),
         _to_device(batch.encoder_offset, device),
+        _to_device(
+            batch.encoder_pokemon_appear,
+            device,
+            dtype=torch.long,
+        ),
         _to_device(batch.own_summary, device, dtype=torch.float32),
         _to_device(batch.opponent_summary, device, dtype=torch.float32),
         _to_device(batch.global_summary, device, dtype=torch.float32),
@@ -691,6 +721,13 @@ def main() -> None:
         card_mlp_layers=model_cfg.card_mlp_layers,
         option_numeric_mlp_layers=model_cfg.option_numeric_mlp_layers,
         card_mlp_scope=model_cfg.card_mlp_scope,
+        pokemon_appear_embedding=model_cfg.pokemon_appear_embedding,
+        bench_token_mlp_layers=model_cfg.bench_token_mlp_layers,
+        active_token_mlp_layers=model_cfg.active_token_mlp_layers,
+        discard_token_mlp_layers=model_cfg.discard_token_mlp_layers,
+        hand_token_mlp_layers=model_cfg.hand_token_mlp_layers,
+        deck_token_mlp_layers=model_cfg.deck_token_mlp_layers,
+        region_token_mlp_residual=model_cfg.region_token_mlp_residual,
     )
     invalid_card_ids = sorted(
         {

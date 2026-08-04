@@ -32,6 +32,7 @@ from model.card_features import (
 
 
 ENCODER_TOKENS = 26
+POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
 OPPONENT_SUMMARY_DIM = 71
 GLOBAL_SUMMARY_DIM = 73
@@ -87,6 +88,7 @@ class NumericFeatureCatalog:
 @dataclass(frozen=True)
 class EncoderFeatures:
     sparse: SparseVector
+    pokemon_appear: list[int]
     own_summary: list[float]
     opponent_summary: list[float]
     global_summary: list[float]
@@ -503,21 +505,38 @@ def encoder_features(
         state.players[yours],
         state.players[1 - yours],
     ]
+    pokemon_appear = []
 
     for player in relative_players:
         for slot in range(8):
+            pokemon = (
+                player.bench[slot]
+                if slot < len(player.bench)
+                else None
+            )
+            pokemon_appear.append(
+                0 if pokemon is None
+                else 2 if bool(pokemon.appearThisTurn)
+                else 1
+            )
             sparse.word_start()
             position = sparse.pos
             _add_pokemon(
                 sparse,
-                player.bench[slot] if slot < len(player.bench) else None,
+                pokemon,
                 card_count,
             )
             if slot != 7:
                 sparse.pos = position
     for player in relative_players:
+        pokemon = _active(player)
+        pokemon_appear.append(
+            0 if pokemon is None
+            else 2 if bool(pokemon.appearThisTurn)
+            else 1
+        )
         sparse.word_start()
-        _add_pokemon(sparse, _active(player), card_count)
+        _add_pokemon(sparse, pokemon, card_count)
 
     # Dense own and opponent summary placeholders.
     sparse.word_start()
@@ -542,6 +561,10 @@ def encoder_features(
         raise RuntimeError(
             f"encoder produced {len(sparse.offset)} tokens"
         )
+    if len(pokemon_appear) != POKEMON_ENCODER_TOKENS:
+        raise RuntimeError(
+            "encoder Pokemon appear state must contain 18 values"
+        )
 
     own_summary = _player_summary(relative_players[0], catalog)
     own_summary.extend(
@@ -557,6 +580,7 @@ def encoder_features(
         raise RuntimeError("opponent summary must contain 62 values")
     return EncoderFeatures(
         sparse=sparse,
+        pokemon_appear=pokemon_appear,
         own_summary=own_summary,
         opponent_summary=opponent_summary,
         global_summary=_global_summary(obs, yours),

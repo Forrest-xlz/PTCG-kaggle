@@ -14,7 +14,10 @@ from model.network import OPTION_NUMERIC_DIM, ModelConfig, PTCGTransformer
 from training.precision import PrecisionContext
 
 
-def tiny_model(norm_mode: str = "postnorm") -> PTCGTransformer:
+def tiny_model(
+    norm_mode: str = "postnorm",
+    **config_overrides,
+) -> PTCGTransformer:
     return PTCGTransformer(
         ModelConfig(
             card_count=8,
@@ -26,6 +29,7 @@ def tiny_model(norm_mode: str = "postnorm") -> PTCGTransformer:
             encoder_layers=1,
             decoder_layers=1,
             norm_mode=norm_mode,
+            **config_overrides,
         ),
         torch.zeros((8, 54), dtype=torch.float32),
         torch.zeros((4, 14), dtype=torch.float32),
@@ -38,9 +42,10 @@ def test_normalization_modes_preserve_policy_shape(norm_mode: str) -> None:
     model = tiny_model(norm_mode).eval()
     encoder_index = torch.tensor([1, 2], dtype=torch.int32)
     encoder_value = torch.tensor([1.0, 0.5])
-    encoder_offset = torch.tensor([0, 1] + [2] * 18, dtype=torch.int32)
-    own_summary = torch.zeros((1, 60))
-    opponent_summary = torch.zeros((1, 62))
+    encoder_offset = torch.tensor([0, 1] + [2] * 24, dtype=torch.int32)
+    pokemon_appear = torch.zeros((1, 18), dtype=torch.long)
+    own_summary = torch.zeros((1, 69))
+    opponent_summary = torch.zeros((1, 71))
     global_summary = torch.zeros((1, 73))
     option_categorical = torch.tensor(
         [[8, 0, 1, 8, 4], [13, 0, 8, 8, 1]], dtype=torch.long
@@ -52,6 +57,7 @@ def test_normalization_modes_preserve_policy_shape(norm_mode: str) -> None:
         encoder_index,
         encoder_value,
         encoder_offset,
+        pokemon_appear,
         own_summary,
         opponent_summary,
         global_summary,
@@ -74,12 +80,64 @@ def test_combination_actions_sum_options_and_use_learned_empty_embedding() -> No
         torch.tensor([0, 1, 0]),
         torch.tensor([0, 2, 3, 3]),
     )
-
     torch.testing.assert_close(
         combined,
         torch.tensor([[3.0] * 8, [1.0] * 8, [4.0] * 8]),
     )
 
+
+def test_pokemon_appear_embedding_and_region_mlps_are_independent() -> None:
+    model = tiny_model(
+        pokemon_appear_embedding=True,
+        bench_token_mlp_layers=1,
+        active_token_mlp_layers=1,
+        discard_token_mlp_layers=1,
+        hand_token_mlp_layers=1,
+        deck_token_mlp_layers=1,
+    )
+
+    assert model.pokemon_appear_embedding.weight.shape == (3, 8)
+    assert torch.count_nonzero(model.pokemon_appear_embedding.weight[0]) == 0
+    assert (
+        model.own_bench_token_mlp.weight
+        is not model.opponent_bench_token_mlp.weight
+    )
+    assert (
+        model.own_active_token_mlp.weight
+        is not model.opponent_active_token_mlp.weight
+    )
+    assert (
+        model.own_discard_token_mlp.weight
+        is not model.opponent_discard_token_mlp.weight
+    )
+
+
+def test_region_token_mlp_residual_switch() -> None:
+    residual_model = tiny_model(
+        hand_token_mlp_layers=1,
+        region_token_mlp_residual=True,
+    )
+    direct_model = tiny_model(
+        hand_token_mlp_layers=1,
+        region_token_mlp_residual=False,
+    )
+    token = torch.ones((1, 1, 8))
+    for model in (residual_model, direct_model):
+        model.own_hand_token_mlp.weight.data.zero_()
+        model.own_hand_token_mlp.bias.data.fill_(2)
+
+    torch.testing.assert_close(
+        residual_model._apply_token_mlp(
+            token, residual_model.own_hand_token_mlp
+        ),
+        torch.full_like(token, 3),
+    )
+    torch.testing.assert_close(
+        direct_model._apply_token_mlp(
+            token, direct_model.own_hand_token_mlp
+        ),
+        torch.full_like(token, 2),
+    )
 
 def test_invalid_normalization_mode_is_rejected() -> None:
     with pytest.raises(ValueError, match="norm_mode"):

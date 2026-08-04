@@ -10,6 +10,7 @@ from model.card_features import CARD_FEATURE_DIM
 
 
 ENCODER_TOKENS = 26
+POKEMON_ENCODER_TOKENS = 18
 BENCH_SLOTS = 8
 PLAYER_BENCH_COUNT_INDEX = 10
 OWN_SUMMARY_DIM = 69
@@ -98,6 +99,13 @@ class ModelConfig:
     card_mlp_layers: int = 1
     option_numeric_mlp_layers: int = 1
     card_mlp_scope: str = "shared"
+    pokemon_appear_embedding: bool = False
+    bench_token_mlp_layers: int = 0
+    active_token_mlp_layers: int = 0
+    discard_token_mlp_layers: int = 0
+    hand_token_mlp_layers: int = 0
+    deck_token_mlp_layers: int = 0
+    region_token_mlp_residual: bool = True
 
     def __post_init__(self) -> None:
         if self.norm_mode not in {"prenorm", "postnorm"}:
@@ -110,6 +118,20 @@ class ModelConfig:
             raise ValueError("card_mlp_scope must be shared or region")
         if self.option_numeric_mlp_layers < 1:
             raise ValueError("option_numeric_mlp_layers must be >= 1")
+        if type(self.pokemon_appear_embedding) is not bool:
+            raise ValueError("pokemon_appear_embedding must be a boolean")
+        for name in (
+            "bench_token_mlp_layers",
+            "active_token_mlp_layers",
+            "discard_token_mlp_layers",
+            "hand_token_mlp_layers",
+            "deck_token_mlp_layers",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} must be an integer >= 0")
+        if type(self.region_token_mlp_residual) is not bool:
+            raise ValueError("region_token_mlp_residual must be a boolean")
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -418,6 +440,35 @@ class PTCGTransformer(torch.nn.Module):
             index_to_card_id=encoder_card_ids,
             index_to_card_region=encoder_card_regions,
         )
+        self.pokemon_appear_embedding = (
+            torch.nn.Embedding(3, config.d_model, padding_idx=0)
+            if config.pokemon_appear_embedding
+            else None
+        )
+        self.own_bench_token_mlp = self._make_token_mlp(
+            config.bench_token_mlp_layers
+        )
+        self.opponent_bench_token_mlp = self._make_token_mlp(
+            config.bench_token_mlp_layers
+        )
+        self.own_active_token_mlp = self._make_token_mlp(
+            config.active_token_mlp_layers
+        )
+        self.opponent_active_token_mlp = self._make_token_mlp(
+            config.active_token_mlp_layers
+        )
+        self.own_discard_token_mlp = self._make_token_mlp(
+            config.discard_token_mlp_layers
+        )
+        self.opponent_discard_token_mlp = self._make_token_mlp(
+            config.discard_token_mlp_layers
+        )
+        self.own_hand_token_mlp = self._make_token_mlp(
+            config.hand_token_mlp_layers
+        )
+        self.own_deck_token_mlp = self._make_token_mlp(
+            config.deck_token_mlp_layers
+        )
         self.register_buffer(
             "own_area_card_regions",
             torch.tensor(_OWN_AREA_REGIONS, dtype=torch.long),
@@ -485,6 +536,63 @@ class PTCGTransformer(torch.nn.Module):
             for _ in range(config.decoder_layers)
         )
         self.decoder_fc = torch.nn.Linear(config.d_model, 1)
+
+    def _make_token_mlp(self, layers: int) -> torch.nn.Module | None:
+        if layers == 0:
+            return None
+        return _projection_mlp(
+            self.config.d_model,
+            self.config.d_model,
+            layers,
+        )
+
+    def _apply_token_mlp(
+        self,
+        tokens: torch.Tensor,
+        mlp: torch.nn.Module | None,
+    ) -> torch.Tensor:
+        if mlp is None:
+            return tokens
+        transformed = mlp(tokens)
+        if self.config.region_token_mlp_residual:
+            return tokens + transformed
+        return transformed
+
+    def apply_region_token_mlps(
+        self,
+        encoded: torch.Tensor,
+    ) -> torch.Tensor:
+        return torch.cat(
+            (
+                self._apply_token_mlp(
+                    encoded[:, 0:8], self.own_bench_token_mlp
+                ),
+                self._apply_token_mlp(
+                    encoded[:, 8:16], self.opponent_bench_token_mlp
+                ),
+                self._apply_token_mlp(
+                    encoded[:, 16:17], self.own_active_token_mlp
+                ),
+                self._apply_token_mlp(
+                    encoded[:, 17:18], self.opponent_active_token_mlp
+                ),
+                encoded[:, 18:20],
+                self._apply_token_mlp(
+                    encoded[:, 20:21], self.own_discard_token_mlp
+                ),
+                self._apply_token_mlp(
+                    encoded[:, 21:22], self.opponent_discard_token_mlp
+                ),
+                self._apply_token_mlp(
+                    encoded[:, 22:23], self.own_hand_token_mlp
+                ),
+                self._apply_token_mlp(
+                    encoded[:, 23:24], self.own_deck_token_mlp
+                ),
+                encoded[:, 24:26],
+            ),
+            dim=1,
+        )
 
     def project_card_features(self) -> torch.Tensor:
         if (
@@ -670,6 +778,7 @@ class PTCGTransformer(torch.nn.Module):
         index_encoder,
         value_encoder,
         offset_encoder,
+        pokemon_appear,
         own_summary,
         opponent_summary,
         global_summary,
@@ -693,6 +802,21 @@ class PTCGTransformer(torch.nn.Module):
             ENCODER_TOKENS,
             cfg.d_model,
         )
+        if self.pokemon_appear_embedding is not None:
+            expected = (batch_size, POKEMON_ENCODER_TOKENS)
+            if tuple(pokemon_appear.shape) != expected:
+                raise ValueError(
+                    "pokemon_appear must have shape "
+                    f"{expected}, found {tuple(pokemon_appear.shape)}"
+                )
+            pokemon_tokens = (
+                encoded[:, :POKEMON_ENCODER_TOKENS]
+                + self.pokemon_appear_embedding(pokemon_appear)
+            )
+            encoded = torch.cat(
+                (pokemon_tokens, encoded[:, POKEMON_ENCODER_TOKENS:]),
+                dim=1,
+            )
         encoded = torch.cat(
             (
                 encoded[:, :18],
@@ -702,7 +826,8 @@ class PTCGTransformer(torch.nn.Module):
                 self.global_summary_projection(global_summary).unsqueeze(1),
             ),
             dim=1,
-        ).transpose(0, 1)
+        )
+        encoded = self.apply_region_token_mlps(encoded).transpose(0, 1)
         encoder_padding_mask = self._encoder_padding_mask(
             own_summary, opponent_summary
         )

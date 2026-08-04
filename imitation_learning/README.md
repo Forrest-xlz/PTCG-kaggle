@@ -140,7 +140,13 @@ the old sparse summaries through independent `Linear(n, d_model)` projections.
 Missing bench slots remain in the fixed layout but are excluded from encoder
 self-attention and decoder cross-attention by a boolean key-padding mask.
 Prize counts, selection type, and selection context are one-hot encoded.
-Changing this layout requires rebuilding the feature cache (schema 11), but
+`pokemon_appear_embedding` adds one shared three-state embedding (absent,
+present from an earlier turn, present this turn) to the 18 Bench/Active Pokemon
+tokens. Five `*_token_mlp_layers` settings control eight independent post-token
+MLPs: own/opponent Bench, Active, and discard plus own hand and own deck. The
+two sides share configured depths but not weights. `region_token_mlp_residual`
+selects `token + MLP(token)` or `MLP(token)` globally for these modules.
+Changing these features requires rebuilding the feature cache (schema 12), but
 does not require replay extraction again.
 
 The decoder stores each raw engine option once using five categorical fields

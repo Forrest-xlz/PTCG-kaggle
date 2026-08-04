@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from training.feature_cache import (
     ENCODER_WORDS,
+    POKEMON_ENCODER_TOKENS,
     GLOBAL_SUMMARY_DIM,
     OPPONENT_SUMMARY_DIM,
     OPTION_NUMERIC_DIM,
@@ -55,6 +56,9 @@ def record(marker: int, action_count: int = 2) -> FeatureRecord:
         encoder_index=[marker, marker + 1],
         encoder_value=[1.0, 0.25],
         encoder_offset=encoder_offset,
+        encoder_pokemon_appear=(
+            [2, 1] + [0] * (POKEMON_ENCODER_TOKENS - 2)
+        ),
         own_summary=[float(marker)] * OWN_SUMMARY_DIM,
         opponent_summary=[float(marker + 1)] * OPPONENT_SUMMARY_DIM,
         global_summary=[float(marker + 2)] * GLOBAL_SUMMARY_DIM,
@@ -114,6 +118,10 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
         np.testing.assert_allclose(sample.encoder_value, [1.0, 0.25])
         assert sample.encoder_value.dtype == np.float16
         assert sample.encoder_offset.shape == (ENCODER_WORDS,)
+        np.testing.assert_array_equal(
+            sample.encoder_pokemon_appear,
+            [2, 1] + [0] * (POKEMON_ENCODER_TOKENS - 2),
+        )
         assert sample.own_summary.shape == (OWN_SUMMARY_DIM,)
         assert sample.opponent_summary.shape == (OPPONENT_SUMMARY_DIM,)
         assert sample.global_summary.shape == (GLOBAL_SUMMARY_DIM,)
@@ -451,6 +459,10 @@ def test_collate_rebases_options_and_pads_action_offsets(tmp_path: Path) -> None
         )
         batch = dataset.collate(index_batch)
         assert batch.encoder_offset.shape == (2 * ENCODER_WORDS,)
+        assert batch.encoder_pokemon_appear.shape == (
+            2,
+            POKEMON_ENCODER_TOKENS,
+        )
         assert batch.own_summary.shape == (2, OWN_SUMMARY_DIM)
         assert batch.opponent_summary.shape == (2, OPPONENT_SUMMARY_DIM)
         assert batch.global_summary.shape == (2, GLOBAL_SUMMARY_DIM)

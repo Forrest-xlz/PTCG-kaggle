@@ -64,6 +64,7 @@ class CountingModel(torch.nn.Module):
         encoder_index,
         encoder_value,
         encoder_offset,
+        pokemon_appear,
         own_summary,
         opponent_summary,
         global_summary,
@@ -84,6 +85,9 @@ class DummyDataset:
             encoder_index=np.zeros(size, dtype=np.int32),
             encoder_value=np.ones(size, dtype=np.float16),
             encoder_offset=np.zeros(size * ENCODER_WORDS, dtype=np.int32),
+            encoder_pokemon_appear=np.zeros(
+                (size, 18), dtype=np.uint8
+            ),
             own_summary=np.zeros((size, OWN_SUMMARY_DIM), dtype=np.float16),
             opponent_summary=np.zeros(
                 (size, OPPONENT_SUMMARY_DIM), dtype=np.float16

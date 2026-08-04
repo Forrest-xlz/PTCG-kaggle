@@ -52,6 +52,16 @@ def test_train_yaml_uses_validation_and_step_configuration() -> None:
     assert config["model"]["norm_mode"] in {"prenorm", "postnorm"}
     assert config["model"]["card_mlp_layers"] >= 0
     assert config["model"]["card_mlp_scope"] in {"shared", "region"}
+    assert config["model"]["pokemon_appear_embedding"] is True
+    for name in (
+        "bench_token_mlp_layers",
+        "active_token_mlp_layers",
+        "discard_token_mlp_layers",
+        "hand_token_mlp_layers",
+        "deck_token_mlp_layers",
+    ):
+        assert config["model"][name] >= 0
+    assert config["model"]["region_token_mlp_residual"] is True
 
 
 def test_submission_notebook_is_valid_json() -> None:
@@ -74,6 +84,12 @@ def test_submission_notebook_is_valid_json() -> None:
     assert "card_mlp_scope" in source
     assert "card_feature_projections" in source
     assert "index_to_card_region" in source
+    assert "pokemon_appear_embedding" in source
+    assert "pokemon_appear" in source
+    assert "apply_region_token_mlps" in source
+    assert "own_bench_token_mlp" in source
+    assert "opponent_bench_token_mlp" in source
+    assert "region_token_mlp_residual" in source
     assert "build_card_feature_table" in source
     assert "build_attack_feature_table" in source
     assert "projected_card_features" in source
