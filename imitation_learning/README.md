@@ -121,11 +121,10 @@ optimizer steps. Epoch checkpointing remains controlled by
 `model.norm_mode` accepts `postnorm` or `prenorm`. PreNorm applies
 normalization before every encoder/decoder sublayer and adds a final encoder
 LayerNorm; PostNorm preserves the original notebook residual ordering.
-`model.summary_mlp_layers`, `model.card_mlp_layers`, and
-`model.option_numeric_mlp_layers` control the projection depths for the three
-numeric-summary tokens, static-card features, and decoder option-numeric
-features. The first layer maps the input width to `d_model`; additional layers
-are `ReLU -> Linear(d_model, d_model)`. `model.card_mlp_scope: shared` keeps one
+`model.summary_mlp_layers` and `model.card_mlp_layers` control the projection
+depths for numeric-summary tokens and static-card features. The first layer
+maps the input width to `d_model`; additional layers are
+`ReLU -> Linear(d_model, d_model)`. `model.card_mlp_scope: shared` keeps one
 static-card MLP for the whole model. `model.card_mlp_scope: region` gives each
 semantic card region its own MLP while sharing it among Pokemon, Tools, and
 Energy cards inside that region; decoder cards reuse the corresponding encoder
@@ -146,18 +145,21 @@ tokens. Five `*_token_mlp_layers` settings control eight independent post-token
 MLPs: own/opponent Bench, Active, and discard plus own hand and own deck. The
 two sides share configured depths but not weights. `region_token_mlp_residual`
 selects `token + MLP(token)` or `MLP(token)` globally for these modules.
-Changing these features requires rebuilding the feature cache (schema 12), but
+Changing these features requires rebuilding the feature cache (schema 13), but
 does not require replay extraction again.
 
-The decoder stores each raw engine option once using five categorical fields
-(`option_type`, `select_context`, candidate Card ID, target Card ID, and Attack
-ID) plus the reference notebook's 16 numeric fields. Learned ID embeddings,
-the shared static-card projection, numeric projection, and static-attack
-projection are added in `d_model` space. Exact candidate action combinations
-are still enumerated up to 64, and their selected option embeddings are summed
-before the cross-attention-only decoder. The empty combination uses a learned
-no-action embedding. This decoder change requires rebuilding only the feature
-cache; existing winner-only extracted JSONL files remain valid.
+The decoder stores each raw engine option once using eleven categorical fields:
+option type, selection context, candidate/target Card IDs, Attack ID, number,
+Energy count, player relation, area, in-play area, and special condition. Two
+routed Pokemon dynamic blocks (46 values total) and six attack-matchup values
+are projected separately and masked to exact zero when absent. Learned ID and
+categorical embeddings, static Card/Attack projections, and these dynamic
+projections are summed in `d_model` space. `model.option_token_mlp_layers: 0`
+uses that sum directly; positive values apply the standard projection MLP to
+each completed option token. Exact candidate action combinations are still
+enumerated up to 64, and their option tokens are summed before the
+cross-attention-only decoder. Rebuild the feature cache after this change;
+existing winner-only extracted JSONL files remain valid.
 
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the

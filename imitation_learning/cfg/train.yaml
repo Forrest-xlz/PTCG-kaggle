@@ -53,7 +53,7 @@ model:
   summary_mlp_layers: 1         # Own/opponent/global summary projections.
   card_mlp_layers: 1            # 0 disables every static-card embedding.
   card_mlp_scope: region        # shared or region-specific projection MLPs.
-  option_numeric_mlp_layers: 1  # Decoder numeric-feature projection.
+  option_token_mlp_layers: 0    # 0=sum embeddings; >0 applies post-sum d_model MLP.
   pokemon_appear_embedding: true
   bench_token_mlp_layers: 1     # Separate own/opponent weights.
   active_token_mlp_layers: 1    # Separate own/opponent weights.

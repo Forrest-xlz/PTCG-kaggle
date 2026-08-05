@@ -18,11 +18,17 @@ OPPONENT_SUMMARY_DIM = 71
 GLOBAL_SUMMARY_DIM = 73
 OPTION_TYPE_COUNT = 17
 OPTION_CONTEXT_COUNT = 49
-OPTION_NUMERIC_DIM = 76
+OPTION_VALUE_COUNT = 63
+OPTION_PLAYER_RELATION_COUNT = 3
+OPTION_AREA_COUNT = 13
+OPTION_SPECIAL_CONDITION_COUNT = 6
+POKEMON_DYNAMIC_WORD_DIM = 23
+POKEMON_DYNAMIC_DIM = 46
+ATTACK_DYNAMIC_DIM = 6
 
-OPTION_PLAYER_OFFSET = 16
-OPTION_AREA_OFFSET = 19
-OPTION_IN_PLAY_AREA_OFFSET = 32
+OPTION_PLAYER_RELATION_INDEX = 7
+OPTION_AREA_INDEX = 8
+OPTION_IN_PLAY_AREA_INDEX = 9
 
 OPTION_TYPE_PLAY = 7
 OPTION_TYPE_ATTACH = 8
@@ -97,7 +103,7 @@ class ModelConfig:
     norm_mode: str = "postnorm"
     summary_mlp_layers: int = 1
     card_mlp_layers: int = 1
-    option_numeric_mlp_layers: int = 1
+    option_token_mlp_layers: int = 0
     card_mlp_scope: str = "shared"
     pokemon_appear_embedding: bool = False
     bench_token_mlp_layers: int = 0
@@ -116,8 +122,11 @@ class ModelConfig:
             raise ValueError("card_mlp_layers must be >= 0")
         if self.card_mlp_scope not in {"shared", "region"}:
             raise ValueError("card_mlp_scope must be shared or region")
-        if self.option_numeric_mlp_layers < 1:
-            raise ValueError("option_numeric_mlp_layers must be >= 1")
+        if (
+            type(self.option_token_mlp_layers) is not int
+            or self.option_token_mlp_layers < 0
+        ):
+            raise ValueError("option_token_mlp_layers must be an integer >= 0")
         if type(self.pokemon_appear_embedding) is not bool:
             raise ValueError("pokemon_appear_embedding must be a boolean")
         for name in (
@@ -515,10 +524,32 @@ class PTCGTransformer(torch.nn.Module):
             config.d_model,
             padding_idx=config.attack_count,
         )
-        self.option_numeric_projection = _projection_mlp(
-            OPTION_NUMERIC_DIM,
-            config.d_model,
-            config.option_numeric_mlp_layers,
+        self.option_number_embedding = torch.nn.Embedding(
+            OPTION_VALUE_COUNT, config.d_model, padding_idx=0
+        )
+        self.option_count_embedding = torch.nn.Embedding(
+            OPTION_VALUE_COUNT, config.d_model, padding_idx=0
+        )
+        self.option_player_relation_embedding = torch.nn.Embedding(
+            OPTION_PLAYER_RELATION_COUNT, config.d_model, padding_idx=0
+        )
+        self.option_area_embedding = torch.nn.Embedding(
+            OPTION_AREA_COUNT, config.d_model, padding_idx=0
+        )
+        self.option_in_play_area_embedding = torch.nn.Embedding(
+            OPTION_AREA_COUNT, config.d_model, padding_idx=0
+        )
+        self.option_special_condition_embedding = torch.nn.Embedding(
+            OPTION_SPECIAL_CONDITION_COUNT, config.d_model, padding_idx=0
+        )
+        self.pokemon_dynamic_projection = torch.nn.Linear(
+            POKEMON_DYNAMIC_DIM, config.d_model
+        )
+        self.attack_dynamic_projection = torch.nn.Linear(
+            ATTACK_DYNAMIC_DIM, config.d_model
+        )
+        self.option_token_mlp = self._make_token_mlp(
+            config.option_token_mlp_layers
         )
         self.attack_feature_projection = torch.nn.Linear(
             ATTACK_FEATURE_DIM, config.d_model
@@ -629,18 +660,11 @@ class PTCGTransformer(torch.nn.Module):
     def decoder_card_regions(
         self,
         categorical: torch.Tensor,
-        numeric: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         option_types = categorical[:, 0]
-        player_relation = numeric[
-            :, OPTION_PLAYER_OFFSET:OPTION_PLAYER_OFFSET + 3
-        ].argmax(dim=1)
-        areas = numeric[
-            :, OPTION_AREA_OFFSET:OPTION_AREA_OFFSET + 13
-        ].argmax(dim=1)
-        in_play_areas = numeric[
-            :, OPTION_IN_PLAY_AREA_OFFSET:OPTION_IN_PLAY_AREA_OFFSET + 13
-        ].argmax(dim=1)
+        player_relation = categorical[:, OPTION_PLAYER_RELATION_INDEX]
+        areas = categorical[:, OPTION_AREA_INDEX]
+        in_play_areas = categorical[:, OPTION_IN_PLAY_AREA_INDEX]
 
         candidate_regions = self.own_area_card_regions[areas]
         candidate_regions = torch.where(
@@ -692,10 +716,31 @@ class PTCGTransformer(torch.nn.Module):
             dim=0,
         )
 
+    def project_pokemon_dynamic(
+        self, features: torch.Tensor
+    ) -> torch.Tensor:
+        present = (
+            (features[:, 0] > 0)
+            | (features[:, POKEMON_DYNAMIC_WORD_DIM] > 0)
+        )
+        return self.pokemon_dynamic_projection(features) * present.unsqueeze(1)
+
+    def project_attack_dynamic(
+        self, features: torch.Tensor
+    ) -> torch.Tensor:
+        present = features[:, 0] > 0
+        return self.attack_dynamic_projection(features) * present.unsqueeze(1)
+
+    def apply_option_token_mlp(self, token: torch.Tensor) -> torch.Tensor:
+        if self.option_token_mlp is None:
+            return token
+        return self.option_token_mlp(token)
+
     def encode_options(
         self,
         categorical: torch.Tensor,
-        numeric: torch.Tensor,
+        pokemon_dynamic: torch.Tensor,
+        attack_dynamic: torch.Tensor,
         projected_card_features: torch.Tensor,
         projected_attack_features: torch.Tensor,
     ) -> torch.Tensor:
@@ -704,7 +749,7 @@ class PTCGTransformer(torch.nn.Module):
         attack_ids = categorical[:, 4]
         if projected_card_features.ndim == 3:
             candidate_regions, target_regions = self.decoder_card_regions(
-                categorical, numeric
+                categorical
             )
             candidate_static = projected_card_features[
                 candidate_regions, candidate_ids
@@ -715,17 +760,25 @@ class PTCGTransformer(torch.nn.Module):
         else:
             candidate_static = projected_card_features[candidate_ids]
             target_static = projected_card_features[target_ids]
-        return (
+        token = (
             self.option_type_embedding(categorical[:, 0])
             + self.option_context_embedding(categorical[:, 1])
             + self.option_candidate_embedding(candidate_ids)
             + self.option_target_embedding(target_ids)
             + self.option_attack_embedding(attack_ids)
-            + self.option_numeric_projection(numeric)
+            + self.option_number_embedding(categorical[:, 5])
+            + self.option_count_embedding(categorical[:, 6])
+            + self.option_player_relation_embedding(categorical[:, 7])
+            + self.option_area_embedding(categorical[:, 8])
+            + self.option_in_play_area_embedding(categorical[:, 9])
+            + self.option_special_condition_embedding(categorical[:, 10])
             + candidate_static
             + target_static
             + projected_attack_features[attack_ids]
+            + self.project_pokemon_dynamic(pokemon_dynamic)
+            + self.project_attack_dynamic(attack_dynamic)
         )
+        return self.apply_option_token_mlp(token)
 
     def combine_actions(
         self,
@@ -783,7 +836,8 @@ class PTCGTransformer(torch.nn.Module):
         opponent_summary,
         global_summary,
         option_categorical,
-        option_numeric,
+        pokemon_dynamic,
+        attack_dynamic,
         action_option_index,
         action_option_offset,
     ):
@@ -837,7 +891,8 @@ class PTCGTransformer(torch.nn.Module):
         )
         option_embeddings = self.encode_options(
             option_categorical,
-            option_numeric,
+            pokemon_dynamic,
+            attack_dynamic,
             projected_card_features,
             projected_attack_features,
         )

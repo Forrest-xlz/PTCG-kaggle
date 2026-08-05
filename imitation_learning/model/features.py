@@ -38,20 +38,28 @@ OPPONENT_SUMMARY_DIM = 71
 GLOBAL_SUMMARY_DIM = 73
 SELECT_TYPE_DIM = 11
 SELECT_CONTEXT_DIM = 49
-OPTION_CATEGORICAL_DIM = 5
-OPTION_NUMERIC_DIM = 76
+OPTION_CATEGORICAL_DIM = 11
 OPTION_TYPE_DIM = 17
+OPTION_VALUE_MAX = 60
+OPTION_VALUE_DIM = OPTION_VALUE_MAX + 3
+OPTION_PLAYER_RELATION_DIM = 3
+OPTION_AREA_DIM = 13
+OPTION_SPECIAL_CONDITION_DIM = 6
+POKEMON_DYNAMIC_WORD_DIM = 23
+POKEMON_DYNAMIC_DIM = 2 * POKEMON_DYNAMIC_WORD_DIM
+ATTACK_DYNAMIC_DIM = 6
 
-OPTION_ORIGINAL_DIM = 16
-OPTION_PLAYER_OFFSET = 16
-OPTION_AREA_OFFSET = 19
-OPTION_IN_PLAY_AREA_OFFSET = 32
-OPTION_IN_PLAY_INDEX_OFFSET = 45
-OPTION_SPECIAL_CONDITION_OFFSET = 54
-OPTION_HAS_ENTITY_OFFSET = 60
-OPTION_CARD_TYPE_OFFSET = 62
-OPTION_SUPER_EFFECTIVE_OFFSET = 70
-OPTION_RESISTED_OFFSET = 73
+OPTION_TYPE_INDEX = 0
+OPTION_CONTEXT_INDEX = 1
+OPTION_CANDIDATE_INDEX = 2
+OPTION_TARGET_INDEX = 3
+OPTION_ATTACK_INDEX = 4
+OPTION_NUMBER_INDEX = 5
+OPTION_COUNT_INDEX = 6
+OPTION_PLAYER_RELATION_INDEX = 7
+OPTION_AREA_INDEX = 8
+OPTION_IN_PLAY_AREA_INDEX = 9
+OPTION_SPECIAL_CONDITION_INDEX = 10
 
 
 @dataclass
@@ -97,7 +105,8 @@ class EncoderFeatures:
 @dataclass(frozen=True)
 class OptionFeatures:
     categorical: np.ndarray
-    numeric: np.ndarray
+    pokemon_dynamic: np.ndarray
+    attack_dynamic: np.ndarray
     action_index: np.ndarray
     action_offset: np.ndarray
 
@@ -591,16 +600,15 @@ def _optional_int(value: Any, default: int = 0) -> int:
     return default if value is None else int(value)
 
 
-def _set_one_hot(
-    values: np.ndarray,
-    offset: int,
-    size: int,
-    index: int,
-    name: str,
-) -> None:
-    if not 0 <= index < size:
-        raise ValueError(f"{name} index {index} is outside [0, {size})")
-    values[offset + index] = 1.0
+def _option_value_index(value: Any, name: str) -> int:
+    if value is None:
+        return 0
+    number = int(value)
+    if number < 0:
+        raise ValueError(f"{name}={number} must be non-negative")
+    if number > OPTION_VALUE_MAX:
+        return OPTION_VALUE_MAX + 2
+    return number + 1
 
 
 def _area_cards(
@@ -640,6 +648,101 @@ def _valid_card_id(card: Any, card_count: int) -> int:
         return card_count
     card_id = int(card.id)
     return card_id if 0 <= card_id < card_count else card_count
+
+
+def _is_pokemon(value: Any) -> bool:
+    return value is not None and all(
+        hasattr(value, name)
+        for name in ("hp", "maxHp", "energies", "energyCards", "tools")
+    )
+
+
+def _pokemon_dynamic_features(
+    pokemon: Any | None,
+    *,
+    is_active: bool,
+    is_own: bool,
+) -> np.ndarray:
+    features = np.zeros(POKEMON_DYNAMIC_WORD_DIM, dtype=np.float32)
+    if not _is_pokemon(pokemon):
+        return features
+    hp = max(float(pokemon.hp), 0.0)
+    max_hp = max(float(pokemon.maxHp), 0.0)
+    tools = list(pokemon.tools or [])
+    energy_cards = list(pokemon.energyCards or [])
+    energies = list(pokemon.energies or [])
+    features[:8] = [
+        1.0,
+        hp / 400.0,
+        max_hp / 400.0,
+        max(max_hp - hp, 0.0) / 400.0,
+        hp / max_hp if max_hp > 0 else 0.0,
+        len(tools) / 4.0,
+        len(energy_cards) / 10.0,
+        len(energies) / 10.0,
+    ]
+    for energy in energies:
+        energy_type = int(energy)
+        if 0 <= energy_type < ENERGY_TYPE_DIM:
+            features[8 + energy_type] += 0.1
+    features[20:] = [
+        float(bool(getattr(pokemon, "appearThisTurn", False))),
+        float(is_active),
+        float(is_own),
+    ]
+    return features
+
+
+def _option_pokemon_slots(
+    obs: Any,
+    option: Any,
+) -> tuple[tuple[Any | None, bool, bool], tuple[Any | None, bool, bool]]:
+    from cg.api import AreaType, OptionType
+
+    yours = int(obs.current.yourIndex)
+    opponent = 1 - yours
+    missing = (None, False, False)
+    option_type = option.type
+    if option_type == OptionType.ATTACK:
+        return (
+            (_active(obs.current.players[yours]), True, True),
+            (_active(obs.current.players[opponent]), True, False),
+        )
+    if option_type == OptionType.RETREAT:
+        return ((_active(obs.current.players[yours]), True, True), missing)
+
+    player_index = _optional_int(option.playerIndex, yours)
+    player_index = max(0, min(player_index, len(obs.current.players) - 1))
+    if option_type in {
+        OptionType.ABILITY,
+        OptionType.CARD,
+        OptionType.DISCARD,
+        OptionType.TOOL_CARD,
+        OptionType.ENERGY_CARD,
+        OptionType.ENERGY,
+    }:
+        pokemon = _area_card(obs, option.area, option.index, player_index)
+        return (
+            (
+                pokemon if _is_pokemon(pokemon) else None,
+                option.area == AreaType.ACTIVE,
+                player_index == yours,
+            ),
+            missing,
+        )
+    if option_type in {OptionType.ATTACH, OptionType.EVOLVE}:
+        pokemon = _area_card(
+            obs, option.inPlayArea, option.inPlayIndex, yours
+        )
+        return (
+            (
+                pokemon if _is_pokemon(pokemon) else None,
+                option.inPlayArea == AreaType.ACTIVE,
+                True,
+            ),
+            missing,
+        )
+    return missing, missing
 
 
 def _option_entity_ids(
@@ -726,9 +829,10 @@ def decoder_features(
     numeric_catalog: NumericFeatureCatalog | None = None,
 ) -> OptionFeatures:
     """Encode raw options once and retain exact action membership."""
+    from cg.api import OptionType
+
     catalog = numeric_catalog or _default_numeric_catalog(card_count)
     options = list(obs.select.option)
-    option_count = max(1, len(options))
     context = int(obs.select.context)
     if not 0 <= context < SELECT_CONTEXT_DIM:
         raise ValueError(f"select context {context} is outside the vocabulary")
@@ -736,43 +840,15 @@ def decoder_features(
     categorical = np.empty(
         (len(options), OPTION_CATEGORICAL_DIM), dtype=np.int64
     )
-    numeric = np.zeros(
-        (len(options), OPTION_NUMERIC_DIM), dtype=np.float32
+    pokemon_dynamic = np.zeros(
+        (len(options), POKEMON_DYNAMIC_DIM), dtype=np.float32
+    )
+    attack_dynamic = np.zeros(
+        (len(options), ATTACK_DYNAMIC_DIM), dtype=np.float32
     )
     yours = int(obs.current.yourIndex)
-    own_active = _active(obs.current.players[yours])
-    opponent_active = _active(obs.current.players[1 - yours])
-    matchup_known = False
-    super_effective = False
-    resisted = False
-    if own_active is not None and opponent_active is not None:
-        own_id = _valid_card_id(own_active, card_count)
-        opponent_id = _valid_card_id(opponent_active, card_count)
-        if own_id < card_count and opponent_id < card_count:
-            own_energy = catalog.card_features[
-                own_id,
-                CARD_ENERGY_TYPE_OFFSET:
-                CARD_ENERGY_TYPE_OFFSET + ENERGY_TYPE_DIM,
-            ]
-            if np.any(own_energy > 0.5):
-                own_energy_type = int(np.argmax(own_energy))
-                matchup_known = True
-                super_effective = bool(
-                    catalog.card_features[
-                        opponent_id,
-                        CARD_WEAKNESS_OFFSET + own_energy_type,
-                    ]
-                    > 0.5
-                )
-                resisted = bool(
-                    catalog.card_features[
-                        opponent_id,
-                        CARD_RESISTANCE_OFFSET + own_energy_type,
-                    ]
-                    > 0.5
-                )
 
-    for position, option in enumerate(options):
+    for option_index, option in enumerate(options):
         option_type = int(option.type)
         if not 0 <= option_type < OPTION_TYPE_DIM:
             raise ValueError(
@@ -781,132 +857,102 @@ def decoder_features(
         candidate_id, target_id, attack_id = _option_entity_ids(
             obs, option, card_count, attack_count
         )
-        categorical[position] = [
-            option_type,
-            context,
-            candidate_id,
-            target_id,
-            attack_id,
-        ]
-        player_index = _optional_int(option.playerIndex, yours)
-        attack_damage = (
-            float(catalog.attack_damage[attack_id])
-            if 0 <= attack_id < len(catalog.attack_damage)
-            else 0.0
-        )
-        card_type_index = None
-        card_type = 0.0
-        if candidate_id < card_count:
-            card_type_index = int(
-                np.argmax(
-                    catalog.card_features[
-                        candidate_id,
-                        CARD_TYPE_OFFSET:CARD_TYPE_OFFSET + CARD_TYPE_DIM,
-                    ]
-                )
-            )
-            card_type = float(card_type_index) / (CARD_TYPE_DIM - 1)
-        has_entity = (
-            candidate_id < card_count
-            or target_id < card_count
-            or attack_id < attack_count
-        )
-        option_numeric = numeric[position]
-        option_numeric[:OPTION_ORIGINAL_DIM] = [
-            _optional_int(option.number) / 6,
-            _optional_int(option.index) / 60,
-            float(player_index == yours),
-            _optional_int(option.toolIndex) / 4,
-            _optional_int(option.energyIndex) / 10,
-            _optional_int(option.count) / 10,
-            _optional_int(option.area) / 12,
-            _optional_int(option.inPlayArea) / 12,
-            _optional_int(option.inPlayIndex) / 5,
-            _optional_int(option.specialConditionType) / 5,
-            (position + 1) / option_count,
-            float(has_entity),
-            attack_damage,
-            card_type,
-            float(super_effective),
-            float(resisted),
-        ]
-
         player_relation = (
             0 if option.playerIndex is None
             else 1 if int(option.playerIndex) == yours
             else 2
         )
-        _set_one_hot(
-            option_numeric, OPTION_PLAYER_OFFSET, 3,
-            player_relation, "player relation",
-        )
-
         area_index = 0 if option.area is None else int(option.area)
-        _set_one_hot(
-            option_numeric, OPTION_AREA_OFFSET, 13,
-            area_index, "area",
-        )
-
         in_play_area_index = (
             0 if option.inPlayArea is None
             else int(option.inPlayArea)
         )
-        _set_one_hot(
-            option_numeric, OPTION_IN_PLAY_AREA_OFFSET, 13,
-            in_play_area_index, "in-play area",
-        )
-
-        in_play_index = (
-            0 if option.inPlayIndex is None
-            else int(option.inPlayIndex) + 1
-        )
-        _set_one_hot(
-            option_numeric, OPTION_IN_PLAY_INDEX_OFFSET, 9,
-            in_play_index, "in-play index",
-        )
-
-        special_condition = (
+        special_condition_index = (
             0 if option.specialConditionType is None
             else int(option.specialConditionType) + 1
         )
-        _set_one_hot(
-            option_numeric, OPTION_SPECIAL_CONDITION_OFFSET, 6,
-            special_condition, "special condition",
+        if not 0 <= area_index < OPTION_AREA_DIM:
+            raise ValueError(f"area index {area_index} is outside the vocabulary")
+        if not 0 <= in_play_area_index < OPTION_AREA_DIM:
+            raise ValueError(
+                "in-play area index "
+                f"{in_play_area_index} is outside the vocabulary"
+            )
+        if not 0 <= special_condition_index < OPTION_SPECIAL_CONDITION_DIM:
+            raise ValueError(
+                "special condition index "
+                f"{special_condition_index} is outside the vocabulary"
+            )
+        categorical[option_index] = [
+            option_type,
+            context,
+            candidate_id,
+            target_id,
+            attack_id,
+            _option_value_index(option.number, "option number"),
+            _option_value_index(option.count, "option count"),
+            player_relation,
+            area_index,
+            in_play_area_index,
+            special_condition_index,
+        ]
+        primary, secondary = _option_pokemon_slots(obs, option)
+        primary_features = _pokemon_dynamic_features(
+            primary[0], is_active=primary[1], is_own=primary[2]
+        )
+        secondary_features = _pokemon_dynamic_features(
+            secondary[0], is_active=secondary[1], is_own=secondary[2]
+        )
+        pokemon_dynamic[option_index] = np.concatenate(
+            (primary_features, secondary_features)
         )
 
-        _set_one_hot(
-            option_numeric, OPTION_HAS_ENTITY_OFFSET, 2,
-            int(has_entity), "has entity",
-        )
-
-        card_type_one_hot = (
-            0 if card_type_index is None
-            else card_type_index + 1
-        )
-        _set_one_hot(
-            option_numeric, OPTION_CARD_TYPE_OFFSET, 8,
-            card_type_one_hot, "card type",
-        )
-
-        attack_applicable = attack_id < attack_count and matchup_known
-        effectiveness_index = (
-            0 if not attack_applicable
-            else 2 if super_effective
-            else 1
-        )
-        resistance_index = (
-            0 if not attack_applicable
-            else 2 if resisted
-            else 1
-        )
-        _set_one_hot(
-            option_numeric, OPTION_SUPER_EFFECTIVE_OFFSET, 3,
-            effectiveness_index, "super effective",
-        )
-        _set_one_hot(
-            option_numeric, OPTION_RESISTED_OFFSET, 3,
-            resistance_index, "resisted",
-        )
+        if (
+            option.type == OptionType.ATTACK
+            and attack_id < attack_count
+            and primary_features[0] > 0
+            and secondary_features[0] > 0
+        ):
+            target_hp = max(float(secondary[0].hp), 0.0)
+            base_damage = (
+                float(catalog.attack_damage[attack_id]) * 300.0
+                if attack_id < len(catalog.attack_damage)
+                else 0.0
+            )
+            super_effective = False
+            resisted = False
+            own_id = _valid_card_id(primary[0], card_count)
+            opponent_id = _valid_card_id(secondary[0], card_count)
+            if own_id < card_count and opponent_id < card_count:
+                own_energy = catalog.card_features[
+                    own_id,
+                    CARD_ENERGY_TYPE_OFFSET:
+                    CARD_ENERGY_TYPE_OFFSET + ENERGY_TYPE_DIM,
+                ]
+                if np.any(own_energy > 0.5):
+                    own_energy_type = int(np.argmax(own_energy))
+                    super_effective = bool(
+                        catalog.card_features[
+                            opponent_id,
+                            CARD_WEAKNESS_OFFSET + own_energy_type,
+                        ]
+                        > 0.5
+                    )
+                    resisted = bool(
+                        catalog.card_features[
+                            opponent_id,
+                            CARD_RESISTANCE_OFFSET + own_energy_type,
+                        ]
+                        > 0.5
+                    )
+            attack_dynamic[option_index] = [
+                1.0,
+                min(base_damage / max(target_hp, 1.0), 4.0) / 4.0,
+                float(base_damage >= target_hp),
+                max(target_hp - base_damage, 0.0) / 400.0,
+                float(super_effective),
+                float(resisted),
+            ]
 
     action_index: list[int] = []
     action_offset = [0]
@@ -919,7 +965,8 @@ def decoder_features(
         action_offset.append(len(action_index))
     return OptionFeatures(
         categorical=categorical,
-        numeric=numeric,
+        pokemon_dynamic=pokemon_dynamic,
+        attack_dynamic=attack_dynamic,
         action_index=np.asarray(action_index, dtype=np.int64),
         action_offset=np.asarray(action_offset, dtype=np.int64),
     )
