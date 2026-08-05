@@ -48,6 +48,7 @@ from training.feature_cache import (
     MAX_ACTIONS,
     ATTACK_DYNAMIC_DIM,
     OPTION_CATEGORICAL_DIM,
+    OPTION_NUMERIC_DIM,
     POKEMON_DYNAMIC_DIM,
     CachedBatch,
     IndexBatch,
@@ -113,6 +114,7 @@ class ModelSettings:
     norm_mode: str
     summary_mlp_layers: int
     card_mlp_layers: int
+    option_numeric_mlp_layers: int
     option_token_mlp_layers: int
     card_mlp_scope: str = "shared"
     pokemon_appear_embedding: bool = False
@@ -370,6 +372,13 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError(
             "model.option_token_mlp_layers must be an integer >= 0"
         )
+    if (
+        type(model.option_numeric_mlp_layers) is not int
+        or model.option_numeric_mlp_layers < 1
+    ):
+        raise ValueError(
+            "model.option_numeric_mlp_layers must be an integer >= 1"
+        )
     if settings.wandb.enabled and not settings.wandb.project:
         raise ValueError("wandb.project is required when wandb.enabled is true")
     return settings
@@ -411,8 +420,9 @@ def feature_signature(config: ModelConfig) -> dict:
         "encoder_tokens": ENCODER_WORDS,
         "encoder_layout": "numeric-summary-26-appear-v2",
         "cache_schema_version": CACHE_SCHEMA_VERSION,
-        "decoder_layout": "routed-option-dynamics-v6",
+        "decoder_layout": "routed-option-dynamics-plus-numeric-v7",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,
+        "option_numeric_dim": OPTION_NUMERIC_DIM,
         "pokemon_dynamic_dim": POKEMON_DYNAMIC_DIM,
         "attack_dynamic_dim": ATTACK_DYNAMIC_DIM,
         "max_actions": MAX_ACTIONS,
@@ -472,6 +482,7 @@ def _forward_batch(
         _to_device(batch.opponent_summary, device, dtype=torch.float32),
         _to_device(batch.global_summary, device, dtype=torch.float32),
         _to_device(batch.option_categorical, device, dtype=torch.long),
+        _to_device(batch.option_numeric, device, dtype=torch.float32),
         _to_device(batch.pokemon_dynamic, device, dtype=torch.float32),
         _to_device(batch.attack_dynamic, device, dtype=torch.float32),
         _to_device(batch.action_option_index, device, dtype=torch.long),
@@ -722,6 +733,7 @@ def main() -> None:
         norm_mode=model_cfg.norm_mode,
         summary_mlp_layers=model_cfg.summary_mlp_layers,
         card_mlp_layers=model_cfg.card_mlp_layers,
+        option_numeric_mlp_layers=model_cfg.option_numeric_mlp_layers,
         option_token_mlp_layers=model_cfg.option_token_mlp_layers,
         card_mlp_scope=model_cfg.card_mlp_scope,
         pokemon_appear_embedding=model_cfg.pokemon_appear_embedding,

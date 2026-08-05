@@ -145,16 +145,19 @@ tokens. Five `*_token_mlp_layers` settings control eight independent post-token
 MLPs: own/opponent Bench, Active, and discard plus own hand and own deck. The
 two sides share configured depths but not weights. `region_token_mlp_residual`
 selects `token + MLP(token)` or `MLP(token)` globally for these modules.
-Changing these features requires rebuilding the feature cache (schema 13), but
+Changing these features requires rebuilding the feature cache (schema 14), but
 does not require replay extraction again.
 
 The decoder stores each raw engine option once using eleven categorical fields:
 option type, selection context, candidate/target Card IDs, Attack ID, number,
 Energy count, player relation, area, in-play area, and special condition. Two
 routed Pokemon dynamic blocks (46 values total) and six attack-matchup values
-are projected separately and masked to exact zero when absent. Learned ID and
-categorical embeddings, static Card/Attack projections, and these dynamic
-projections are summed in `d_model` space. `model.option_token_mlp_layers: 0`
+are projected separately and masked to exact zero when absent. Five remaining
+numeric values (index, Tool index, Energy index, in-play index, and relative
+option position) are projected by `model.option_numeric_mlp_layers`. Learned
+ID and categorical embeddings, static Card/Attack projections, and these
+numeric/dynamic projections are summed in `d_model` space.
+`model.option_token_mlp_layers: 0`
 uses that sum directly; positive values apply the standard projection MLP to
 each completed option token. Exact candidate action combinations are still
 enumerated up to 64, and their option tokens are summed before the

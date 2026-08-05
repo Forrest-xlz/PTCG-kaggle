@@ -39,6 +39,7 @@ GLOBAL_SUMMARY_DIM = 73
 SELECT_TYPE_DIM = 11
 SELECT_CONTEXT_DIM = 49
 OPTION_CATEGORICAL_DIM = 11
+OPTION_NUMERIC_DIM = 5
 OPTION_TYPE_DIM = 17
 OPTION_VALUE_MAX = 60
 OPTION_VALUE_DIM = OPTION_VALUE_MAX + 3
@@ -105,6 +106,7 @@ class EncoderFeatures:
 @dataclass(frozen=True)
 class OptionFeatures:
     categorical: np.ndarray
+    numeric: np.ndarray
     pokemon_dynamic: np.ndarray
     attack_dynamic: np.ndarray
     action_index: np.ndarray
@@ -840,6 +842,7 @@ def decoder_features(
     categorical = np.empty(
         (len(options), OPTION_CATEGORICAL_DIM), dtype=np.int64
     )
+    numeric = np.zeros((len(options), OPTION_NUMERIC_DIM), dtype=np.float32)
     pokemon_dynamic = np.zeros(
         (len(options), POKEMON_DYNAMIC_DIM), dtype=np.float32
     )
@@ -895,6 +898,13 @@ def decoder_features(
             area_index,
             in_play_area_index,
             special_condition_index,
+        ]
+        numeric[option_index] = [
+            _optional_int(option.index) / 60.0,
+            _optional_int(option.toolIndex) / 4.0,
+            _optional_int(option.energyIndex) / 10.0,
+            _optional_int(option.inPlayIndex) / 5.0,
+            (option_index + 1) / max(1, len(options)),
         ]
         primary, secondary = _option_pokemon_slots(obs, option)
         primary_features = _pokemon_dynamic_features(
@@ -965,6 +975,7 @@ def decoder_features(
         action_offset.append(len(action_index))
     return OptionFeatures(
         categorical=categorical,
+        numeric=numeric,
         pokemon_dynamic=pokemon_dynamic,
         attack_dynamic=attack_dynamic,
         action_index=np.asarray(action_index, dtype=np.int64),

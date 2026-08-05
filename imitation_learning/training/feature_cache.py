@@ -14,13 +14,14 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 13
+CACHE_SCHEMA_VERSION = 14
 ENCODER_WORDS = 26
 POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
 OPPONENT_SUMMARY_DIM = 71
 GLOBAL_SUMMARY_DIM = 73
 OPTION_CATEGORICAL_DIM = 11
+OPTION_NUMERIC_DIM = 5
 POKEMON_DYNAMIC_DIM = 46
 ATTACK_DYNAMIC_DIM = 6
 MAX_ACTIONS = 64
@@ -36,6 +37,7 @@ SECTION_DTYPES = {
     "opponent_summary": np.dtype("<f2"),
     "global_summary": np.dtype("<f2"),
     "option_categorical": np.dtype("<u2"),
+    "option_numeric": np.dtype("<f2"),
     "pokemon_dynamic": np.dtype("<f2"),
     "attack_dynamic": np.dtype("<f2"),
     "option_ptr": np.dtype("<u4"),
@@ -60,6 +62,7 @@ class FeatureRecord:
     opponent_summary: list[float]
     global_summary: list[float]
     option_categorical: list[int]
+    option_numeric: list[float]
     pokemon_dynamic: list[float]
     attack_dynamic: list[float]
     action_option_index: list[int]
@@ -80,6 +83,7 @@ class FeatureView:
     opponent_summary: np.ndarray
     global_summary: np.ndarray
     option_categorical: np.ndarray
+    option_numeric: np.ndarray
     pokemon_dynamic: np.ndarray
     attack_dynamic: np.ndarray
     action_option_index: np.ndarray
@@ -105,6 +109,7 @@ class CachedBatch:
     opponent_summary: np.ndarray
     global_summary: np.ndarray
     option_categorical: np.ndarray
+    option_numeric: np.ndarray
     pokemon_dynamic: np.ndarray
     attack_dynamic: np.ndarray
     action_option_index: np.ndarray
@@ -277,6 +282,7 @@ class PackedShardWriter:
             raise ValueError("option_categorical has an invalid width")
         option_count = len(record.option_categorical) // OPTION_CATEGORICAL_DIM
         dynamic_widths = {
+            "option_numeric": OPTION_NUMERIC_DIM,
             "pokemon_dynamic": POKEMON_DYNAMIC_DIM,
             "attack_dynamic": ATTACK_DYNAMIC_DIM,
         }
@@ -330,7 +336,7 @@ class PackedShardWriter:
         narrowed = encoder_values.astype(np.float16)
         if not np.all(np.isfinite(encoder_values)) or not np.all(np.isfinite(narrowed)):
             raise ValueError("encoder_value contains a non-finite or float16-overflow value")
-        for name in ("pokemon_dynamic", "attack_dynamic"):
+        for name in ("option_numeric", "pokemon_dynamic", "attack_dynamic"):
             full_precision = np.asarray(getattr(record, name), dtype=np.float32)
             narrowed = full_precision.astype(np.float16)
             if not np.all(np.isfinite(full_precision)) or not np.all(
@@ -369,6 +375,7 @@ class PackedShardWriter:
         self._buffers["option_categorical"].extend(
             record.option_categorical
         )
+        self._buffers["option_numeric"].extend(record.option_numeric)
         self._buffers["pokemon_dynamic"].extend(record.pokemon_dynamic)
         self._buffers["attack_dynamic"].extend(record.attack_dynamic)
         self._buffers["action_option_index"].extend(
@@ -572,6 +579,8 @@ class PackedShard:
         if (
             self.arrays["option_categorical"].size
             != option_count * OPTION_CATEGORICAL_DIM
+            or self.arrays["option_numeric"].size
+            != option_count * OPTION_NUMERIC_DIM
             or self.arrays["pokemon_dynamic"].size
             != option_count * POKEMON_DYNAMIC_DIM
             or self.arrays["attack_dynamic"].size
@@ -653,6 +662,10 @@ class PackedShard:
                 option_start * OPTION_CATEGORICAL_DIM:
                 option_end * OPTION_CATEGORICAL_DIM
             ].reshape(-1, OPTION_CATEGORICAL_DIM),
+            option_numeric=self.arrays["option_numeric"][
+                option_start * OPTION_NUMERIC_DIM:
+                option_end * OPTION_NUMERIC_DIM
+            ].reshape(-1, OPTION_NUMERIC_DIM),
             pokemon_dynamic=self.arrays["pokemon_dynamic"][
                 option_start * POKEMON_DYNAMIC_DIM:
                 option_end * POKEMON_DYNAMIC_DIM
@@ -1026,6 +1039,7 @@ class MmapFeatureDataset:
         encoder_indices = []
         encoder_values = []
         option_categorical = []
+        option_numeric = []
         pokemon_dynamic = []
         attack_dynamic = []
         action_option_indices = []
@@ -1059,6 +1073,7 @@ class MmapFeatureDataset:
             encoder_values.append(sample.encoder_value)
             encoder_pokemon_appear[row] = sample.encoder_pokemon_appear
             option_categorical.append(sample.option_categorical)
+            option_numeric.append(sample.option_numeric)
             pokemon_dynamic.append(sample.pokemon_dynamic)
             attack_dynamic.append(sample.attack_dynamic)
             action_option_indices.append(
@@ -1099,6 +1114,9 @@ class MmapFeatureDataset:
             global_summary=global_summaries,
             option_categorical=np.concatenate(option_categorical).astype(
                 np.int64, copy=False
+            ),
+            option_numeric=np.concatenate(option_numeric).astype(
+                np.float16, copy=False
             ),
             pokemon_dynamic=np.concatenate(pokemon_dynamic).astype(
                 np.float16, copy=False

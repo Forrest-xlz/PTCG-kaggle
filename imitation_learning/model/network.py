@@ -22,6 +22,7 @@ OPTION_VALUE_COUNT = 63
 OPTION_PLAYER_RELATION_COUNT = 3
 OPTION_AREA_COUNT = 13
 OPTION_SPECIAL_CONDITION_COUNT = 6
+OPTION_NUMERIC_DIM = 5
 POKEMON_DYNAMIC_WORD_DIM = 23
 POKEMON_DYNAMIC_DIM = 46
 ATTACK_DYNAMIC_DIM = 6
@@ -103,6 +104,7 @@ class ModelConfig:
     norm_mode: str = "postnorm"
     summary_mlp_layers: int = 1
     card_mlp_layers: int = 1
+    option_numeric_mlp_layers: int = 1
     option_token_mlp_layers: int = 0
     card_mlp_scope: str = "shared"
     pokemon_appear_embedding: bool = False
@@ -122,6 +124,13 @@ class ModelConfig:
             raise ValueError("card_mlp_layers must be >= 0")
         if self.card_mlp_scope not in {"shared", "region"}:
             raise ValueError("card_mlp_scope must be shared or region")
+        if (
+            type(self.option_numeric_mlp_layers) is not int
+            or self.option_numeric_mlp_layers < 1
+        ):
+            raise ValueError(
+                "option_numeric_mlp_layers must be an integer >= 1"
+            )
         if (
             type(self.option_token_mlp_layers) is not int
             or self.option_token_mlp_layers < 0
@@ -542,6 +551,11 @@ class PTCGTransformer(torch.nn.Module):
         self.option_special_condition_embedding = torch.nn.Embedding(
             OPTION_SPECIAL_CONDITION_COUNT, config.d_model, padding_idx=0
         )
+        self.option_numeric_projection = _projection_mlp(
+            OPTION_NUMERIC_DIM,
+            config.d_model,
+            config.option_numeric_mlp_layers,
+        )
         self.pokemon_dynamic_projection = torch.nn.Linear(
             POKEMON_DYNAMIC_DIM, config.d_model
         )
@@ -739,6 +753,7 @@ class PTCGTransformer(torch.nn.Module):
     def encode_options(
         self,
         categorical: torch.Tensor,
+        numeric: torch.Tensor,
         pokemon_dynamic: torch.Tensor,
         attack_dynamic: torch.Tensor,
         projected_card_features: torch.Tensor,
@@ -772,6 +787,7 @@ class PTCGTransformer(torch.nn.Module):
             + self.option_area_embedding(categorical[:, 8])
             + self.option_in_play_area_embedding(categorical[:, 9])
             + self.option_special_condition_embedding(categorical[:, 10])
+            + self.option_numeric_projection(numeric)
             + candidate_static
             + target_static
             + projected_attack_features[attack_ids]
@@ -836,6 +852,7 @@ class PTCGTransformer(torch.nn.Module):
         opponent_summary,
         global_summary,
         option_categorical,
+        option_numeric,
         pokemon_dynamic,
         attack_dynamic,
         action_option_index,
@@ -891,6 +908,7 @@ class PTCGTransformer(torch.nn.Module):
         )
         option_embeddings = self.encode_options(
             option_categorical,
+            option_numeric,
             pokemon_dynamic,
             attack_dynamic,
             projected_card_features,
