@@ -45,6 +45,8 @@ CARD_REGION_NAMES = (
     "stadium",
     "looking",
     "unknown",
+    "effect",
+    "context_card",
 )
 CARD_REGION_INDEX = {
     name: index for index, name in enumerate(CARD_REGION_NAMES)
@@ -510,6 +512,16 @@ class PTCGTransformer(torch.nn.Module):
             config.d_model,
             padding_idx=config.card_count,
         )
+        self.option_effect_embedding = torch.nn.Embedding(
+            config.card_count + 1,
+            config.d_model,
+            padding_idx=config.card_count,
+        )
+        self.option_context_card_embedding = torch.nn.Embedding(
+            config.card_count + 1,
+            config.d_model,
+            padding_idx=config.card_count,
+        )
         self.option_attack_embedding = torch.nn.Embedding(
             config.attack_count + 1,
             config.d_model,
@@ -702,6 +714,8 @@ class PTCGTransformer(torch.nn.Module):
         candidate_ids = categorical[:, 2]
         target_ids = categorical[:, 3]
         attack_ids = categorical[:, 4]
+        effect_ids = categorical[:, 5]
+        context_card_ids = categorical[:, 6]
         if projected_card_features.ndim == 3:
             candidate_regions, target_regions = self.decoder_card_regions(
                 categorical, numeric
@@ -712,18 +726,30 @@ class PTCGTransformer(torch.nn.Module):
             target_static = projected_card_features[
                 target_regions, target_ids
             ]
+            effect_static = projected_card_features[
+                CARD_REGION_INDEX["effect"], effect_ids
+            ]
+            context_card_static = projected_card_features[
+                CARD_REGION_INDEX["context_card"], context_card_ids
+            ]
         else:
             candidate_static = projected_card_features[candidate_ids]
             target_static = projected_card_features[target_ids]
+            effect_static = projected_card_features[effect_ids]
+            context_card_static = projected_card_features[context_card_ids]
         return (
             self.option_type_embedding(categorical[:, 0])
             + self.option_context_embedding(categorical[:, 1])
             + self.option_candidate_embedding(candidate_ids)
             + self.option_target_embedding(target_ids)
+            + self.option_effect_embedding(effect_ids)
+            + self.option_context_card_embedding(context_card_ids)
             + self.option_attack_embedding(attack_ids)
             + self.option_numeric_projection(numeric)
             + candidate_static
             + target_static
+            + effect_static
+            + context_card_static
             + projected_attack_features[attack_ids]
         )
 
