@@ -55,6 +55,11 @@ model:
   card_mlp_scope: region        # shared or region-specific projection MLPs.
   option_numeric_mlp_layers: 1  # Five non-embedded option numbers -> d_model.
   option_token_mlp_layers: 0    # 0=sum embeddings; >0 applies post-sum d_model MLP.
+  use_option_index: true
+  use_option_tool_index: true
+  use_option_energy_index: true
+  use_option_in_play_index: true
+  use_option_relative_position: false  # Current ablation target; cache is reusable.
   pokemon_appear_embedding: true
   bench_token_mlp_layers: 1     # Separate own/opponent weights.
   active_token_mlp_layers: 1    # Separate own/opponent weights.

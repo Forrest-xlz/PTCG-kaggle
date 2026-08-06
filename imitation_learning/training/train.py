@@ -116,6 +116,11 @@ class ModelSettings:
     card_mlp_layers: int
     option_numeric_mlp_layers: int
     option_token_mlp_layers: int
+    use_option_index: bool
+    use_option_tool_index: bool
+    use_option_energy_index: bool
+    use_option_in_play_index: bool
+    use_option_relative_position: bool
     card_mlp_scope: str = "shared"
     pokemon_appear_embedding: bool = False
     bench_token_mlp_layers: int = 0
@@ -379,6 +384,15 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError(
             "model.option_numeric_mlp_layers must be an integer >= 1"
         )
+    for name in (
+        "use_option_index",
+        "use_option_tool_index",
+        "use_option_energy_index",
+        "use_option_in_play_index",
+        "use_option_relative_position",
+    ):
+        if type(getattr(model, name)) is not bool:
+            raise ValueError(f"model.{name} must be true or false")
     if settings.wandb.enabled and not settings.wandb.project:
         raise ValueError("wandb.project is required when wandb.enabled is true")
     return settings
@@ -735,6 +749,11 @@ def main() -> None:
         card_mlp_layers=model_cfg.card_mlp_layers,
         option_numeric_mlp_layers=model_cfg.option_numeric_mlp_layers,
         option_token_mlp_layers=model_cfg.option_token_mlp_layers,
+        use_option_index=model_cfg.use_option_index,
+        use_option_tool_index=model_cfg.use_option_tool_index,
+        use_option_energy_index=model_cfg.use_option_energy_index,
+        use_option_in_play_index=model_cfg.use_option_in_play_index,
+        use_option_relative_position=model_cfg.use_option_relative_position,
         card_mlp_scope=model_cfg.card_mlp_scope,
         pokemon_appear_embedding=model_cfg.pokemon_appear_embedding,
         bench_token_mlp_layers=model_cfg.bench_token_mlp_layers,

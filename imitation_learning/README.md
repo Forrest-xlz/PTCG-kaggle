@@ -157,6 +157,9 @@ numeric values (index, Tool index, Energy index, in-play index, and relative
 option position) are projected by `model.option_numeric_mlp_layers`. Learned
 ID and categorical embeddings, static Card/Attack projections, and these
 numeric/dynamic projections are summed in `d_model` space.
+The matching `model.use_option_*` booleans independently mask each numeric
+column before that MLP. Changing these switches requires a new training run
+but reuses the existing schema-14 cache.
 `model.option_token_mlp_layers: 0`
 uses that sum directly; positive values apply the standard projection MLP to
 each completed option token. Exact candidate action combinations are still

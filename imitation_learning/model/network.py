@@ -106,6 +106,11 @@ class ModelConfig:
     card_mlp_layers: int = 1
     option_numeric_mlp_layers: int = 1
     option_token_mlp_layers: int = 0
+    use_option_index: bool = True
+    use_option_tool_index: bool = True
+    use_option_energy_index: bool = True
+    use_option_in_play_index: bool = True
+    use_option_relative_position: bool = True
     card_mlp_scope: str = "shared"
     pokemon_appear_embedding: bool = False
     bench_token_mlp_layers: int = 0
@@ -136,6 +141,15 @@ class ModelConfig:
             or self.option_token_mlp_layers < 0
         ):
             raise ValueError("option_token_mlp_layers must be an integer >= 0")
+        for name in (
+            "use_option_index",
+            "use_option_tool_index",
+            "use_option_energy_index",
+            "use_option_in_play_index",
+            "use_option_relative_position",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
         if type(self.pokemon_appear_embedding) is not bool:
             raise ValueError("pokemon_appear_embedding must be a boolean")
         for name in (
@@ -556,6 +570,20 @@ class PTCGTransformer(torch.nn.Module):
             config.d_model,
             config.option_numeric_mlp_layers,
         )
+        self.register_buffer(
+            "option_numeric_mask",
+            torch.tensor(
+                [
+                    config.use_option_index,
+                    config.use_option_tool_index,
+                    config.use_option_energy_index,
+                    config.use_option_in_play_index,
+                    config.use_option_relative_position,
+                ],
+                dtype=torch.float32,
+            ),
+            persistent=False,
+        )
         self.pokemon_dynamic_projection = torch.nn.Linear(
             POKEMON_DYNAMIC_DIM, config.d_model
         )
@@ -745,6 +773,11 @@ class PTCGTransformer(torch.nn.Module):
         present = features[:, 0] > 0
         return self.attack_dynamic_projection(features) * present.unsqueeze(1)
 
+    def project_option_numeric(self, features: torch.Tensor) -> torch.Tensor:
+        return self.option_numeric_projection(
+            features * self.option_numeric_mask
+        )
+
     def apply_option_token_mlp(self, token: torch.Tensor) -> torch.Tensor:
         if self.option_token_mlp is None:
             return token
@@ -787,7 +820,7 @@ class PTCGTransformer(torch.nn.Module):
             + self.option_area_embedding(categorical[:, 8])
             + self.option_in_play_area_embedding(categorical[:, 9])
             + self.option_special_condition_embedding(categorical[:, 10])
-            + self.option_numeric_projection(numeric)
+            + self.project_option_numeric(numeric)
             + candidate_static
             + target_static
             + projected_attack_features[attack_ids]
