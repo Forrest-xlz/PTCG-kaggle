@@ -16,6 +16,7 @@ PLAYER_BENCH_COUNT_INDEX = 10
 OWN_SUMMARY_DIM = 69
 OPPONENT_SUMMARY_DIM = 71
 GLOBAL_SUMMARY_DIM = 73
+SELECT_TYPE_COUNT = 11
 OPTION_TYPE_COUNT = 17
 OPTION_CONTEXT_COUNT = 49
 OPTION_VALUE_COUNT = 63
@@ -26,6 +27,17 @@ OPTION_NUMERIC_DIM = 5
 POKEMON_DYNAMIC_WORD_DIM = 23
 POKEMON_DYNAMIC_DIM = 46
 ATTACK_DYNAMIC_DIM = 6
+HISTORY_STEPS = 3
+HISTORY_STRUCTURAL_DIM = 8
+
+HISTORY_OPTION_TYPE_INDEX = 0
+HISTORY_SOURCE_AREA_INDEX = 1
+HISTORY_TARGET_AREA_INDEX = 2
+HISTORY_SOURCE_RELATION_INDEX = 3
+HISTORY_TARGET_RELATION_INDEX = 4
+HISTORY_NUMBER_INDEX = 5
+HISTORY_COUNT_INDEX = 6
+HISTORY_SPECIAL_CONDITION_INDEX = 7
 
 OPTION_PLAYER_RELATION_INDEX = 7
 OPTION_AREA_INDEX = 8
@@ -114,6 +126,9 @@ class ModelConfig:
     hand_token_mlp_layers: int = 0
     deck_token_mlp_layers: int = 0
     region_token_mlp_residual: bool = True
+    history_encoding: str = "off"
+    history_action_mlp_layers: int = 1
+    history_sequence_mlp_layers: int = 2
 
     def __post_init__(self) -> None:
         if self.norm_mode not in {"prenorm", "postnorm"}:
@@ -150,6 +165,31 @@ class ModelConfig:
                 raise ValueError(f"{name} must be an integer >= 0")
         if type(self.region_token_mlp_residual) is not bool:
             raise ValueError("region_token_mlp_residual must be a boolean")
+        if self.history_encoding not in {
+            "off",
+            "basic",
+            "structural",
+            "full",
+        }:
+            raise ValueError(
+                "history_encoding must be off, basic, structural, or full"
+            )
+        if (
+            type(self.history_action_mlp_layers) is not int
+            or self.history_action_mlp_layers < 0
+        ):
+            raise ValueError(
+                "history_action_mlp_layers must be an integer >= 0"
+            )
+        minimum_sequence_layers = int(self.history_encoding != "off")
+        if (
+            type(self.history_sequence_mlp_layers) is not int
+            or self.history_sequence_mlp_layers < minimum_sequence_layers
+        ):
+            raise ValueError(
+                "history_sequence_mlp_layers must be an integer >= 1 "
+                "when history_encoding is enabled"
+            )
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -382,7 +422,9 @@ class PTCGTransformer(torch.nn.Module):
     ):
         super().__init__()
         self.config = config
-        self.encoder_token_count = ENCODER_TOKENS
+        self.encoder_token_count = ENCODER_TOKENS + int(
+            config.history_encoding != "off"
+        )
         card_feature_table = torch.as_tensor(
             card_feature_table,
             dtype=torch.float32,
@@ -571,6 +613,126 @@ class PTCGTransformer(torch.nn.Module):
         self.no_action_embedding = torch.nn.Parameter(
             torch.zeros(config.d_model)
         )
+        self.history_select_type_embedding = None
+        self.history_context_embedding = None
+        self.history_no_action_embedding = None
+        self.history_action_mlp = None
+        self.history_sequence_mlp = None
+        if config.history_encoding != "off":
+            self.history_select_type_embedding = torch.nn.Embedding(
+                SELECT_TYPE_COUNT, config.d_model
+            )
+            self.history_context_embedding = torch.nn.Embedding(
+                OPTION_CONTEXT_COUNT, config.d_model
+            )
+            self.history_no_action_embedding = torch.nn.Parameter(
+                torch.zeros(config.d_model)
+            )
+            self.history_option_type_embedding = torch.nn.Embedding(
+                OPTION_TYPE_COUNT, config.d_model
+            )
+            if config.history_encoding == "structural":
+                self.history_source_area_embedding = torch.nn.Embedding(
+                    OPTION_AREA_COUNT, config.d_model, padding_idx=0
+                )
+                self.history_target_area_embedding = torch.nn.Embedding(
+                    OPTION_AREA_COUNT, config.d_model, padding_idx=0
+                )
+                self.history_source_relation_embedding = torch.nn.Embedding(
+                    OPTION_PLAYER_RELATION_COUNT,
+                    config.d_model,
+                    padding_idx=0,
+                )
+                self.history_target_relation_embedding = torch.nn.Embedding(
+                    OPTION_PLAYER_RELATION_COUNT,
+                    config.d_model,
+                    padding_idx=0,
+                )
+                self.history_number_embedding = torch.nn.Embedding(
+                    OPTION_VALUE_COUNT, config.d_model, padding_idx=0
+                )
+                self.history_count_embedding = torch.nn.Embedding(
+                    OPTION_VALUE_COUNT, config.d_model, padding_idx=0
+                )
+                self.history_special_condition_embedding = (
+                    torch.nn.Embedding(
+                        OPTION_SPECIAL_CONDITION_COUNT,
+                        config.d_model,
+                        padding_idx=0,
+                    )
+                )
+            elif config.history_encoding == "full":
+                self.history_candidate_embedding = torch.nn.Embedding(
+                    config.card_count + 1,
+                    config.d_model,
+                    padding_idx=config.card_count,
+                )
+                self.history_target_embedding = torch.nn.Embedding(
+                    config.card_count + 1,
+                    config.d_model,
+                    padding_idx=config.card_count,
+                )
+                self.history_attack_embedding = torch.nn.Embedding(
+                    config.attack_count + 1,
+                    config.d_model,
+                    padding_idx=config.attack_count,
+                )
+                self.history_number_embedding = torch.nn.Embedding(
+                    OPTION_VALUE_COUNT, config.d_model, padding_idx=0
+                )
+                self.history_count_embedding = torch.nn.Embedding(
+                    OPTION_VALUE_COUNT, config.d_model, padding_idx=0
+                )
+                self.history_player_relation_embedding = torch.nn.Embedding(
+                    OPTION_PLAYER_RELATION_COUNT,
+                    config.d_model,
+                    padding_idx=0,
+                )
+                self.history_area_embedding = torch.nn.Embedding(
+                    OPTION_AREA_COUNT, config.d_model, padding_idx=0
+                )
+                self.history_in_play_area_embedding = torch.nn.Embedding(
+                    OPTION_AREA_COUNT, config.d_model, padding_idx=0
+                )
+                self.history_special_condition_embedding = (
+                    torch.nn.Embedding(
+                        OPTION_SPECIAL_CONDITION_COUNT,
+                        config.d_model,
+                        padding_idx=0,
+                    )
+                )
+                self.history_candidate_static_projection = None
+                self.history_target_static_projection = None
+                if config.card_mlp_layers > 0:
+                    self.history_candidate_static_projection = (
+                        _projection_mlp(
+                            CARD_FEATURE_DIM,
+                            config.d_model,
+                            config.card_mlp_layers,
+                        )
+                    )
+                    self.history_target_static_projection = _projection_mlp(
+                        CARD_FEATURE_DIM,
+                        config.d_model,
+                        config.card_mlp_layers,
+                    )
+                self.history_attack_static_projection = torch.nn.Linear(
+                    ATTACK_FEATURE_DIM, config.d_model
+                )
+                self.history_pokemon_dynamic_projection = torch.nn.Linear(
+                    POKEMON_DYNAMIC_DIM, config.d_model
+                )
+                self.history_attack_dynamic_projection = torch.nn.Linear(
+                    ATTACK_DYNAMIC_DIM, config.d_model
+                )
+            self.history_action_mlp = self._make_token_mlp(
+                config.history_action_mlp_layers
+            )
+            self.history_sequence_mlp = _projection_mlp(
+                HISTORY_STEPS * config.d_model,
+                config.d_model,
+                config.history_sequence_mlp_layers,
+            )
         self.decoder = torch.nn.ModuleList(
             DecoderLayer(
                 config.d_model,
@@ -818,9 +980,178 @@ class PTCGTransformer(torch.nn.Module):
         return action_embeddings + empty.unsqueeze(1) * self.no_action_embedding
 
     @staticmethod
+    def _pool_history_options(
+        option_embeddings: torch.Tensor,
+        option_offsets: torch.Tensor,
+        d_model: int,
+    ) -> torch.Tensor:
+        slots = option_offsets.numel() - 1
+        if option_embeddings.size(0) == 0:
+            return option_embeddings.new_zeros((slots, d_model))
+        indices = torch.arange(
+            option_embeddings.size(0), device=option_embeddings.device
+        )
+        return F.embedding_bag(
+            indices,
+            option_embeddings,
+            option_offsets,
+            mode="sum",
+            include_last_offset=True,
+        )
+
+    def _encode_history_option_rows(
+        self,
+        categorical: torch.Tensor,
+        structural: torch.Tensor,
+        pokemon_dynamic: torch.Tensor,
+        attack_dynamic: torch.Tensor,
+    ) -> torch.Tensor:
+        mode = self.config.history_encoding
+        token = self.history_option_type_embedding(categorical[:, 0])
+        if mode == "basic":
+            return token
+        if mode == "structural":
+            return (
+                self.history_option_type_embedding(
+                    structural[:, HISTORY_OPTION_TYPE_INDEX]
+                )
+                + self.history_source_area_embedding(
+                    structural[:, HISTORY_SOURCE_AREA_INDEX]
+                )
+                + self.history_target_area_embedding(
+                    structural[:, HISTORY_TARGET_AREA_INDEX]
+                )
+                + self.history_source_relation_embedding(
+                    structural[:, HISTORY_SOURCE_RELATION_INDEX]
+                )
+                + self.history_target_relation_embedding(
+                    structural[:, HISTORY_TARGET_RELATION_INDEX]
+                )
+                + self.history_number_embedding(
+                    structural[:, HISTORY_NUMBER_INDEX]
+                )
+                + self.history_count_embedding(
+                    structural[:, HISTORY_COUNT_INDEX]
+                )
+                + self.history_special_condition_embedding(
+                    structural[:, HISTORY_SPECIAL_CONDITION_INDEX]
+                )
+            )
+
+        candidate_ids = categorical[:, 2]
+        target_ids = categorical[:, 3]
+        attack_ids = categorical[:, 4]
+        if self.history_candidate_static_projection is None:
+            candidate_static = token.new_zeros(token.shape)
+            target_static = token.new_zeros(token.shape)
+        else:
+            candidate_table = self.history_candidate_static_projection(
+                self.card_feature_table
+            )
+            target_table = self.history_target_static_projection(
+                self.card_feature_table
+            )
+            zero_card = candidate_table.new_zeros(
+                (1, self.config.d_model)
+            )
+            candidate_static = torch.cat(
+                (candidate_table, zero_card), dim=0
+            )[candidate_ids]
+            target_static = torch.cat(
+                (target_table, zero_card), dim=0
+            )[target_ids]
+        attack_table = self.history_attack_static_projection(
+            self.attack_feature_table
+        )
+        attack_static = torch.cat(
+            (attack_table, attack_table.new_zeros((1, self.config.d_model))),
+            dim=0,
+        )[attack_ids]
+        pokemon_present = (
+            (pokemon_dynamic[:, 0] > 0)
+            | (pokemon_dynamic[:, POKEMON_DYNAMIC_WORD_DIM] > 0)
+        )
+        pokemon_token = self.history_pokemon_dynamic_projection(
+            pokemon_dynamic
+        ) * pokemon_present.unsqueeze(1)
+        attack_present = attack_dynamic[:, 0] > 0
+        attack_token = self.history_attack_dynamic_projection(
+            attack_dynamic
+        ) * attack_present.unsqueeze(1)
+        return (
+            token
+            + self.history_candidate_embedding(candidate_ids)
+            + self.history_target_embedding(target_ids)
+            + self.history_attack_embedding(attack_ids)
+            + self.history_number_embedding(categorical[:, 5])
+            + self.history_count_embedding(categorical[:, 6])
+            + self.history_player_relation_embedding(categorical[:, 7])
+            + self.history_area_embedding(categorical[:, 8])
+            + self.history_in_play_area_embedding(categorical[:, 9])
+            + self.history_special_condition_embedding(categorical[:, 10])
+            + candidate_static
+            + target_static
+            + attack_static
+            + pokemon_token
+            + attack_token
+        )
+
+    def encode_history(
+        self,
+        select_type: torch.Tensor,
+        select_context: torch.Tensor,
+        valid: torch.Tensor,
+        categorical: torch.Tensor,
+        structural: torch.Tensor,
+        pokemon_dynamic: torch.Tensor,
+        attack_dynamic: torch.Tensor,
+        option_offsets: torch.Tensor,
+    ) -> torch.Tensor:
+        """Map three chronological historical actions to one token."""
+        if self.config.history_encoding == "off":
+            raise RuntimeError("history encoder is disabled")
+        batch_size = valid.size(0)
+        expected_slots = batch_size * HISTORY_STEPS
+        if option_offsets.numel() != expected_slots + 1:
+            raise ValueError("history option offsets do not match the batch")
+        if categorical.size(0) != structural.size(0):
+            raise ValueError("history categorical and structural rows differ")
+        option_tokens = self._encode_history_option_rows(
+            categorical,
+            structural,
+            pokemon_dynamic,
+            attack_dynamic,
+        )
+        actions = self._pool_history_options(
+            option_tokens,
+            option_offsets,
+            self.config.d_model,
+        )
+        flat_valid = valid.reshape(-1).to(dtype=torch.bool)
+        actions = actions + self.history_select_type_embedding(
+            select_type.reshape(-1)
+        )
+        actions = actions + self.history_context_embedding(
+            select_context.reshape(-1)
+        )
+        empty = option_offsets[1:] == option_offsets[:-1]
+        actions = actions + (
+            empty & flat_valid
+        ).unsqueeze(1) * self.history_no_action_embedding
+        if self.history_action_mlp is not None:
+            actions = self.history_action_mlp(actions)
+        actions = actions * flat_valid.unsqueeze(1)
+        actions = actions.reshape(
+            batch_size, HISTORY_STEPS * self.config.d_model
+        )
+        history_token = self.history_sequence_mlp(actions)
+        return history_token * valid.any(dim=1, keepdim=True)
+
+    @staticmethod
     def _encoder_padding_mask(
         own_summary: torch.Tensor,
         opponent_summary: torch.Tensor,
+        history_valid: torch.Tensor | None = None,
     ) -> torch.Tensor:
         slots = torch.arange(BENCH_SLOTS, device=own_summary.device)
         own_count = torch.round(
@@ -838,9 +1169,15 @@ class PTCGTransformer(torch.nn.Module):
             dtype=torch.bool,
             device=own_summary.device,
         )
-        return torch.cat(
+        result = torch.cat(
             (own_padding, opponent_padding, fixed_tokens), dim=1
         )
+        if history_valid is not None:
+            result = torch.cat(
+                (result, ~history_valid.to(torch.bool).any(dim=1, keepdim=True)),
+                dim=1,
+            )
+        return result
 
     def forward(
         self,
@@ -851,6 +1188,14 @@ class PTCGTransformer(torch.nn.Module):
         own_summary,
         opponent_summary,
         global_summary,
+        history_select_type,
+        history_select_context,
+        history_valid,
+        history_option_categorical,
+        history_structural,
+        history_pokemon_dynamic,
+        history_attack_dynamic,
+        history_option_offset,
         option_categorical,
         option_numeric,
         pokemon_dynamic,
@@ -898,9 +1243,24 @@ class PTCGTransformer(torch.nn.Module):
             ),
             dim=1,
         )
-        encoded = self.apply_region_token_mlps(encoded).transpose(0, 1)
+        encoded = self.apply_region_token_mlps(encoded)
+        if cfg.history_encoding != "off":
+            history_token = self.encode_history(
+                history_select_type,
+                history_select_context,
+                history_valid,
+                history_option_categorical,
+                history_structural,
+                history_pokemon_dynamic,
+                history_attack_dynamic,
+                history_option_offset,
+            )
+            encoded = torch.cat((encoded, history_token.unsqueeze(1)), dim=1)
+        encoded = encoded.transpose(0, 1)
         encoder_padding_mask = self._encoder_padding_mask(
-            own_summary, opponent_summary
+            own_summary,
+            opponent_summary,
+            history_valid if cfg.history_encoding != "off" else None,
         )
         encoder_out = self.encoder(
             encoded,

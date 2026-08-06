@@ -62,6 +62,9 @@ model:
   hand_token_mlp_layers: 1      # Own hand token only.
   deck_token_mlp_layers: 1      # Own remaining-deck token only.
   region_token_mlp_residual: true
+  history_encoding: off          # off, basic, structural, or full.
+  history_action_mlp_layers: 1   # Shared by the three historical actions.
+  history_sequence_mlp_layers: 2 # [t-3,t-2,t-1] concatenation -> one token.
 
 wandb:
   enabled: true

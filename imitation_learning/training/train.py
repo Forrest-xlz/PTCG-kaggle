@@ -45,6 +45,8 @@ from training.expert_validation import load_expert_date_info
 from training.feature_cache import (
     CACHE_SCHEMA_VERSION,
     ENCODER_WORDS,
+    HISTORY_STEPS,
+    HISTORY_STRUCTURAL_DIM,
     MAX_ACTIONS,
     ATTACK_DYNAMIC_DIM,
     OPTION_CATEGORICAL_DIM,
@@ -124,6 +126,9 @@ class ModelSettings:
     hand_token_mlp_layers: int = 0
     deck_token_mlp_layers: int = 0
     region_token_mlp_residual: bool = True
+    history_encoding: str = "off"
+    history_action_mlp_layers: int = 1
+    history_sequence_mlp_layers: int = 2
 
 
 @dataclass(frozen=True)
@@ -425,6 +430,9 @@ def feature_signature(config: ModelConfig) -> dict:
         "option_numeric_dim": OPTION_NUMERIC_DIM,
         "pokemon_dynamic_dim": POKEMON_DYNAMIC_DIM,
         "attack_dynamic_dim": ATTACK_DYNAMIC_DIM,
+        "history_steps": HISTORY_STEPS,
+        "history_structural_dim": HISTORY_STRUCTURAL_DIM,
+        "history_layout": "selected-option-superset-v1",
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
     }
@@ -481,6 +489,20 @@ def _forward_batch(
         _to_device(batch.own_summary, device, dtype=torch.float32),
         _to_device(batch.opponent_summary, device, dtype=torch.float32),
         _to_device(batch.global_summary, device, dtype=torch.float32),
+        _to_device(batch.history_select_type, device, dtype=torch.long),
+        _to_device(batch.history_select_context, device, dtype=torch.long),
+        _to_device(batch.history_valid, device, dtype=torch.long),
+        _to_device(
+            batch.history_option_categorical, device, dtype=torch.long
+        ),
+        _to_device(batch.history_structural, device, dtype=torch.long),
+        _to_device(
+            batch.history_pokemon_dynamic, device, dtype=torch.float32
+        ),
+        _to_device(
+            batch.history_attack_dynamic, device, dtype=torch.float32
+        ),
+        _to_device(batch.history_option_offset, device, dtype=torch.long),
         _to_device(batch.option_categorical, device, dtype=torch.long),
         _to_device(batch.option_numeric, device, dtype=torch.float32),
         _to_device(batch.pokemon_dynamic, device, dtype=torch.float32),
@@ -743,6 +765,9 @@ def main() -> None:
         hand_token_mlp_layers=model_cfg.hand_token_mlp_layers,
         deck_token_mlp_layers=model_cfg.deck_token_mlp_layers,
         region_token_mlp_residual=model_cfg.region_token_mlp_residual,
+        history_encoding=model_cfg.history_encoding,
+        history_action_mlp_layers=model_cfg.history_action_mlp_layers,
+        history_sequence_mlp_layers=model_cfg.history_sequence_mlp_layers,
     )
     invalid_card_ids = sorted(
         {

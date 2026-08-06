@@ -49,6 +49,8 @@ OPTION_SPECIAL_CONDITION_DIM = 6
 POKEMON_DYNAMIC_WORD_DIM = 23
 POKEMON_DYNAMIC_DIM = 2 * POKEMON_DYNAMIC_WORD_DIM
 ATTACK_DYNAMIC_DIM = 6
+HISTORY_STEPS = 3
+HISTORY_STRUCTURAL_DIM = 8
 
 OPTION_TYPE_INDEX = 0
 OPTION_CONTEXT_INDEX = 1
@@ -111,6 +113,18 @@ class OptionFeatures:
     attack_dynamic: np.ndarray
     action_index: np.ndarray
     action_offset: np.ndarray
+
+
+@dataclass(frozen=True)
+class HistoryActionFeatures:
+    """Selected-option features for one completed historical decision."""
+
+    select_type: int
+    select_context: int
+    option_categorical: np.ndarray
+    structural: np.ndarray
+    pokemon_dynamic: np.ndarray
+    attack_dynamic: np.ndarray
 
 
 @lru_cache(maxsize=None)
@@ -980,4 +994,106 @@ def decoder_features(
         attack_dynamic=attack_dynamic,
         action_index=np.asarray(action_index, dtype=np.int64),
         action_offset=np.asarray(action_offset, dtype=np.int64),
+    )
+
+
+def _history_structural_option(obs: Any, option: Any) -> list[int]:
+    """Return position-free structural fields for one historical option."""
+    from cg.api import AreaType, OptionType
+
+    yours = int(obs.current.yourIndex)
+    option_type = int(option.type)
+    source_area = 0 if option.area is None else int(option.area)
+    target_area = 0 if option.inPlayArea is None else int(option.inPlayArea)
+    source_relation = (
+        0
+        if option.playerIndex is None
+        else 1 if int(option.playerIndex) == yours else 2
+    )
+    target_relation = 0
+
+    if option.type == OptionType.PLAY:
+        source_area = int(AreaType.HAND)
+        source_relation = 1
+    elif option.type == OptionType.ATTACK:
+        source_area = int(AreaType.ACTIVE)
+        target_area = int(AreaType.ACTIVE)
+        source_relation = 1
+        target_relation = 2
+    elif option.type == OptionType.RETREAT:
+        source_area = int(AreaType.ACTIVE)
+        source_relation = 1
+    elif option.type in {OptionType.ATTACH, OptionType.EVOLVE}:
+        if source_relation == 0:
+            source_relation = 1
+        if target_area != 0:
+            target_relation = 1
+
+    if not 0 <= source_area < OPTION_AREA_DIM:
+        raise ValueError(
+            f"history source area {source_area} is outside the vocabulary"
+        )
+    if not 0 <= target_area < OPTION_AREA_DIM:
+        raise ValueError(
+            f"history target area {target_area} is outside the vocabulary"
+        )
+    return [
+        option_type,
+        source_area,
+        target_area,
+        source_relation,
+        target_relation,
+        _option_value_index(option.number, "history option number"),
+        _option_value_index(option.count, "history option count"),
+        (
+            0
+            if option.specialConditionType is None
+            else int(option.specialConditionType) + 1
+        ),
+    ]
+
+
+def history_action_features(
+    obs: Any,
+    selected: list[int],
+    card_count: int,
+    attack_count: int,
+    *,
+    numeric_catalog: NumericFeatureCatalog | None = None,
+    encoded_options: OptionFeatures | None = None,
+) -> HistoryActionFeatures:
+    """Encode one completed action without any option-position numerics."""
+    options = list(obs.select.option)
+    chosen = [int(index) for index in selected]
+    if len(set(chosen)) != len(chosen) or any(
+        index < 0 or index >= len(options) for index in chosen
+    ):
+        raise ValueError("historical action contains an invalid option index")
+    select_type = int(obs.select.type)
+    if not 0 <= select_type < SELECT_TYPE_DIM:
+        raise ValueError(f"select type {select_type} is outside the vocabulary")
+
+    encoded = encoded_options
+    if encoded is None:
+        encoded = decoder_features(
+            obs,
+            [chosen],
+            card_count,
+            attack_count,
+            numeric_catalog=numeric_catalog,
+        )
+    elif encoded.categorical.shape[0] != len(options):
+        raise ValueError("encoded_options does not align with observation options")
+    rows = np.asarray(chosen, dtype=np.int64)
+    structural = np.asarray(
+        [_history_structural_option(obs, options[index]) for index in chosen],
+        dtype=np.int64,
+    ).reshape(-1, HISTORY_STRUCTURAL_DIM)
+    return HistoryActionFeatures(
+        select_type=select_type,
+        select_context=int(obs.select.context),
+        option_categorical=encoded.categorical[rows].copy(),
+        structural=structural,
+        pokemon_dynamic=encoded.pokemon_dynamic[rows].copy(),
+        attack_dynamic=encoded.attack_dynamic[rows].copy(),
     )

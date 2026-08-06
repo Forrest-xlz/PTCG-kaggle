@@ -14,7 +14,7 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 14
+CACHE_SCHEMA_VERSION = 15
 ENCODER_WORDS = 26
 POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
@@ -24,6 +24,8 @@ OPTION_CATEGORICAL_DIM = 11
 OPTION_NUMERIC_DIM = 5
 POKEMON_DYNAMIC_DIM = 46
 ATTACK_DYNAMIC_DIM = 6
+HISTORY_STEPS = 3
+HISTORY_STRUCTURAL_DIM = 8
 MAX_ACTIONS = 64
 ALIGNMENT = 64
 
@@ -41,6 +43,14 @@ SECTION_DTYPES = {
     "pokemon_dynamic": np.dtype("<f2"),
     "attack_dynamic": np.dtype("<f2"),
     "option_ptr": np.dtype("<u4"),
+    "history_select_type": np.dtype("u1"),
+    "history_select_context": np.dtype("u1"),
+    "history_valid": np.dtype("u1"),
+    "history_option_categorical": np.dtype("<u2"),
+    "history_structural": np.dtype("<u2"),
+    "history_pokemon_dynamic": np.dtype("<f2"),
+    "history_attack_dynamic": np.dtype("<f2"),
+    "history_option_ptr": np.dtype("<u4"),
     "action_option_index": np.dtype("<u2"),
     "action_option_ptr": np.dtype("<u4"),
     "action_option_offset": np.dtype("<u2"),
@@ -71,6 +81,14 @@ class FeatureRecord:
     action_count: int
     episode_key: int
     deck_key: int
+    history_select_type: list[int]
+    history_select_context: list[int]
+    history_valid: list[int]
+    history_option_categorical: list[int]
+    history_structural: list[int]
+    history_pokemon_dynamic: list[float]
+    history_attack_dynamic: list[float]
+    history_option_offset: list[int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +110,14 @@ class FeatureView:
     action_count: int
     episode_key: int
     deck_key: int
+    history_select_type: np.ndarray
+    history_select_context: np.ndarray
+    history_valid: np.ndarray
+    history_option_categorical: np.ndarray
+    history_structural: np.ndarray
+    history_pokemon_dynamic: np.ndarray
+    history_attack_dynamic: np.ndarray
+    history_option_offset: np.ndarray
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +142,14 @@ class CachedBatch:
     action_option_offset: np.ndarray
     target: np.ndarray
     action_count: np.ndarray
+    history_select_type: np.ndarray
+    history_select_context: np.ndarray
+    history_valid: np.ndarray
+    history_option_categorical: np.ndarray
+    history_structural: np.ndarray
+    history_pokemon_dynamic: np.ndarray
+    history_attack_dynamic: np.ndarray
+    history_option_offset: np.ndarray
 
     def __len__(self) -> int:
         return int(self.target.size)
@@ -237,12 +271,14 @@ class PackedShardWriter:
         self._buffered_samples = 0
         self._encoder_nnz = 0
         self._option_count = 0
+        self._history_option_count = 0
         self._action_option_nnz = 0
         self._action_offset_count = 0
         self._closed = False
 
         self._append("encoder_ptr", 0)
         self._append("option_ptr", 0)
+        self._append("history_option_ptr", 0)
         self._append("action_option_ptr", 0)
         self._append("action_option_offset_ptr", 0)
 
@@ -289,6 +325,44 @@ class PackedShardWriter:
         for name, width in dynamic_widths.items():
             if len(getattr(record, name)) != option_count * width:
                 raise ValueError(f"{name} does not align with options")
+        for name in (
+            "history_select_type",
+            "history_select_context",
+            "history_valid",
+        ):
+            if len(getattr(record, name)) != HISTORY_STEPS:
+                raise ValueError(f"{name} must contain {HISTORY_STEPS} values")
+        if any(value not in (0, 1) for value in record.history_valid):
+            raise ValueError("history_valid values must be 0 or 1")
+        if len(record.history_option_offset) != HISTORY_STEPS + 1:
+            raise ValueError(
+                "history_option_offset must contain four boundaries"
+            )
+        if len(record.history_option_categorical) % OPTION_CATEGORICAL_DIM:
+            raise ValueError("history_option_categorical has an invalid width")
+        history_option_count = (
+            len(record.history_option_categorical) // OPTION_CATEGORICAL_DIM
+        )
+        history_offsets = np.asarray(
+            record.history_option_offset, dtype=np.int64
+        )
+        if (
+            history_offsets[0] != 0
+            or history_offsets[-1] != history_option_count
+            or np.any(history_offsets[1:] < history_offsets[:-1])
+        ):
+            raise ValueError("history_option_offset boundaries are invalid")
+        history_widths = {
+            "history_structural": HISTORY_STRUCTURAL_DIM,
+            "history_pokemon_dynamic": POKEMON_DYNAMIC_DIM,
+            "history_attack_dynamic": ATTACK_DYNAMIC_DIM,
+        }
+        for name, width in history_widths.items():
+            if len(getattr(record, name)) != history_option_count * width:
+                raise ValueError(f"{name} does not align with history options")
+        for slot, valid in enumerate(record.history_valid):
+            if not valid and history_offsets[slot + 1] != history_offsets[slot]:
+                raise ValueError("padded history slot contains options")
         if len(record.action_option_offset) != int(record.action_count) + 1:
             raise ValueError(
                 "action_option_offset length must equal action_count + 1"
@@ -322,6 +396,16 @@ class PackedShardWriter:
             np.iinfo(np.uint16).max,
         )
         _validate_unsigned(
+            "history_option_categorical",
+            record.history_option_categorical,
+            np.iinfo(np.uint16).max,
+        )
+        _validate_unsigned(
+            "history_structural",
+            record.history_structural,
+            np.iinfo(np.uint16).max,
+        )
+        _validate_unsigned(
             "action_option_index",
             record.action_option_index,
             np.iinfo(np.uint16).max,
@@ -336,7 +420,13 @@ class PackedShardWriter:
         narrowed = encoder_values.astype(np.float16)
         if not np.all(np.isfinite(encoder_values)) or not np.all(np.isfinite(narrowed)):
             raise ValueError("encoder_value contains a non-finite or float16-overflow value")
-        for name in ("option_numeric", "pokemon_dynamic", "attack_dynamic"):
+        for name in (
+            "option_numeric",
+            "pokemon_dynamic",
+            "attack_dynamic",
+            "history_pokemon_dynamic",
+            "history_attack_dynamic",
+        ):
             full_precision = np.asarray(getattr(record, name), dtype=np.float32)
             narrowed = full_precision.astype(np.float16)
             if not np.all(np.isfinite(full_precision)) or not np.all(
@@ -348,6 +438,9 @@ class PackedShardWriter:
 
         next_encoder_nnz = self._encoder_nnz + len(record.encoder_index)
         next_option_count = self._option_count + option_count
+        next_history_option_count = (
+            self._history_option_count + history_option_count
+        )
         next_action_option_nnz = (
             self._action_option_nnz + len(record.action_option_index)
         )
@@ -358,6 +451,7 @@ class PackedShardWriter:
         if max(
             next_encoder_nnz,
             next_option_count,
+            next_history_option_count,
             next_action_option_nnz,
             next_action_offset_count,
         ) > uint32_max:
@@ -378,6 +472,25 @@ class PackedShardWriter:
         self._buffers["option_numeric"].extend(record.option_numeric)
         self._buffers["pokemon_dynamic"].extend(record.pokemon_dynamic)
         self._buffers["attack_dynamic"].extend(record.attack_dynamic)
+        self._buffers["history_select_type"].extend(
+            record.history_select_type
+        )
+        self._buffers["history_select_context"].extend(
+            record.history_select_context
+        )
+        self._buffers["history_valid"].extend(record.history_valid)
+        self._buffers["history_option_categorical"].extend(
+            record.history_option_categorical
+        )
+        self._buffers["history_structural"].extend(
+            record.history_structural
+        )
+        self._buffers["history_pokemon_dynamic"].extend(
+            record.history_pokemon_dynamic
+        )
+        self._buffers["history_attack_dynamic"].extend(
+            record.history_attack_dynamic
+        )
         self._buffers["action_option_index"].extend(
             record.action_option_index
         )
@@ -387,6 +500,12 @@ class PackedShardWriter:
 
         self._encoder_nnz = next_encoder_nnz
         self._option_count = next_option_count
+        for boundary in record.history_option_offset[1:]:
+            self._append(
+                "history_option_ptr",
+                self._history_option_count + int(boundary),
+            )
+        self._history_option_count = next_history_option_count
         self._action_option_nnz = next_action_option_nnz
         self._action_offset_count = next_action_offset_count
         self._append("encoder_ptr", self._encoder_nnz)
@@ -546,6 +665,13 @@ class PackedShard:
                 raise ValueError(
                     f"{name} length does not match sample count"
                 )
+        if (
+            self.arrays["history_option_ptr"].size
+            != self.samples * HISTORY_STEPS + 1
+        ):
+            raise ValueError(
+                "history_option_ptr length does not match sample count"
+            )
         if self.arrays["encoder_offset"].size != self.samples * ENCODER_WORDS:
             raise ValueError("encoder_offset length does not match sample count")
         if (
@@ -567,6 +693,15 @@ class PackedShard:
         for name, width in dense_widths.items():
             if self.arrays[name].size != self.samples * width:
                 raise ValueError(f"{name} length does not match sample count")
+        for name in (
+            "history_select_type",
+            "history_select_context",
+            "history_valid",
+        ):
+            if self.arrays[name].size != self.samples * HISTORY_STEPS:
+                raise ValueError(f"{name} length does not match sample count")
+        if np.any(self.arrays["history_valid"] > 1):
+            raise ValueError("history_valid contains an invalid value")
         if self.arrays["target"].size != self.samples:
             raise ValueError("target length does not match sample count")
         if self.arrays["action_count"].size != self.samples:
@@ -587,9 +722,24 @@ class PackedShard:
             != option_count * ATTACK_DYNAMIC_DIM
         ):
             raise ValueError("option feature arrays do not align with option_ptr")
+        history_option_count = int(self.arrays["history_option_ptr"][-1])
+        if (
+            self.arrays["history_option_categorical"].size
+            != history_option_count * OPTION_CATEGORICAL_DIM
+            or self.arrays["history_structural"].size
+            != history_option_count * HISTORY_STRUCTURAL_DIM
+            or self.arrays["history_pokemon_dynamic"].size
+            != history_option_count * POKEMON_DYNAMIC_DIM
+            or self.arrays["history_attack_dynamic"].size
+            != history_option_count * ATTACK_DYNAMIC_DIM
+        ):
+            raise ValueError(
+                "history feature arrays do not align with history_option_ptr"
+            )
         pointer_targets = {
             "encoder_ptr": self.arrays["encoder_index"].size,
             "option_ptr": option_count,
+            "history_option_ptr": history_option_count,
             "action_option_ptr": self.arrays["action_option_index"].size,
             "action_option_offset_ptr": self.arrays[
                 "action_option_offset"
@@ -624,6 +774,13 @@ class PackedShard:
         encoder_end = int(self.arrays["encoder_ptr"][local_id + 1])
         option_start = int(self.arrays["option_ptr"][local_id])
         option_end = int(self.arrays["option_ptr"][local_id + 1])
+        history_pointer_start = local_id * HISTORY_STEPS
+        history_boundaries = self.arrays["history_option_ptr"][
+            history_pointer_start:
+            history_pointer_start + HISTORY_STEPS + 1
+        ]
+        history_start = int(history_boundaries[0])
+        history_end = int(history_boundaries[-1])
         action_start = int(self.arrays["action_option_ptr"][local_id])
         action_end = int(self.arrays["action_option_ptr"][local_id + 1])
         offset_start = int(
@@ -637,6 +794,7 @@ class PackedShard:
         own_start = local_id * OWN_SUMMARY_DIM
         opponent_start = local_id * OPPONENT_SUMMARY_DIM
         global_start = local_id * GLOBAL_SUMMARY_DIM
+        history_fixed_start = local_id * HISTORY_STEPS
         return FeatureView(
             encoder_index=self.arrays["encoder_index"][encoder_start:encoder_end],
             encoder_value=self.arrays["encoder_value"][encoder_start:encoder_end],
@@ -684,6 +842,40 @@ class PackedShard:
             action_count=int(self.arrays["action_count"][local_id]),
             episode_key=int(self.arrays["episode_key"][local_id]),
             deck_key=int(self.arrays["deck_key"][local_id]),
+            history_select_type=self.arrays["history_select_type"][
+                history_fixed_start:history_fixed_start + HISTORY_STEPS
+            ],
+            history_select_context=self.arrays["history_select_context"][
+                history_fixed_start:history_fixed_start + HISTORY_STEPS
+            ],
+            history_valid=self.arrays["history_valid"][
+                history_fixed_start:history_fixed_start + HISTORY_STEPS
+            ],
+            history_option_categorical=self.arrays[
+                "history_option_categorical"
+            ][
+                history_start * OPTION_CATEGORICAL_DIM:
+                history_end * OPTION_CATEGORICAL_DIM
+            ].reshape(-1, OPTION_CATEGORICAL_DIM),
+            history_structural=self.arrays["history_structural"][
+                history_start * HISTORY_STRUCTURAL_DIM:
+                history_end * HISTORY_STRUCTURAL_DIM
+            ].reshape(-1, HISTORY_STRUCTURAL_DIM),
+            history_pokemon_dynamic=self.arrays[
+                "history_pokemon_dynamic"
+            ][
+                history_start * POKEMON_DYNAMIC_DIM:
+                history_end * POKEMON_DYNAMIC_DIM
+            ].reshape(-1, POKEMON_DYNAMIC_DIM),
+            history_attack_dynamic=self.arrays[
+                "history_attack_dynamic"
+            ][
+                history_start * ATTACK_DYNAMIC_DIM:
+                history_end * ATTACK_DYNAMIC_DIM
+            ].reshape(-1, ATTACK_DYNAMIC_DIM),
+            history_option_offset=(
+                history_boundaries.astype(np.int64) - history_start
+            ),
         )
 
     def close(self) -> None:
@@ -1042,6 +1234,10 @@ class MmapFeatureDataset:
         option_numeric = []
         pokemon_dynamic = []
         attack_dynamic = []
+        history_option_categorical = []
+        history_structural = []
+        history_pokemon_dynamic = []
+        history_attack_dynamic = []
         action_option_indices = []
         encoder_offsets = np.empty(global_ids.size * ENCODER_WORDS, dtype=np.int32)
         encoder_pokemon_appear = np.empty(
@@ -1057,6 +1253,19 @@ class MmapFeatureDataset:
         global_summaries = np.empty(
             (global_ids.size, GLOBAL_SUMMARY_DIM), dtype=np.float16
         )
+        history_select_type = np.empty(
+            (global_ids.size, HISTORY_STEPS), dtype=np.uint8
+        )
+        history_select_context = np.empty(
+            (global_ids.size, HISTORY_STEPS), dtype=np.uint8
+        )
+        history_valid = np.empty(
+            (global_ids.size, HISTORY_STEPS), dtype=np.uint8
+        )
+        history_option_offsets = np.empty(
+            global_ids.size * HISTORY_STEPS + 1, dtype=np.int32
+        )
+        history_option_offsets[0] = 0
         action_option_offsets = np.empty(
             global_ids.size * MAX_ACTIONS + 1, dtype=np.int32
         )
@@ -1065,6 +1274,7 @@ class MmapFeatureDataset:
         encoder_base = 0
         option_base = 0
         action_option_base = 0
+        history_option_base = 0
 
         for row, (global_id, shard_id) in enumerate(zip(global_ids, shard_ids)):
             local_id = int(global_id - self.starts[int(shard_id)])
@@ -1076,6 +1286,15 @@ class MmapFeatureDataset:
             option_numeric.append(sample.option_numeric)
             pokemon_dynamic.append(sample.pokemon_dynamic)
             attack_dynamic.append(sample.attack_dynamic)
+            history_option_categorical.append(
+                sample.history_option_categorical
+            )
+            history_structural.append(sample.history_structural)
+            history_pokemon_dynamic.append(sample.history_pokemon_dynamic)
+            history_attack_dynamic.append(sample.history_attack_dynamic)
+            history_select_type[row] = sample.history_select_type
+            history_select_context[row] = sample.history_select_context
+            history_valid[row] = sample.history_valid
             action_option_indices.append(
                 sample.action_option_index.astype(np.int32) + option_base
             )
@@ -1098,11 +1317,22 @@ class MmapFeatureDataset:
             ] = (
                 action_option_base + sample.action_option_index.size
             )
+            history_offset_start = row * HISTORY_STEPS
+            history_option_offsets[
+                history_offset_start + 1:
+                history_offset_start + HISTORY_STEPS + 1
+            ] = (
+                sample.history_option_offset[1:].astype(np.int32)
+                + history_option_base
+            )
             targets[row] = sample.target
             action_counts[row] = sample.action_count
             encoder_base += int(sample.encoder_index.size)
             option_base += int(sample.option_categorical.shape[0])
             action_option_base += int(sample.action_option_index.size)
+            history_option_base += int(
+                sample.history_option_categorical.shape[0]
+            )
 
         return CachedBatch(
             encoder_index=np.concatenate(encoder_indices).astype(np.int32, copy=False),
@@ -1130,6 +1360,22 @@ class MmapFeatureDataset:
             action_option_offset=action_option_offsets,
             target=targets,
             action_count=action_counts,
+            history_select_type=history_select_type,
+            history_select_context=history_select_context,
+            history_valid=history_valid,
+            history_option_categorical=np.concatenate(
+                history_option_categorical
+            ).astype(np.int64, copy=False),
+            history_structural=np.concatenate(history_structural).astype(
+                np.int64, copy=False
+            ),
+            history_pokemon_dynamic=np.concatenate(
+                history_pokemon_dynamic
+            ).astype(np.float16, copy=False),
+            history_attack_dynamic=np.concatenate(
+                history_attack_dynamic
+            ).astype(np.float16, copy=False),
+            history_option_offset=history_option_offsets,
         )
 
     def iter_batches(

@@ -18,7 +18,11 @@ from training.feature_cache import (
     POKEMON_ENCODER_TOKENS,
     GLOBAL_SUMMARY_DIM,
     OPPONENT_SUMMARY_DIM,
+    ATTACK_DYNAMIC_DIM,
+    HISTORY_STRUCTURAL_DIM,
+    OPTION_CATEGORICAL_DIM,
     OPTION_NUMERIC_DIM,
+    POKEMON_DYNAMIC_DIM,
     OWN_SUMMARY_DIM,
     FeatureRecord,
     MmapFeatureDataset,
@@ -62,11 +66,21 @@ def record(marker: int, action_count: int = 2) -> FeatureRecord:
         own_summary=[float(marker)] * OWN_SUMMARY_DIM,
         opponent_summary=[float(marker + 1)] * OPPONENT_SUMMARY_DIM,
         global_summary=[float(marker + 2)] * GLOBAL_SUMMARY_DIM,
-        option_categorical=[
-            8, 21, marker, marker + 1, 512,
-            13, 21, 1267, 1267, 1,
-        ],
+        option_categorical=(
+            [8, 21, marker, marker + 1, 512, 0, 0, 1, 1, 1, 0]
+            + [13, 21, 1267, 1267, 512, 0, 0, 0, 0, 0, 0]
+        ),
         option_numeric=[float(marker) / 100] * (2 * OPTION_NUMERIC_DIM),
+        pokemon_dynamic=[0.0] * (2 * POKEMON_DYNAMIC_DIM),
+        attack_dynamic=[0.0] * (2 * ATTACK_DYNAMIC_DIM),
+        history_select_type=[0, 0, 0],
+        history_select_context=[0, 0, 0],
+        history_valid=[0, 0, 0],
+        history_option_categorical=[],
+        history_structural=[],
+        history_pokemon_dynamic=[],
+        history_attack_dynamic=[],
+        history_option_offset=[0, 0, 0, 0],
         action_option_index=action_option_index,
         action_option_offset=action_option_offset,
         target=min(1, action_count - 1),
@@ -129,11 +143,11 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
         np.testing.assert_array_equal(sample.own_summary, 11.0)
         np.testing.assert_array_equal(sample.opponent_summary, 12.0)
         np.testing.assert_array_equal(sample.global_summary, 13.0)
-        assert sample.option_categorical.shape == (2, 5)
+        assert sample.option_categorical.shape == (2, OPTION_CATEGORICAL_DIM)
         assert sample.option_numeric.shape == (2, OPTION_NUMERIC_DIM)
         assert sample.option_numeric.dtype == np.float16
         np.testing.assert_array_equal(
-            sample.option_categorical[0], [8, 21, 11, 12, 512]
+            sample.option_categorical[0, :5], [8, 21, 11, 12, 512]
         )
         np.testing.assert_array_equal(sample.action_option_index, [0, 1, 0])
         np.testing.assert_array_equal(sample.action_option_offset, [0, 2, 3])
@@ -466,7 +480,7 @@ def test_collate_rebases_options_and_pads_action_offsets(tmp_path: Path) -> None
         assert batch.own_summary.shape == (2, OWN_SUMMARY_DIM)
         assert batch.opponent_summary.shape == (2, OPPONENT_SUMMARY_DIM)
         assert batch.global_summary.shape == (2, GLOBAL_SUMMARY_DIM)
-        assert batch.option_categorical.shape == (4, 5)
+        assert batch.option_categorical.shape == (4, OPTION_CATEGORICAL_DIM)
         assert batch.option_numeric.shape == (4, OPTION_NUMERIC_DIM)
         assert batch.action_option_offset.shape == (2 * 64 + 1,)
         assert batch.encoder_index.dtype == np.int32

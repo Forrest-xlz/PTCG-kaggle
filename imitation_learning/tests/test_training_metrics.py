@@ -17,9 +17,14 @@ from training.feature_cache import CachedBatch
 from training.feature_cache import (
     ENCODER_WORDS,
     GLOBAL_SUMMARY_DIM,
+    ATTACK_DYNAMIC_DIM,
+    HISTORY_STEPS,
+    HISTORY_STRUCTURAL_DIM,
+    OPTION_CATEGORICAL_DIM,
     OPPONENT_SUMMARY_DIM,
     OPTION_NUMERIC_DIM,
     OWN_SUMMARY_DIM,
+    POKEMON_DYNAMIC_DIM,
 )
 from training.train import (
     ExponentialMovingAverage,
@@ -59,20 +64,7 @@ class CountingModel(torch.nn.Module):
         super().__init__()
         self.forward_calls = 0
 
-    def forward(
-        self,
-        encoder_index,
-        encoder_value,
-        encoder_offset,
-        pokemon_appear,
-        own_summary,
-        opponent_summary,
-        global_summary,
-        option_categorical,
-        option_numeric,
-        action_option_index,
-        action_option_offset,
-    ):
+    def forward(self, encoder_index, encoder_value, encoder_offset, *args):
         self.forward_calls += 1
         batch_size = encoder_offset.numel() // ENCODER_WORDS
         return torch.arange(5, dtype=torch.float32).repeat(batch_size, 1)
@@ -95,9 +87,17 @@ class DummyDataset:
             global_summary=np.zeros(
                 (size, GLOBAL_SUMMARY_DIM), dtype=np.float16
             ),
-            option_categorical=np.zeros((size, 5), dtype=np.int64),
+            option_categorical=np.zeros(
+                (size, OPTION_CATEGORICAL_DIM), dtype=np.int64
+            ),
             option_numeric=np.zeros(
                 (size, OPTION_NUMERIC_DIM), dtype=np.float16
+            ),
+            pokemon_dynamic=np.zeros(
+                (size, POKEMON_DYNAMIC_DIM), dtype=np.float16
+            ),
+            attack_dynamic=np.zeros(
+                (size, ATTACK_DYNAMIC_DIM), dtype=np.float16
             ),
             action_option_index=np.zeros(size, dtype=np.int64),
             action_option_offset=np.zeros(
@@ -105,6 +105,30 @@ class DummyDataset:
             ),
             target=np.full(size, 4, dtype=np.int64),
             action_count=np.full(size, 5, dtype=np.int64),
+            history_select_type=np.zeros(
+                (size, HISTORY_STEPS), dtype=np.uint8
+            ),
+            history_select_context=np.zeros(
+                (size, HISTORY_STEPS), dtype=np.uint8
+            ),
+            history_valid=np.zeros(
+                (size, HISTORY_STEPS), dtype=np.uint8
+            ),
+            history_option_categorical=np.empty(
+                (0, OPTION_CATEGORICAL_DIM), dtype=np.int64
+            ),
+            history_structural=np.empty(
+                (0, HISTORY_STRUCTURAL_DIM), dtype=np.int64
+            ),
+            history_pokemon_dynamic=np.empty(
+                (0, POKEMON_DYNAMIC_DIM), dtype=np.float16
+            ),
+            history_attack_dynamic=np.empty(
+                (0, ATTACK_DYNAMIC_DIM), dtype=np.float16
+            ),
+            history_option_offset=np.zeros(
+                size * HISTORY_STEPS + 1, dtype=np.int32
+            ),
         )
 
 

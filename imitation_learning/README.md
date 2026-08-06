@@ -51,7 +51,8 @@ ordinary CPU memory. Candidate selections cover every legal size from
 `maxCount` down to `minCount`, retain at most the first 64 combinations, and
 treat replay selection order as irrelevant. Each sample also stores a stable
 32-bit replay key used for validation splitting and a stable 64-bit key for
-its complete deck. Cache schema 4 is required, so older feature caches must be
+its complete deck plus the acting player's previous three actions. Cache
+schema 15 is required, so older feature caches must be
 rebuilt; replay extraction does not need to be repeated.
 
 Training has no command-line parameters. It reads `cfg/train.yaml`, whose
@@ -131,7 +132,7 @@ Energy cards inside that region; decoder cards reuse the corresponding encoder
 region MLP. Setting `card_mlp_layers` to zero disables static-card embeddings
 while preserving all learned Card ID embeddings.
 
-The encoder has a fixed 26-token layout: eight bench slots per player, two
+The encoder has a 26-token base layout: eight bench slots per player, two
 active Pokémon, three dense summary tokens, separate discard tokens for both
 players, the own hand, remaining-deck estimate, and stadium. The own-player
 (69), opponent-player (71), and global/select (73) numeric summaries replace
@@ -145,7 +146,7 @@ tokens. Five `*_token_mlp_layers` settings control eight independent post-token
 MLPs: own/opponent Bench, Active, and discard plus own hand and own deck. The
 two sides share configured depths but not weights. `region_token_mlp_residual`
 selects `token + MLP(token)` or `MLP(token)` globally for these modules.
-Changing these features requires rebuilding the feature cache (schema 14), but
+Changing these features requires rebuilding the feature cache (schema 15), but
 does not require replay extraction again.
 
 The decoder stores each raw engine option once using eleven categorical fields:
@@ -163,6 +164,21 @@ each completed option token. Exact candidate action combinations are still
 enumerated up to 64, and their option tokens are summed before the
 cross-attention-only decoder. Rebuild the feature cache after this change;
 existing winner-only extracted JSONL files remain valid.
+
+`model.history_encoding` optionally appends one action-history token to the
+encoder. `basic` uses the previous three decisions' select type, select
+context, and selected option types; `structural` additionally uses normalized
+source/target areas, player relations, number/count, and special condition;
+`full` uses independent decoder-like Card, Attack, static, and dynamic
+features, while deliberately excluding all five option-position numerics.
+Historical options in a combination action are summed, one shared
+`history_action_mlp_layers` projection is applied at each of `[t-3,t-2,t-1]`,
+and their concatenation is mapped by `history_sequence_mlp_layers` to one
+token. All trainable history parameters are independent from the current-action
+decoder. Switching among `basic`, `structural`, and `full` reuses the same
+schema-15 cache. Older caches must be rebuilt with
+`python -m training.cache_features`; replay extraction does not need to be
+rerun.
 
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the
@@ -196,9 +212,9 @@ Dataset, then attach it to
 the `cg` directory. In the first code cell, set the exact `MODEL_PATH`,
 `CG_PATH`, and the agent's 60-card `DECK`, then run all cells.
 The notebook reads width, FFN size, attention heads, encoder/decoder depth,
-normalization mode, and the static-card projection ratio from the checkpoint;
+normalization mode, static-card projections, and action-history mode from the checkpoint;
 these architecture fields are not configured twice. It embeds the inference
-code, including the fixed 20-token numeric-summary layout, and creates
+code, including the 26-token base encoder layout and optional history token, and creates
 `/kaggle/working/submission.tar.gz`.
 
 ## Training records

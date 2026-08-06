@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import tempfile
+from collections import deque
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -38,13 +39,21 @@ if str(_cg_path) not in sys.path:
     sys.path.insert(0, str(_cg_path))
 
 from cg.api import all_attack, all_card_data, to_observation_class
-from model.features import decoder_features, encoder_features, enumerate_actions
+from model.features import (
+    HISTORY_STEPS,
+    HistoryActionFeatures,
+    decoder_features,
+    encoder_features,
+    enumerate_actions,
+    history_action_features,
+)
 from model.network import ModelConfig
 from training.feature_cache import (
     CACHE_SCHEMA_VERSION,
     ENCODER_WORDS,
     MAX_ACTIONS,
     ATTACK_DYNAMIC_DIM,
+    HISTORY_STRUCTURAL_DIM,
     OPTION_CATEGORICAL_DIM,
     OPTION_NUMERIC_DIM,
     POKEMON_DYNAMIC_DIM,
@@ -54,6 +63,51 @@ from training.feature_cache import (
     stable_deck_key,
     stable_episode_key,
 )
+
+
+def _pack_history(history: list[HistoryActionFeatures]) -> dict[str, list]:
+    """Left-pad and flatten a three-action history for packed storage."""
+    recent = list(history[-HISTORY_STEPS:])
+    padded: list[HistoryActionFeatures | None] = [
+        None
+    ] * (HISTORY_STEPS - len(recent)) + recent
+    result: dict[str, list] = {
+        "history_select_type": [],
+        "history_select_context": [],
+        "history_valid": [],
+        "history_option_categorical": [],
+        "history_structural": [],
+        "history_pokemon_dynamic": [],
+        "history_attack_dynamic": [],
+        "history_option_offset": [0],
+    }
+    option_count = 0
+    for action in padded:
+        if action is None:
+            result["history_select_type"].append(0)
+            result["history_select_context"].append(0)
+            result["history_valid"].append(0)
+        else:
+            result["history_select_type"].append(int(action.select_type))
+            result["history_select_context"].append(
+                int(action.select_context)
+            )
+            result["history_valid"].append(1)
+            result["history_option_categorical"].extend(
+                action.option_categorical.reshape(-1).tolist()
+            )
+            result["history_structural"].extend(
+                action.structural.reshape(-1).tolist()
+            )
+            result["history_pokemon_dynamic"].extend(
+                action.pokemon_dynamic.reshape(-1).tolist()
+            )
+            result["history_attack_dynamic"].extend(
+                action.attack_dynamic.reshape(-1).tolist()
+            )
+            option_count += int(action.option_categorical.shape[0])
+        result["history_option_offset"].append(option_count)
+    return result
 
 
 @dataclass(frozen=True)
@@ -98,14 +152,23 @@ def feature_signature(config: ModelConfig) -> dict:
         "option_numeric_dim": OPTION_NUMERIC_DIM,
         "pokemon_dynamic_dim": POKEMON_DYNAMIC_DIM,
         "attack_dynamic_dim": ATTACK_DYNAMIC_DIM,
+        "history_steps": HISTORY_STEPS,
+        "history_structural_dim": HISTORY_STRUCTURAL_DIM,
+        "history_layout": "selected-option-superset-v1",
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
     }
 
 
 def _prepare_record(
-    record: dict, config: ModelConfig
-) -> tuple[FeatureRecord | None, str | None]:
+    record: dict,
+    config: ModelConfig,
+    history: list[HistoryActionFeatures] | None = None,
+) -> tuple[
+    FeatureRecord | None,
+    str | None,
+    HistoryActionFeatures | None,
+]:
     obs = to_observation_class(record["observation"])
     actions = enumerate_actions(
         len(obs.select.option),
@@ -115,20 +178,34 @@ def _prepare_record(
     )
     selected = sorted(record["selected"])
     if not obs.select.minCount <= len(selected) <= obs.select.maxCount:
-        return None, "invalid_selected_count"
+        return None, "invalid_selected_count", None
     if (
         len(set(selected)) != len(selected)
         or any(index < 0 or index >= len(obs.select.option) for index in selected)
     ):
-        return None, "invalid_selected_index"
+        return None, "invalid_selected_index", None
     try:
         target = actions.index(selected)
     except ValueError:
-        return None, "outside_first_64"
+        current_history = history_action_features(
+            obs,
+            selected,
+            config.card_count,
+            config.attack_count,
+        )
+        return None, "outside_first_64", current_history
     encoder = encoder_features(obs, record["deck"], config.card_count)
     decoder = decoder_features(
         obs, actions, config.card_count, config.attack_count
     )
+    current_history = history_action_features(
+        obs,
+        selected,
+        config.card_count,
+        config.attack_count,
+        encoded_options=decoder,
+    )
+    packed_history = _pack_history(list(history or []))
     return (
         FeatureRecord(
             encoder_index=encoder.sparse.index,
@@ -148,8 +225,10 @@ def _prepare_record(
             action_count=len(actions),
             episode_key=stable_episode_key(record["episode_id"]),
             deck_key=stable_deck_key(record["deck"]),
+            **packed_history,
         ),
         None,
+        current_history,
     )
 
 
@@ -283,13 +362,29 @@ def process_source(job) -> dict:
         "outside_first_64": 0,
     }
     part_names = []
+    current_episode = None
+    player_histories: dict[int, deque[HistoryActionFeatures]] = {}
     try:
         with gzip.open(source, "rt", encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, start=1):
                 try:
-                    prepared, skip_reason = _prepare_record(
-                        json.loads(line), config
+                    raw_record = json.loads(line)
+                    episode = str(raw_record["episode_id"])
+                    if episode != current_episode:
+                        current_episode = episode
+                        player_histories.clear()
+                    player = int(raw_record["player"])
+                    player_history = player_histories.setdefault(
+                        player,
+                        deque(maxlen=HISTORY_STEPS),
                     )
+                    prepared, skip_reason, current_action = _prepare_record(
+                        raw_record,
+                        config,
+                        list(player_history),
+                    )
+                    if current_action is not None:
+                        player_history.append(current_action)
                 except Exception as exc:
                     raise RuntimeError(
                         f"{source.name}:{line_number}: {exc}"
