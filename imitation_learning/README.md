@@ -180,6 +180,13 @@ IDs, and saves:
 The similarity table contains every unordered exact-deck pair. It reports the
 minimum changed card slots and count-aware Weighted Jaccard similarity.
 
+Open `eda/replay_timing.ipynb` to analyze agent startup time and mean
+subsequent-action time from the numerically latest dated replay ZIP. Configure
+`SCORE_MODE` (`avg`, `min`, or `max`) and `SCORE_THRESHOLD` in the parameter
+cell. The notebook caches replay-player timings and exports the team-level
+analysis under `data/replay_timing/`, then plots timing distributions and four
+global K-Means timing clusters.
+
 Before Kaggle submission, edit `CHECKPOINT_PATH`, `OUTPUT_PATH`, and
 `PRECISION` at the top of `training/export_inference.py`, then strip the
 optimizer and other training-only state:
