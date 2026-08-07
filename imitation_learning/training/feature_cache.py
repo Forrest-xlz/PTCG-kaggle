@@ -14,12 +14,13 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 15
+CACHE_SCHEMA_VERSION = 16
 ENCODER_WORDS = 26
 POKEMON_ENCODER_TOKENS = 18
-OWN_SUMMARY_DIM = 69
-OPPONENT_SUMMARY_DIM = 71
+OWN_SUMMARY_DIM = 94
+OPPONENT_SUMMARY_DIM = 96
 GLOBAL_SUMMARY_DIM = 73
+ENCODER_POKEMON_DYNAMIC_DIM = 38
 OPTION_CATEGORICAL_DIM = 11
 OPTION_NUMERIC_DIM = 5
 POKEMON_DYNAMIC_DIM = 46
@@ -35,6 +36,8 @@ SECTION_DTYPES = {
     "encoder_ptr": np.dtype("<u4"),
     "encoder_offset": np.dtype("<u2"),
     "encoder_pokemon_appear": np.dtype("u1"),
+    "encoder_pokemon_dynamic": np.dtype("<f2"),
+    "encoder_pre_evolution": np.dtype("<u2"),
     "own_summary": np.dtype("<f2"),
     "opponent_summary": np.dtype("<f2"),
     "global_summary": np.dtype("<f2"),
@@ -68,6 +71,8 @@ class FeatureRecord:
     encoder_value: list[float]
     encoder_offset: list[int]
     encoder_pokemon_appear: list[int]
+    encoder_pokemon_dynamic: list[float]
+    encoder_pre_evolution: list[int]
     own_summary: list[float]
     opponent_summary: list[float]
     global_summary: list[float]
@@ -97,6 +102,8 @@ class FeatureView:
     encoder_value: np.ndarray
     encoder_offset: np.ndarray
     encoder_pokemon_appear: np.ndarray
+    encoder_pokemon_dynamic: np.ndarray
+    encoder_pre_evolution: np.ndarray
     own_summary: np.ndarray
     opponent_summary: np.ndarray
     global_summary: np.ndarray
@@ -131,6 +138,8 @@ class CachedBatch:
     encoder_value: np.ndarray
     encoder_offset: np.ndarray
     encoder_pokemon_appear: np.ndarray
+    encoder_pokemon_dynamic: np.ndarray
+    encoder_pre_evolution: np.ndarray
     own_summary: np.ndarray
     opponent_summary: np.ndarray
     global_summary: np.ndarray
@@ -305,6 +314,22 @@ class PackedShardWriter:
             raise ValueError(
                 "encoder_pokemon_appear values must be in [0, 2]"
             )
+        if (
+            len(record.encoder_pokemon_dynamic)
+            != POKEMON_ENCODER_TOKENS * ENCODER_POKEMON_DYNAMIC_DIM
+        ):
+            raise ValueError(
+                "encoder_pokemon_dynamic must contain 18 x 38 values"
+            )
+        if len(record.encoder_pre_evolution) != POKEMON_ENCODER_TOKENS:
+            raise ValueError(
+                "encoder_pre_evolution must contain 18 values"
+            )
+        _validate_unsigned(
+            "encoder_pre_evolution",
+            record.encoder_pre_evolution,
+            np.iinfo(np.uint16).max,
+        )
         _validate_dense_summary("own_summary", record.own_summary, OWN_SUMMARY_DIM)
         _validate_dense_summary(
             "opponent_summary", record.opponent_summary, OPPONENT_SUMMARY_DIM
@@ -421,6 +446,7 @@ class PackedShardWriter:
         if not np.all(np.isfinite(encoder_values)) or not np.all(np.isfinite(narrowed)):
             raise ValueError("encoder_value contains a non-finite or float16-overflow value")
         for name in (
+            "encoder_pokemon_dynamic",
             "option_numeric",
             "pokemon_dynamic",
             "attack_dynamic",
@@ -462,6 +488,12 @@ class PackedShardWriter:
         self._buffers["encoder_offset"].extend(record.encoder_offset)
         self._buffers["encoder_pokemon_appear"].extend(
             record.encoder_pokemon_appear
+        )
+        self._buffers["encoder_pokemon_dynamic"].extend(
+            record.encoder_pokemon_dynamic
+        )
+        self._buffers["encoder_pre_evolution"].extend(
+            record.encoder_pre_evolution
         )
         self._buffers["own_summary"].extend(record.own_summary)
         self._buffers["opponent_summary"].extend(record.opponent_summary)
@@ -685,6 +717,22 @@ class PackedShard:
             raise ValueError(
                 "encoder_pokemon_appear contains an invalid value"
             )
+        if (
+            self.arrays["encoder_pokemon_dynamic"].size
+            != self.samples
+            * POKEMON_ENCODER_TOKENS
+            * ENCODER_POKEMON_DYNAMIC_DIM
+        ):
+            raise ValueError(
+                "encoder_pokemon_dynamic length does not match sample count"
+            )
+        if (
+            self.arrays["encoder_pre_evolution"].size
+            != self.samples * POKEMON_ENCODER_TOKENS
+        ):
+            raise ValueError(
+                "encoder_pre_evolution length does not match sample count"
+            )
         dense_widths = {
             "own_summary": OWN_SUMMARY_DIM,
             "opponent_summary": OPPONENT_SUMMARY_DIM,
@@ -791,6 +839,9 @@ class PackedShard:
         )
         encoder_word_start = local_id * ENCODER_WORDS
         pokemon_start = local_id * POKEMON_ENCODER_TOKENS
+        pokemon_dynamic_start = (
+            pokemon_start * ENCODER_POKEMON_DYNAMIC_DIM
+        )
         own_start = local_id * OWN_SUMMARY_DIM
         opponent_start = local_id * OPPONENT_SUMMARY_DIM
         global_start = local_id * GLOBAL_SUMMARY_DIM
@@ -803,6 +854,22 @@ class PackedShard:
             ],
             encoder_pokemon_appear=self.arrays[
                 "encoder_pokemon_appear"
+            ][
+                pokemon_start:
+                pokemon_start + POKEMON_ENCODER_TOKENS
+            ],
+            encoder_pokemon_dynamic=self.arrays[
+                "encoder_pokemon_dynamic"
+            ][
+                pokemon_dynamic_start:
+                pokemon_dynamic_start
+                + POKEMON_ENCODER_TOKENS * ENCODER_POKEMON_DYNAMIC_DIM
+            ].reshape(
+                POKEMON_ENCODER_TOKENS,
+                ENCODER_POKEMON_DYNAMIC_DIM,
+            ),
+            encoder_pre_evolution=self.arrays[
+                "encoder_pre_evolution"
             ][
                 pokemon_start:
                 pokemon_start + POKEMON_ENCODER_TOKENS
@@ -1253,6 +1320,18 @@ class MmapFeatureDataset:
         global_summaries = np.empty(
             (global_ids.size, GLOBAL_SUMMARY_DIM), dtype=np.float16
         )
+        encoder_pokemon_dynamic = np.empty(
+            (
+                global_ids.size,
+                POKEMON_ENCODER_TOKENS,
+                ENCODER_POKEMON_DYNAMIC_DIM,
+            ),
+            dtype=np.float16,
+        )
+        encoder_pre_evolution = np.empty(
+            (global_ids.size, POKEMON_ENCODER_TOKENS),
+            dtype=np.int64,
+        )
         history_select_type = np.empty(
             (global_ids.size, HISTORY_STEPS), dtype=np.uint8
         )
@@ -1282,6 +1361,8 @@ class MmapFeatureDataset:
             encoder_indices.append(sample.encoder_index)
             encoder_values.append(sample.encoder_value)
             encoder_pokemon_appear[row] = sample.encoder_pokemon_appear
+            encoder_pokemon_dynamic[row] = sample.encoder_pokemon_dynamic
+            encoder_pre_evolution[row] = sample.encoder_pre_evolution
             option_categorical.append(sample.option_categorical)
             option_numeric.append(sample.option_numeric)
             pokemon_dynamic.append(sample.pokemon_dynamic)
@@ -1339,6 +1420,8 @@ class MmapFeatureDataset:
             encoder_value=np.concatenate(encoder_values).astype(np.float16, copy=False),
             encoder_offset=encoder_offsets,
             encoder_pokemon_appear=encoder_pokemon_appear,
+            encoder_pokemon_dynamic=encoder_pokemon_dynamic,
+            encoder_pre_evolution=encoder_pre_evolution,
             own_summary=own_summaries,
             opponent_summary=opponent_summaries,
             global_summary=global_summaries,

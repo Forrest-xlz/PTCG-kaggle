@@ -52,7 +52,7 @@ ordinary CPU memory. Candidate selections cover every legal size from
 treat replay selection order as irrelevant. Each sample also stores a stable
 32-bit replay key used for validation splitting and a stable 64-bit key for
 its complete deck plus the acting player's previous three actions. Cache
-schema 15 is required, so older feature caches must be
+schema 16 is required, so older feature caches must be
 rebuilt; replay extraction does not need to be repeated.
 
 Training has no command-line parameters. It reads `cfg/train.yaml`, whose
@@ -135,7 +135,7 @@ while preserving all learned Card ID embeddings.
 The encoder has a 26-token base layout: eight bench slots per player, two
 active Pokémon, three dense summary tokens, separate discard tokens for both
 players, the own hand, remaining-deck estimate, and stadium. The own-player
-(69), opponent-player (71), and global/select (73) numeric summaries replace
+(94), opponent-player (96), and global/select (73) numeric summaries replace
 the old sparse summaries through independent `Linear(n, d_model)` projections.
 Missing bench slots remain in the fixed layout but are excluded from encoder
 self-attention and decoder cross-attention by a boolean key-padding mask.
@@ -146,7 +146,15 @@ tokens. Five `*_token_mlp_layers` settings control eight independent post-token
 MLPs: own/opponent Bench, Active, and discard plus own hand and own deck. The
 two sides share configured depths but not weights. `region_token_mlp_residual`
 selects `token + MLP(token)` or `MLP(token)` globally for these modules.
-Changing these features requires rebuilding the feature cache (schema 15), but
+`pokemon_dynamic_embedding` adds a shared 38-to-`d_model` projection to every
+Bench/Active Pokemon token. It covers HP, attached/effective Energy, Tools,
+turn appearance, side/position, Active special conditions, and readiness for
+the first two attacks. `pre_evolution_embedding` independently adds the most
+recent pre-evolution Card ID. Both switches default to false for old checkpoint
+compatibility, while schema 16 always caches their inputs. Player summaries
+also include `benchMax`, bench occupancy, per-Pokemon effective Energy and
+max HP, plus field-wide HP and Energy aggregates.
+Changing these features requires rebuilding the feature cache (schema 16), but
 does not require replay extraction again.
 
 The decoder stores each raw engine option once using eleven categorical fields:
@@ -176,7 +184,7 @@ Historical options in a combination action are summed, one shared
 and their concatenation is mapped by `history_sequence_mlp_layers` to one
 token. All trainable history parameters are independent from the current-action
 decoder. Switching among `basic`, `structural`, and `full` reuses the same
-schema-15 cache. Older caches must be rebuilt with
+schema-16 cache. Older caches must be rebuilt with
 `python -m training.cache_features`; replay extraction does not need to be
 rerun.
 

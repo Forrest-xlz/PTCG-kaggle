@@ -13,9 +13,10 @@ ENCODER_TOKENS = 26
 POKEMON_ENCODER_TOKENS = 18
 BENCH_SLOTS = 8
 PLAYER_BENCH_COUNT_INDEX = 10
-OWN_SUMMARY_DIM = 69
-OPPONENT_SUMMARY_DIM = 71
+OWN_SUMMARY_DIM = 94
+OPPONENT_SUMMARY_DIM = 96
 GLOBAL_SUMMARY_DIM = 73
+ENCODER_POKEMON_DYNAMIC_DIM = 38
 SELECT_TYPE_COUNT = 11
 OPTION_TYPE_COUNT = 17
 OPTION_CONTEXT_COUNT = 49
@@ -120,6 +121,8 @@ class ModelConfig:
     option_token_mlp_layers: int = 0
     card_mlp_scope: str = "shared"
     pokemon_appear_embedding: bool = False
+    pokemon_dynamic_embedding: bool = False
+    pre_evolution_embedding: bool = False
     bench_token_mlp_layers: int = 0
     active_token_mlp_layers: int = 0
     discard_token_mlp_layers: int = 0
@@ -153,6 +156,10 @@ class ModelConfig:
             raise ValueError("option_token_mlp_layers must be an integer >= 0")
         if type(self.pokemon_appear_embedding) is not bool:
             raise ValueError("pokemon_appear_embedding must be a boolean")
+        if type(self.pokemon_dynamic_embedding) is not bool:
+            raise ValueError("pokemon_dynamic_embedding must be a boolean")
+        if type(self.pre_evolution_embedding) is not bool:
+            raise ValueError("pre_evolution_embedding must be a boolean")
         for name in (
             "bench_token_mlp_layers",
             "active_token_mlp_layers",
@@ -503,6 +510,23 @@ class PTCGTransformer(torch.nn.Module):
         self.pokemon_appear_embedding = (
             torch.nn.Embedding(3, config.d_model, padding_idx=0)
             if config.pokemon_appear_embedding
+            else None
+        )
+        self.encoder_pokemon_dynamic_projection = (
+            torch.nn.Linear(
+                ENCODER_POKEMON_DYNAMIC_DIM,
+                config.d_model,
+            )
+            if config.pokemon_dynamic_embedding
+            else None
+        )
+        self.pre_evolution_embedding = (
+            torch.nn.Embedding(
+                config.card_count + 1,
+                config.d_model,
+                padding_idx=config.card_count,
+            )
+            if config.pre_evolution_embedding
             else None
         )
         self.own_bench_token_mlp = self._make_token_mlp(
@@ -1185,6 +1209,8 @@ class PTCGTransformer(torch.nn.Module):
         value_encoder,
         offset_encoder,
         pokemon_appear,
+        encoder_pokemon_dynamic,
+        encoder_pre_evolution,
         own_summary,
         opponent_summary,
         global_summary,
@@ -1228,6 +1254,47 @@ class PTCGTransformer(torch.nn.Module):
             pokemon_tokens = (
                 encoded[:, :POKEMON_ENCODER_TOKENS]
                 + self.pokemon_appear_embedding(pokemon_appear)
+            )
+            encoded = torch.cat(
+                (pokemon_tokens, encoded[:, POKEMON_ENCODER_TOKENS:]),
+                dim=1,
+            )
+        if self.encoder_pokemon_dynamic_projection is not None:
+            expected = (
+                batch_size,
+                POKEMON_ENCODER_TOKENS,
+                ENCODER_POKEMON_DYNAMIC_DIM,
+            )
+            if tuple(encoder_pokemon_dynamic.shape) != expected:
+                raise ValueError(
+                    "encoder_pokemon_dynamic must have shape "
+                    f"{expected}, found "
+                    f"{tuple(encoder_pokemon_dynamic.shape)}"
+                )
+            dynamic = self.encoder_pokemon_dynamic_projection(
+                encoder_pokemon_dynamic
+            )
+            dynamic = dynamic * encoder_pokemon_dynamic[
+                :, :, :1
+            ].gt(0).to(dynamic.dtype)
+            pokemon_tokens = (
+                encoded[:, :POKEMON_ENCODER_TOKENS] + dynamic
+            )
+            encoded = torch.cat(
+                (pokemon_tokens, encoded[:, POKEMON_ENCODER_TOKENS:]),
+                dim=1,
+            )
+        if self.pre_evolution_embedding is not None:
+            expected = (batch_size, POKEMON_ENCODER_TOKENS)
+            if tuple(encoder_pre_evolution.shape) != expected:
+                raise ValueError(
+                    "encoder_pre_evolution must have shape "
+                    f"{expected}, found "
+                    f"{tuple(encoder_pre_evolution.shape)}"
+                )
+            pokemon_tokens = (
+                encoded[:, :POKEMON_ENCODER_TOKENS]
+                + self.pre_evolution_embedding(encoder_pre_evolution)
             )
             encoded = torch.cat(
                 (pokemon_tokens, encoded[:, POKEMON_ENCODER_TOKENS:]),

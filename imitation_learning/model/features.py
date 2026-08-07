@@ -33,8 +33,9 @@ from model.card_features import (
 
 ENCODER_TOKENS = 26
 POKEMON_ENCODER_TOKENS = 18
-OWN_SUMMARY_DIM = 69
-OPPONENT_SUMMARY_DIM = 71
+PLAYER_SUMMARY_DIM = 79
+OWN_SUMMARY_DIM = 94
+OPPONENT_SUMMARY_DIM = 96
 GLOBAL_SUMMARY_DIM = 73
 SELECT_TYPE_DIM = 11
 SELECT_CONTEXT_DIM = 49
@@ -49,6 +50,7 @@ OPTION_SPECIAL_CONDITION_DIM = 6
 POKEMON_DYNAMIC_WORD_DIM = 23
 POKEMON_DYNAMIC_DIM = 2 * POKEMON_DYNAMIC_WORD_DIM
 ATTACK_DYNAMIC_DIM = 6
+ENCODER_POKEMON_DYNAMIC_DIM = 38
 HISTORY_STEPS = 3
 HISTORY_STRUCTURAL_DIM = 8
 
@@ -86,6 +88,7 @@ class NumericFeatureCatalog:
     card_features: np.ndarray
     attack_damage: np.ndarray
     card_attacks: tuple[tuple[int, ...], ...]
+    attack_energies: tuple[tuple[int, ...], ...] = ()
 
     def __post_init__(self) -> None:
         if self.card_features.ndim != 2 or self.card_features.shape[1] != CARD_FEATURE_DIM:
@@ -100,6 +103,8 @@ class NumericFeatureCatalog:
 class EncoderFeatures:
     sparse: SparseVector
     pokemon_appear: list[int]
+    pokemon_dynamic: np.ndarray
+    pre_evolution_ids: list[int]
     own_summary: list[float]
     opponent_summary: list[float]
     global_summary: list[float]
@@ -141,8 +146,13 @@ def _default_numeric_catalog(card_count: int) -> NumericFeatureCatalog:
     attacks = all_attack()
     attack_count = max((int(attack.attackId) for attack in attacks), default=-1) + 1
     attack_damage = np.zeros(attack_count, dtype=np.float32)
+    attack_energies: list[tuple[int, ...]] = [()] * attack_count
     for attack in attacks:
-        attack_damage[int(attack.attackId)] = float(attack.damage) / 300.0
+        attack_id = int(attack.attackId)
+        attack_damage[attack_id] = float(attack.damage) / 300.0
+        attack_energies[attack_id] = tuple(
+            int(energy) for energy in (attack.energies or [])
+        )
     card_attacks: list[tuple[int, ...]] = [()] * card_count
     for card in cards:
         card_id = int(card.cardId)
@@ -152,6 +162,7 @@ def _default_numeric_catalog(card_count: int) -> NumericFeatureCatalog:
         card_features=card_features,
         attack_damage=attack_damage,
         card_attacks=tuple(card_attacks),
+        attack_energies=tuple(attack_energies),
     )
 
 
@@ -308,7 +319,47 @@ def _player_summary(
             bench_max_hp / 3200.0,
         ]
     )
-    if len(features) != 54:
+    bench_max = max(0, int(getattr(player, "benchMax", 0)))
+    active_effective_energy = (
+        len(active.energies or []) if active is not None else 0
+    )
+    additions = [
+        bench_max / 8.0,
+        len(bench) / bench_max if bench_max else 0.0,
+        active_effective_energy / 10.0,
+    ]
+    for slot in range(8):
+        if slot < len(bench):
+            pokemon = bench[slot]
+            additions.extend(
+                [
+                    float(pokemon.maxHp) / 400.0,
+                    len(pokemon.energies or []) / 10.0,
+                ]
+            )
+        else:
+            additions.extend([0.0, 0.0])
+    all_in_play = ([active] if active is not None else []) + bench
+    additions.extend(
+        [
+            sum(len(pokemon.energies or []) for pokemon in bench) / 80.0,
+            (
+                min(float(pokemon.hp) for pokemon in bench) / 400.0
+                if bench
+                else 0.0
+            ),
+            sum(
+                len(pokemon.energyCards or []) for pokemon in all_in_play
+            ) / 90.0,
+            sum(
+                len(pokemon.energies or []) for pokemon in all_in_play
+            ) / 90.0,
+            sum(float(pokemon.hp) for pokemon in all_in_play) / 3600.0,
+            sum(float(pokemon.maxHp) for pokemon in all_in_play) / 3600.0,
+        ]
+    )
+    features.extend(additions)
+    if len(features) != PLAYER_SUMMARY_DIM:
         raise RuntimeError(f"player summary has {len(features)} dimensions")
     return features
 
@@ -531,8 +582,10 @@ def encoder_features(
         state.players[1 - yours],
     ]
     pokemon_appear = []
+    pokemon_dynamic = []
+    pre_evolution_ids = []
 
-    for player in relative_players:
+    for player_index, player in enumerate(relative_players):
         for slot in range(8):
             pokemon = (
                 player.bench[slot]
@@ -544,6 +597,18 @@ def encoder_features(
                 else 2 if bool(pokemon.appearThisTurn)
                 else 1
             )
+            pokemon_dynamic.append(
+                encoder_pokemon_dynamic_features(
+                    pokemon,
+                    player,
+                    is_active=False,
+                    is_own=player_index == 0,
+                    catalog=catalog,
+                )
+            )
+            pre_evolution_ids.append(
+                _pre_evolution_id(pokemon, card_count)
+            )
             sparse.word_start()
             position = sparse.pos
             _add_pokemon(
@@ -553,12 +618,24 @@ def encoder_features(
             )
             if slot != 7:
                 sparse.pos = position
-    for player in relative_players:
+    for player_index, player in enumerate(relative_players):
         pokemon = _active(player)
         pokemon_appear.append(
             0 if pokemon is None
             else 2 if bool(pokemon.appearThisTurn)
             else 1
+        )
+        pokemon_dynamic.append(
+            encoder_pokemon_dynamic_features(
+                pokemon,
+                player,
+                is_active=True,
+                is_own=player_index == 0,
+                catalog=catalog,
+            )
+        )
+        pre_evolution_ids.append(
+            _pre_evolution_id(pokemon, card_count)
         )
         sparse.word_start()
         _add_pokemon(sparse, pokemon, card_count)
@@ -590,6 +667,10 @@ def encoder_features(
         raise RuntimeError(
             "encoder Pokemon appear state must contain 18 values"
         )
+    if len(pokemon_dynamic) != POKEMON_ENCODER_TOKENS:
+        raise RuntimeError(
+            "encoder Pokemon dynamics must contain 18 rows"
+        )
 
     own_summary = _player_summary(relative_players[0], catalog)
     own_summary.extend(
@@ -600,12 +681,18 @@ def encoder_features(
         _opponent_revealed_summary(relative_players[1], catalog)
     )
     if len(own_summary) != OWN_SUMMARY_DIM:
-        raise RuntimeError("own summary must contain 60 values")
+        raise RuntimeError(
+            f"own summary must contain {OWN_SUMMARY_DIM} values"
+        )
     if len(opponent_summary) != OPPONENT_SUMMARY_DIM:
-        raise RuntimeError("opponent summary must contain 62 values")
+        raise RuntimeError(
+            f"opponent summary must contain {OPPONENT_SUMMARY_DIM} values"
+        )
     return EncoderFeatures(
         sparse=sparse,
         pokemon_appear=pokemon_appear,
+        pokemon_dynamic=np.stack(pokemon_dynamic),
+        pre_evolution_ids=pre_evolution_ids,
         own_summary=own_summary,
         opponent_summary=opponent_summary,
         global_summary=_global_summary(obs, yours),
@@ -707,6 +794,128 @@ def _pokemon_dynamic_features(
         float(is_own),
     ]
     return features
+
+
+def _attack_energy_readiness(
+    required: Iterable[Any],
+    available: Iterable[Any],
+) -> int:
+    """Return the minimum number of missing Energy units for one attack."""
+    from cg.api import EnergyType
+
+    colorless = int(EnergyType.COLORLESS)
+    rainbow = int(EnergyType.RAINBOW)
+    team_rocket = int(EnergyType.TEAM_ROCKET)
+    team_rocket_types = {
+        int(EnergyType.PSYCHIC),
+        int(EnergyType.DARKNESS),
+    }
+    available_counts = Counter(int(energy) for energy in available)
+    colored_requirements = [
+        int(energy) for energy in required if int(energy) != colorless
+    ]
+    colorless_requirements = sum(
+        int(energy) == colorless for energy in required
+    )
+
+    unmatched = []
+    for energy_type in colored_requirements:
+        if available_counts[energy_type] > 0:
+            available_counts[energy_type] -= 1
+        else:
+            unmatched.append(energy_type)
+
+    still_unmatched = []
+    for energy_type in unmatched:
+        if (
+            energy_type in team_rocket_types
+            and available_counts[team_rocket] > 0
+        ):
+            available_counts[team_rocket] -= 1
+        else:
+            still_unmatched.append(energy_type)
+
+    colored_deficit = 0
+    for _ in still_unmatched:
+        if available_counts[rainbow] > 0:
+            available_counts[rainbow] -= 1
+        else:
+            colored_deficit += 1
+
+    remaining_units = sum(available_counts.values())
+    return colored_deficit + max(
+        0,
+        colorless_requirements - remaining_units,
+    )
+
+
+def encoder_pokemon_dynamic_features(
+    pokemon: Any | None,
+    player: Any,
+    *,
+    is_active: bool,
+    is_own: bool,
+    catalog: NumericFeatureCatalog,
+) -> np.ndarray:
+    """Build the 38 runtime values added to one encoder Pokemon token."""
+    result = np.zeros(ENCODER_POKEMON_DYNAMIC_DIM, dtype=np.float32)
+    base = _pokemon_dynamic_features(
+        pokemon,
+        is_active=is_active,
+        is_own=is_own,
+    )
+    result[:POKEMON_DYNAMIC_WORD_DIM] = base
+    if not _is_pokemon(pokemon):
+        return result
+
+    if is_active:
+        result[23:28] = [
+            float(bool(player.poisoned)),
+            float(bool(player.burned)),
+            float(bool(player.asleep)),
+            float(bool(player.paralyzed)),
+            float(bool(player.confused)),
+        ]
+
+    card_id = int(pokemon.id)
+    attack_ids = (
+        catalog.card_attacks[card_id]
+        if 0 <= card_id < len(catalog.card_attacks)
+        else ()
+    )
+    available_energies = list(pokemon.energies or [])
+    for slot, attack_id in enumerate(attack_ids[:2]):
+        start = 28 + slot * 5
+        attack_id = int(attack_id)
+        if not 0 <= attack_id < len(catalog.attack_damage):
+            continue
+        required = (
+            catalog.attack_energies[attack_id]
+            if 0 <= attack_id < len(catalog.attack_energies)
+            else ()
+        )
+        deficit = _attack_energy_readiness(
+            required,
+            available_energies,
+        )
+        result[start:start + 5] = [
+            1.0,
+            float(catalog.attack_damage[attack_id]),
+            len(required) / 5.0,
+            deficit / 5.0,
+            float(deficit == 0),
+        ]
+    return result
+
+
+def _pre_evolution_id(pokemon: Any | None, card_count: int) -> int:
+    if not _is_pokemon(pokemon):
+        return card_count
+    previous = list(pokemon.preEvolution or [])
+    if not previous:
+        return card_count
+    card_id = int(previous[-1].id)
+    return card_id if 0 <= card_id < card_count else card_count
 
 
 def _option_pokemon_slots(

@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from training.feature_cache import (  # noqa: E402
     ATTACK_DYNAMIC_DIM,
     ENCODER_WORDS,
+    ENCODER_POKEMON_DYNAMIC_DIM,
     GLOBAL_SUMMARY_DIM,
     HISTORY_STEPS,
     HISTORY_STRUCTURAL_DIM,
@@ -36,6 +37,10 @@ def _record() -> FeatureRecord:
         encoder_value=[1.0],
         encoder_offset=[0] * ENCODER_WORDS,
         encoder_pokemon_appear=[0] * POKEMON_ENCODER_TOKENS,
+        encoder_pokemon_dynamic=[0.0] * (
+            POKEMON_ENCODER_TOKENS * ENCODER_POKEMON_DYNAMIC_DIM
+        ),
+        encoder_pre_evolution=[1267] * POKEMON_ENCODER_TOKENS,
         own_summary=[0.0] * OWN_SUMMARY_DIM,
         opponent_summary=[0.0] * OPPONENT_SUMMARY_DIM,
         global_summary=[0.0] * GLOBAL_SUMMARY_DIM,

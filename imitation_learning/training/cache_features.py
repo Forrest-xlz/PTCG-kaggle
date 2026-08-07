@@ -53,6 +53,7 @@ from training.feature_cache import (
     ENCODER_WORDS,
     MAX_ACTIONS,
     ATTACK_DYNAMIC_DIM,
+    ENCODER_POKEMON_DYNAMIC_DIM,
     HISTORY_STRUCTURAL_DIM,
     OPTION_CATEGORICAL_DIM,
     OPTION_NUMERIC_DIM,
@@ -145,7 +146,8 @@ def feature_signature(config: ModelConfig) -> dict:
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
         "encoder_tokens": ENCODER_WORDS,
-        "encoder_layout": "numeric-summary-26-appear-v2",
+        "encoder_layout": "numeric-summary-26-pokemon-runtime-v3",
+        "encoder_pokemon_dynamic_dim": ENCODER_POKEMON_DYNAMIC_DIM,
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_layout": "routed-option-dynamics-plus-numeric-v7",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,
@@ -212,6 +214,10 @@ def _prepare_record(
             encoder_value=encoder.sparse.value,
             encoder_offset=encoder.sparse.offset,
             encoder_pokemon_appear=encoder.pokemon_appear,
+            encoder_pokemon_dynamic=(
+                encoder.pokemon_dynamic.reshape(-1).tolist()
+            ),
+            encoder_pre_evolution=encoder.pre_evolution_ids,
             own_summary=encoder.own_summary,
             opponent_summary=encoder.opponent_summary,
             global_summary=encoder.global_summary,

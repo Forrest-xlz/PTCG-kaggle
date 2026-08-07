@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from training.feature_cache import CachedBatch
 from training.feature_cache import (
     ENCODER_WORDS,
+    ENCODER_POKEMON_DYNAMIC_DIM,
     GLOBAL_SUMMARY_DIM,
     ATTACK_DYNAMIC_DIM,
     HISTORY_STEPS,
@@ -79,6 +80,13 @@ class DummyDataset:
             encoder_offset=np.zeros(size * ENCODER_WORDS, dtype=np.int32),
             encoder_pokemon_appear=np.zeros(
                 (size, 18), dtype=np.uint8
+            ),
+            encoder_pokemon_dynamic=np.zeros(
+                (size, 18, ENCODER_POKEMON_DYNAMIC_DIM),
+                dtype=np.float16,
+            ),
+            encoder_pre_evolution=np.full(
+                (size, 18), 1267, dtype=np.int64
             ),
             own_summary=np.zeros((size, OWN_SUMMARY_DIM), dtype=np.float16),
             opponent_summary=np.zeros(

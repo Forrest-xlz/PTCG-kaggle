@@ -56,6 +56,8 @@ model:
   option_numeric_mlp_layers: 1  # Five non-embedded option numbers -> d_model.
   option_token_mlp_layers: 0    # 0=sum embeddings; >0 applies post-sum d_model MLP.
   pokemon_appear_embedding: true
+  pokemon_dynamic_embedding: true  # Shared 38 -> d_model runtime projection.
+  pre_evolution_embedding: true    # Previous-stage Card ID embedding.
   bench_token_mlp_layers: 1     # Separate own/opponent weights.
   active_token_mlp_layers: 1    # Separate own/opponent weights.
   discard_token_mlp_layers: 1   # Separate own/opponent weights.

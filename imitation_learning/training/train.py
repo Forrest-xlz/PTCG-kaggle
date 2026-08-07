@@ -49,6 +49,7 @@ from training.feature_cache import (
     HISTORY_STRUCTURAL_DIM,
     MAX_ACTIONS,
     ATTACK_DYNAMIC_DIM,
+    ENCODER_POKEMON_DYNAMIC_DIM,
     OPTION_CATEGORICAL_DIM,
     OPTION_NUMERIC_DIM,
     POKEMON_DYNAMIC_DIM,
@@ -120,6 +121,8 @@ class ModelSettings:
     option_token_mlp_layers: int
     card_mlp_scope: str = "shared"
     pokemon_appear_embedding: bool = False
+    pokemon_dynamic_embedding: bool = False
+    pre_evolution_embedding: bool = False
     bench_token_mlp_layers: int = 0
     active_token_mlp_layers: int = 0
     discard_token_mlp_layers: int = 0
@@ -423,7 +426,8 @@ def feature_signature(config: ModelConfig) -> dict:
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
         "encoder_tokens": ENCODER_WORDS,
-        "encoder_layout": "numeric-summary-26-appear-v2",
+        "encoder_layout": "numeric-summary-26-pokemon-runtime-v3",
+        "encoder_pokemon_dynamic_dim": ENCODER_POKEMON_DYNAMIC_DIM,
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_layout": "routed-option-dynamics-plus-numeric-v7",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,
@@ -483,6 +487,16 @@ def _forward_batch(
         _to_device(batch.encoder_offset, device),
         _to_device(
             batch.encoder_pokemon_appear,
+            device,
+            dtype=torch.long,
+        ),
+        _to_device(
+            batch.encoder_pokemon_dynamic,
+            device,
+            dtype=torch.float32,
+        ),
+        _to_device(
+            batch.encoder_pre_evolution,
             device,
             dtype=torch.long,
         ),
@@ -759,6 +773,8 @@ def main() -> None:
         option_token_mlp_layers=model_cfg.option_token_mlp_layers,
         card_mlp_scope=model_cfg.card_mlp_scope,
         pokemon_appear_embedding=model_cfg.pokemon_appear_embedding,
+        pokemon_dynamic_embedding=model_cfg.pokemon_dynamic_embedding,
+        pre_evolution_embedding=model_cfg.pre_evolution_embedding,
         bench_token_mlp_layers=model_cfg.bench_token_mlp_layers,
         active_token_mlp_layers=model_cfg.active_token_mlp_layers,
         discard_token_mlp_layers=model_cfg.discard_token_mlp_layers,
