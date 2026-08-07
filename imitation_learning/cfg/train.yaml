@@ -50,6 +50,12 @@ model:
   encoder_layers: 1
   decoder_layers: 1
   norm_mode: postnorm   # prenorm or postnorm
+  transformer_activation: gelu # relu, gelu (tanh approximation), or geglu.
+  transformer_dropout: 0.1
+  dropout_embedding: true          # LayerNorm + dropout on encoder/action inputs.
+  dropout_attention_probs: true    # After attention softmax.
+  dropout_attention_output: true   # After attention output projection.
+  dropout_ffn_output: true         # After FFN output projection.
   summary_mlp_layers: 1         # Own/opponent/global summary projections.
   card_mlp_layers: 1            # 0 disables every static-card embedding.
   card_mlp_scope: region        # shared or region-specific projection MLPs.

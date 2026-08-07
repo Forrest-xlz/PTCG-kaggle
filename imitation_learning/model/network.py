@@ -114,6 +114,12 @@ class ModelConfig:
     encoder_layers: int = 1
     decoder_layers: int = 1
     norm_mode: str = "postnorm"
+    transformer_activation: str = "relu"
+    transformer_dropout: float = 0.0
+    dropout_embedding: bool = False
+    dropout_attention_probs: bool = False
+    dropout_attention_output: bool = False
+    dropout_ffn_output: bool = False
     summary_mlp_layers: int = 1
     card_mlp_layers: int = 1
     option_numeric_mlp_layers: int = 1
@@ -133,6 +139,20 @@ class ModelConfig:
     def __post_init__(self) -> None:
         if self.norm_mode not in {"prenorm", "postnorm"}:
             raise ValueError("norm_mode must be prenorm or postnorm")
+        if self.transformer_activation not in {"relu", "gelu", "geglu"}:
+            raise ValueError(
+                "transformer_activation must be relu, gelu, or geglu"
+            )
+        if not 0.0 <= float(self.transformer_dropout) < 1.0:
+            raise ValueError("transformer_dropout must be in [0, 1)")
+        for name in (
+            "dropout_embedding",
+            "dropout_attention_probs",
+            "dropout_attention_output",
+            "dropout_ffn_output",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
         if self.summary_mlp_layers < 1:
             raise ValueError("summary_mlp_layers must be >= 1")
         if self.card_mlp_layers < 0:
@@ -366,6 +386,58 @@ class CardAwareEmbeddingBag(torch.nn.EmbeddingBag):
         return learned + static
 
 
+class EncoderLayer(torch.nn.TransformerEncoderLayer):
+    """TransformerEncoderLayer with independently switchable dropouts."""
+
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_feedforward: int,
+        norm_mode: str,
+        activation: str = "relu",
+        dropout: float = 0.0,
+        dropout_attention_probs: bool = False,
+        dropout_attention_output: bool = False,
+        dropout_ffn_output: bool = False,
+    ):
+        super().__init__(
+            d_model=d_model,
+            nhead=num_heads,
+            dim_feedforward=d_feedforward,
+            dropout=0.0,
+            activation="relu",
+            norm_first=norm_mode == "prenorm",
+        )
+        self.transformer_activation = activation
+        if activation == "geglu":
+            self.linear1 = torch.nn.Linear(
+                d_model,
+                2 * d_feedforward,
+            )
+        self.activation = self._activate
+        self.activation_relu_or_gelu = 1 if activation == "relu" else 0
+        probability = float(dropout)
+        self.self_attn.dropout = (
+            probability if dropout_attention_probs else 0.0
+        )
+        self.dropout.p = 0.0
+        self.dropout1.p = (
+            probability if dropout_attention_output else 0.0
+        )
+        self.dropout2.p = (
+            probability if dropout_ffn_output else 0.0
+        )
+
+    def _activate(self, value: torch.Tensor) -> torch.Tensor:
+        if self.transformer_activation == "relu":
+            return F.relu(value)
+        if self.transformer_activation == "gelu":
+            return F.gelu(value, approximate="tanh")
+        value, gate = value.chunk(2, dim=-1)
+        return value * F.gelu(gate, approximate="tanh")
+
+
 class DecoderLayer(torch.nn.Module):
     def __init__(
         self,
@@ -373,14 +445,49 @@ class DecoderLayer(torch.nn.Module):
         num_heads: int,
         d_feedforward: int,
         norm_mode: str,
+        activation: str = "relu",
+        dropout: float = 0.0,
+        dropout_attention_probs: bool = False,
+        dropout_attention_output: bool = False,
+        dropout_ffn_output: bool = False,
     ):
         super().__init__()
         self.prenorm = norm_mode == "prenorm"
-        self.attention = torch.nn.MultiheadAttention(d_model, num_heads)
-        self.fc1 = torch.nn.Linear(d_model, d_feedforward)
+        probability = float(dropout)
+        self.transformer_activation = activation
+        self.attention = torch.nn.MultiheadAttention(
+            d_model,
+            num_heads,
+            dropout=(
+                probability if dropout_attention_probs else 0.0
+            ),
+        )
+        self.fc1 = torch.nn.Linear(
+            d_model,
+            d_feedforward * (2 if activation == "geglu" else 1),
+        )
         self.fc2 = torch.nn.Linear(d_feedforward, d_model)
         self.norm1 = torch.nn.LayerNorm(d_model)
         self.norm2 = torch.nn.LayerNorm(d_model)
+        self.attention_output_dropout = torch.nn.Dropout(
+            probability if dropout_attention_output else 0.0
+        )
+        self.ffn_output_dropout = torch.nn.Dropout(
+            probability if dropout_ffn_output else 0.0
+        )
+
+    def _activate(self, value: torch.Tensor) -> torch.Tensor:
+        if self.transformer_activation == "relu":
+            return F.relu(value)
+        if self.transformer_activation == "gelu":
+            return F.gelu(value, approximate="tanh")
+        value, gate = value.chunk(2, dim=-1)
+        return value * F.gelu(gate, approximate="tanh")
+
+    def _feed_forward(self, value: torch.Tensor) -> torch.Tensor:
+        return self.ffn_output_dropout(
+            self.fc2(self._activate(self.fc1(value)))
+        )
 
     def forward(
         self,
@@ -397,10 +504,8 @@ class DecoderLayer(torch.nn.Module):
                 key_padding_mask=encoder_padding_mask,
                 need_weights=False,
             )
-            x = x + attended
-            return x + self.fc2(
-                torch.nn.functional.relu(self.fc1(self.norm2(x)))
-            )
+            x = x + self.attention_output_dropout(attended)
+            return x + self._feed_forward(self.norm2(x))
         y, _ = self.attention(
             x,
             encoder_out,
@@ -408,9 +513,10 @@ class DecoderLayer(torch.nn.Module):
             key_padding_mask=encoder_padding_mask,
             need_weights=False,
         )
-        residual = self.norm1(x + y)
-        y = self.fc2(torch.nn.functional.relu(self.fc1(residual)))
-        return self.norm2(residual + y)
+        residual = self.norm1(
+            x + self.attention_output_dropout(y)
+        )
+        return self.norm2(residual + self._feed_forward(residual))
 
 
 class PTCGTransformer(torch.nn.Module):
@@ -540,12 +646,16 @@ class PTCGTransformer(torch.nn.Module):
             persistent=False,
         )
         prenorm = config.norm_mode == "prenorm"
-        layer = torch.nn.TransformerEncoderLayer(
+        layer = EncoderLayer(
             config.d_model,
             config.num_heads,
             config.d_feedforward,
-            dropout=0,
-            norm_first=prenorm,
+            config.norm_mode,
+            config.transformer_activation,
+            config.transformer_dropout,
+            config.dropout_attention_probs,
+            config.dropout_attention_output,
+            config.dropout_ffn_output,
         )
         final_norm = torch.nn.LayerNorm(config.d_model) if prenorm else None
         self.encoder = torch.nn.TransformerEncoder(
@@ -553,6 +663,21 @@ class PTCGTransformer(torch.nn.Module):
             config.encoder_layers,
             norm=final_norm,
             enable_nested_tensor=False,
+        )
+        self.encoder_input_norm = (
+            torch.nn.LayerNorm(config.d_model)
+            if config.dropout_embedding
+            else None
+        )
+        self.action_input_norm = (
+            torch.nn.LayerNorm(config.d_model)
+            if config.dropout_embedding
+            else None
+        )
+        self.embedding_dropout = torch.nn.Dropout(
+            config.transformer_dropout
+            if config.dropout_embedding
+            else 0.0
         )
         self.option_type_embedding = torch.nn.Embedding(
             OPTION_TYPE_COUNT, config.d_model
@@ -739,6 +864,11 @@ class PTCGTransformer(torch.nn.Module):
                 config.num_heads,
                 config.d_feedforward,
                 config.norm_mode,
+                config.transformer_activation,
+                config.transformer_dropout,
+                config.dropout_attention_probs,
+                config.dropout_attention_output,
+                config.dropout_ffn_output,
             )
             for _ in range(config.decoder_layers)
         )
@@ -1256,6 +1386,10 @@ class PTCGTransformer(torch.nn.Module):
                 history_option_offset,
             )
             encoded = torch.cat((encoded, history_token.unsqueeze(1)), dim=1)
+        if self.encoder_input_norm is not None:
+            encoded = self.embedding_dropout(
+                self.encoder_input_norm(encoded)
+            )
         encoded = encoded.transpose(0, 1)
         encoder_padding_mask = self._encoder_padding_mask(
             own_summary,
@@ -1279,6 +1413,10 @@ class PTCGTransformer(torch.nn.Module):
             action_option_index,
             action_option_offset,
         )
+        if self.action_input_norm is not None:
+            policy = self.embedding_dropout(
+                self.action_input_norm(policy)
+            )
         policy = policy.reshape(batch_size, -1, cfg.d_model).transpose(0, 1)
         # Every decoder layer cross-attends to the same encoder output. There
         # is deliberately no self-attention between candidate actions.

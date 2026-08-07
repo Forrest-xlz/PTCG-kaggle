@@ -118,6 +118,12 @@ class ModelSettings:
     card_mlp_layers: int
     option_numeric_mlp_layers: int
     option_token_mlp_layers: int
+    transformer_activation: str = "relu"
+    transformer_dropout: float = 0.0
+    dropout_embedding: bool = False
+    dropout_attention_probs: bool = False
+    dropout_attention_output: bool = False
+    dropout_ffn_output: bool = False
     card_mlp_scope: str = "shared"
     pokemon_appear_embedding: bool = False
     bench_token_mlp_layers: int = 0
@@ -753,6 +759,12 @@ def main() -> None:
         encoder_layers=model_cfg.encoder_layers,
         decoder_layers=model_cfg.decoder_layers,
         norm_mode=model_cfg.norm_mode,
+        transformer_activation=model_cfg.transformer_activation,
+        transformer_dropout=model_cfg.transformer_dropout,
+        dropout_embedding=model_cfg.dropout_embedding,
+        dropout_attention_probs=model_cfg.dropout_attention_probs,
+        dropout_attention_output=model_cfg.dropout_attention_output,
+        dropout_ffn_output=model_cfg.dropout_ffn_output,
         summary_mlp_layers=model_cfg.summary_mlp_layers,
         card_mlp_layers=model_cfg.card_mlp_layers,
         option_numeric_mlp_layers=model_cfg.option_numeric_mlp_layers,

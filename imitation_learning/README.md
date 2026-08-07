@@ -122,6 +122,18 @@ optimizer steps. Epoch checkpointing remains controlled by
 `model.norm_mode` accepts `postnorm` or `prenorm`. PreNorm applies
 normalization before every encoder/decoder sublayer and adds a final encoder
 LayerNorm; PostNorm preserves the original notebook residual ordering.
+`model.transformer_activation` selects `relu`, tanh-approximate `gelu`, or
+`geglu` for Transformer FFNs only; all ordinary model MLPs retain ReLU.
+`model.transformer_dropout` supplies one probability to four independent
+switches. `dropout_embedding` applies LayerNorm and dropout to completed
+encoder tokens and decoder action queries. `dropout_attention_probs` applies
+dropout after attention softmax, `dropout_attention_output` applies it after
+the attention output projection and before the residual, and
+`dropout_ffn_output` applies it after the second FFN linear and before the
+residual. The custom encoder preserves the former TransformerEncoderLayer
+PreNorm/PostNorm ordering. ReLU with probability zero and all switches false
+is checkpoint-compatible with the old architecture; GEGLU changes the first
+FFN weight shape. These settings do not require feature-cache rebuilding.
 `model.summary_mlp_layers` and `model.card_mlp_layers` control the projection
 depths for numeric-summary tokens and static-card features. The first layer
 maps the input width to `d_model`; additional layers are
