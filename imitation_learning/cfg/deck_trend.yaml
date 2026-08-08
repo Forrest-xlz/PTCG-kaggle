@@ -1,0 +1,13 @@
+extract:
+  input: ../replay_episodes
+  output: data/deck_trend
+  workers: 16
+  limit_members: null  # Set an integer only for a smoke extraction.
+  force: false         # Rebuild every archive when true.
+
+analysis:
+  snapshot_interval_days: 3
+  start_date: null       # Optional inclusive month.day, for example 6.26.
+  end_date: null         # Optional inclusive month.day, for example 7.27.
+  min_share_percent: 2.0
+  exclude_mirror_matches: true

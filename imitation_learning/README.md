@@ -187,6 +187,20 @@ cell. The notebook caches replay-player timings and exports the team-level
 analysis under `data/replay_timing/`, then plots timing distributions and four
 global K-Means timing clusters.
 
+To analyze Deck usage, matchup, and team-switching trends, first build the
+incremental per-date cache and then open the trend notebook:
+
+```bash
+python imitation_learning/deck/trend_extract.py
+python -m jupyter notebook imitation_learning/eda/deck_trend.ipynb
+```
+
+Configure extraction and analysis in `cfg/deck_trend.yaml`. Changing the date
+interval, chart threshold, mirror handling, or a Deck-Card-ID-only archetype
+classifier requires only rerunning the notebook. Rerun the extractor after
+adding or replacing replay ZIP archives; with `force: false`, unchanged complete
+date shards are reused.
+
 Before Kaggle submission, edit `CHECKPOINT_PATH`, `OUTPUT_PATH`, and
 `PRECISION` at the top of `training/export_inference.py`, then strip the
 optimizer and other training-only state:
