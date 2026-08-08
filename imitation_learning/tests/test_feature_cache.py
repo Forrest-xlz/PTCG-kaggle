@@ -4,6 +4,7 @@ import csv
 import io
 import sys
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -80,10 +81,19 @@ def build_shard(
     path: Path,
     markers: list[int],
     source_name: str = "7.1.jsonl.gz",
+    deck_markers: list[int] | None = None,
 ) -> Path:
+    if deck_markers is not None and len(deck_markers) != len(markers):
+        raise ValueError("deck_markers must align with markers")
     writer = PackedShardWriter(path, SIGNATURE, {"name": source_name})
-    for marker in markers:
-        writer.add(record(marker))
+    for index, marker in enumerate(markers):
+        sample = record(marker)
+        if deck_markers is not None:
+            sample = replace(
+                sample,
+                deck_key=stable_deck_key([deck_markers[index]] * 60),
+            )
+        writer.add(sample)
     writer.finalize()
     return path
 
@@ -295,6 +305,7 @@ def test_expert_masks_align_with_existing_validation_splits(
         tmp_path / "old.cache",
         list(range(1, 101)),
         source_name="7.19.jsonl.gz",
+        deck_markers=[101] * 100,
     )
     build_shard(
         tmp_path / "latest.cache",
@@ -313,10 +324,7 @@ def test_expert_masks_align_with_existing_validation_splits(
                 },
                 (7, 24): {stable_episode_key("episode-101")},
             },
-            top_deck_keys={
-                stable_deck_key([marker] * 60)
-                for marker in range(1, 102)
-            },
+            top_deck_keys=(stable_deck_key([101] * 60),),
         )
         assert len(splits.in_distribution_expert_mask) == len(
             splits.in_distribution
@@ -333,6 +341,68 @@ def test_expert_masks_align_with_existing_validation_splits(
         np.testing.assert_array_equal(
             splits.latest_expert_top_deck_mask, [True, False, False]
         )
+        assert splits.in_distribution_expert_top_deck_mask.all()
+    finally:
+        dataset.close()
+
+
+def test_top_deck_masks_preserve_configuration_order_and_expert_intersections(
+    tmp_path: Path,
+) -> None:
+    old_markers = list(range(1, 101))
+    build_shard(
+        tmp_path / "old.cache",
+        old_markers,
+        source_name="7.19.jsonl.gz",
+        deck_markers=[101 if marker % 2 else 102 for marker in old_markers],
+    )
+    build_shard(
+        tmp_path / "latest.cache",
+        [101, 102, 103],
+        source_name="7.24.jsonl.gz",
+        deck_markers=[101, 102, 999],
+    )
+    dataset = MmapFeatureDataset(tmp_path, expected_signature=SIGNATURE)
+    try:
+        splits = dataset.build_splits(
+            validation_ratio=0.5,
+            validation_seed=123,
+            expert_episode_keys={
+                (7, 19): {
+                    stable_episode_key(f"episode-{marker}")
+                    for marker in old_markers
+                },
+                (7, 24): {
+                    stable_episode_key(f"episode-{marker}")
+                    for marker in (101, 102, 103)
+                },
+            },
+            top_deck_keys=(
+                stable_deck_key([101] * 60),
+                stable_deck_key([102] * 60),
+            ),
+        )
+
+        assert len(splits.in_distribution_top_deck_masks) == 2
+        assert len(splits.in_distribution_expert_top_deck_masks) == 2
+        assert len(splits.latest_top_deck_masks) == 2
+        assert len(splits.latest_expert_top_deck_masks) == 2
+        np.testing.assert_array_equal(
+            splits.latest_top_deck_masks[0], [True, False, False]
+        )
+        np.testing.assert_array_equal(
+            splits.latest_top_deck_masks[1], [False, True, False]
+        )
+        for deck_mask, expert_deck_mask in zip(
+            splits.in_distribution_top_deck_masks,
+            splits.in_distribution_expert_top_deck_masks,
+        ):
+            np.testing.assert_array_equal(deck_mask, expert_deck_mask)
+        for deck_mask, expert_deck_mask in zip(
+            splits.latest_top_deck_masks,
+            splits.latest_expert_top_deck_masks,
+        ):
+            np.testing.assert_array_equal(deck_mask, expert_deck_mask)
     finally:
         dataset.close()
 

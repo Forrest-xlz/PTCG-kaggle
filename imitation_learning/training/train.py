@@ -687,11 +687,8 @@ def _log_validation(
         f"{namespace}/top1_accuracy": averages["top1_accuracy"],
         f"{namespace}/top3_accuracy": averages["top3_accuracy"],
         f"{namespace}/top5_accuracy": averages["top5_accuracy"],
-        f"{namespace}/samples": metrics.samples,
         "optimizer_step": global_step,
     }
-    if seconds is not None:
-        payload[f"{namespace}/seconds"] = seconds
     print(
         f"{namespace} step={global_step:,} samples={metrics.samples:,} "
         f"loss={averages['loss']:.4f} "
@@ -702,6 +699,22 @@ def _log_validation(
     )
     if wandb_run is not None:
         wandb_run.log(payload)
+
+
+def top_deck_subgroup_masks(
+    scope: str,
+    deck_masks: tuple[np.ndarray, ...],
+    expert_deck_masks: tuple[np.ndarray, ...],
+) -> dict[str, np.ndarray]:
+    if len(deck_masks) != len(expert_deck_masks):
+        raise ValueError("top-deck and expert top-deck masks must align")
+    result: dict[str, np.ndarray] = {}
+    for deck_index, (deck_mask, expert_mask) in enumerate(
+        zip(deck_masks, expert_deck_masks), start=1
+    ):
+        result[f"{scope}_deck{deck_index}"] = deck_mask
+        result[f"{scope}_expert_deck{deck_index}"] = expert_mask
+    return result
 
 
 def main() -> None:
@@ -757,9 +770,11 @@ def main() -> None:
             "train.top_decks contains card IDs outside the model vocabulary: "
             f"{invalid_card_ids}"
         )
-    top_deck_keys = {
+    top_deck_keys = tuple(
         stable_deck_key(deck) for deck in train_cfg.top_decks
-    }
+    )
+    if len(set(top_deck_keys)) != len(top_deck_keys):
+        raise ValueError("train.top_decks contains duplicate exact decks")
     device = resolve_device(train_cfg.device)
     precision = PrecisionContext(train_cfg.precision, device)
     cache_started = time.perf_counter()
@@ -870,20 +885,27 @@ def main() -> None:
             },
         )
         wandb.define_metric("optimizer_step")
-        for namespace in (
+        validation_namespaces = [
             "train/*",
             "epoch/*",
             "val_in_distribution/*",
             "val_in_distribution_expert/*",
-            "val_in_distribution_top_deck/*",
             "val_latest/*",
             "val_latest_expert/*",
-            "val_latest_top_deck/*",
-            "val_latest_expert_top_deck/*",
             "val_deck_isolation/*",
             "val_archetype_isolation/*",
             "val_top_deck_archetype_isolation/*",
-        ):
+        ]
+        for deck_index in range(1, len(top_deck_keys) + 1):
+            validation_namespaces.extend(
+                [
+                    f"val_in_distribution_deck{deck_index}/*",
+                    f"val_in_distribution_expert_deck{deck_index}/*",
+                    f"val_latest_deck{deck_index}/*",
+                    f"val_latest_expert_deck{deck_index}/*",
+                ]
+            )
+        for namespace in validation_namespaces:
             wandb.define_metric(namespace, step_metric="optimizer_step")
 
     output_root = resolve_output_root(train_cfg, wandb_run)
@@ -930,13 +952,8 @@ def main() -> None:
         f"val_in_distribution={len(splits.in_distribution):,} "
         f"val_in_distribution_expert="
         f"{int(splits.in_distribution_expert_mask.sum()):,} "
-        f"val_in_distribution_top_deck="
-        f"{int(splits.in_distribution_top_deck_mask.sum()):,} "
         f"val_latest={len(splits.latest):,} "
         f"val_latest_expert={int(splits.latest_expert_mask.sum()):,} "
-        f"val_latest_top_deck={int(splits.latest_top_deck_mask.sum()):,} "
-        f"val_latest_expert_top_deck="
-        f"{int(splits.latest_expert_top_deck_mask.sum()):,} "
         f"latest_date={splits.latest_date[0]}.{splits.latest_date[1]} "
         f"steps_per_epoch={steps_per_epoch:,} total_steps={total_steps:,} "
         f"warmup_steps={train_cfg.warmup_steps:,}",
@@ -966,9 +983,38 @@ def main() -> None:
                 in isolation_sets.pairwise_overlap_counts.items()
             }
         )
+        top_deck_data_metrics = {}
+        for deck_index in range(1, len(top_deck_keys) + 1):
+            in_distribution_mask = (
+                splits.in_distribution_top_deck_masks[deck_index - 1]
+            )
+            in_distribution_expert_mask = (
+                splits.in_distribution_expert_top_deck_masks[deck_index - 1]
+            )
+            latest_mask = splits.latest_top_deck_masks[deck_index - 1]
+            latest_expert_mask = (
+                splits.latest_expert_top_deck_masks[deck_index - 1]
+            )
+            top_deck_data_metrics.update(
+                {
+                    f"data/val_in_distribution_deck{deck_index}_samples": int(
+                        in_distribution_mask.sum()
+                    ),
+                    f"data/val_in_distribution_expert_deck{deck_index}_samples": int(
+                        in_distribution_expert_mask.sum()
+                    ),
+                    f"data/val_latest_deck{deck_index}_samples": int(
+                        latest_mask.sum()
+                    ),
+                    f"data/val_latest_expert_deck{deck_index}_samples": int(
+                        latest_expert_mask.sum()
+                    ),
+                }
+            )
         wandb_run.log(
             {
                 **isolation_data_metrics,
+                **top_deck_data_metrics,
                 "data/cache_open_seconds": cache_open_seconds,
                 "data/cache_shards": len(dataset.shards),
                 "data/cache_samples": len(dataset),
@@ -989,18 +1035,9 @@ def main() -> None:
                 "data/val_in_distribution_expert_samples": int(
                     splits.in_distribution_expert_mask.sum()
                 ),
-                "data/val_in_distribution_top_deck_samples": int(
-                    splits.in_distribution_top_deck_mask.sum()
-                ),
                 "data/val_latest_samples": len(splits.latest),
                 "data/val_latest_expert_samples": int(
                     splits.latest_expert_mask.sum()
-                ),
-                "data/val_latest_top_deck_samples": int(
-                    splits.latest_top_deck_mask.sum()
-                ),
-                "data/val_latest_expert_top_deck_samples": int(
-                    splits.latest_expert_top_deck_mask.sum()
                 ),
                 "schedule/steps_per_epoch": steps_per_epoch,
                 "schedule/total_steps": total_steps,
@@ -1071,9 +1108,11 @@ def main() -> None:
                 splits.latest,
                 {
                     "val_latest_expert": splits.latest_expert_mask,
-                    "val_latest_top_deck": splits.latest_top_deck_mask,
-                    "val_latest_expert_top_deck":
-                        splits.latest_expert_top_deck_mask,
+                    **top_deck_subgroup_masks(
+                        "val_latest",
+                        splits.latest_top_deck_masks,
+                        splits.latest_expert_top_deck_masks,
+                    ),
                 },
             ),
             (
@@ -1082,8 +1121,11 @@ def main() -> None:
                 {
                     "val_in_distribution_expert":
                         splits.in_distribution_expert_mask,
-                    "val_in_distribution_top_deck":
-                        splits.in_distribution_top_deck_mask,
+                    **top_deck_subgroup_masks(
+                        "val_in_distribution",
+                        splits.in_distribution_top_deck_masks,
+                        splits.in_distribution_expert_top_deck_masks,
+                    ),
                 },
             ),
         ):

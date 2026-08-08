@@ -90,10 +90,12 @@ logged separately as `val_in_distribution_expert/*` and
 `val_latest_expert/*`.
 
 `train.top_decks` accepts one or more complete 60-card lists. Card order is
-ignored but multiplicity is preserved. These decks define
-`val_in_distribution_top_deck`, `val_latest_top_deck`, and the intersection
-`val_latest_expert_top_deck`. All subgroup metrics reuse their base validation
-batch's logits, so they do not add model forward passes.
+ignored but multiplicity is preserved. Configuration order defines `deck1`,
+`deck2`, and so on. Every deck receives separate in-distribution, latest-date,
+in-distribution expert, and latest-date expert validation groups, such as
+`val_in_distribution_deck1/*` and `val_in_distribution_expert_deck1/*`.
+Each group contains loss and top-1/3/5 accuracy. All subgroup metrics reuse
+their base validation batch's logits, so they do not add model forward passes.
 
 After isolation, latest-date, and in-distribution validation are fixed,
 `train.train_replay_ratio` selects a
