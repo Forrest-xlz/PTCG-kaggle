@@ -1,11 +1,11 @@
-version_name: pure_baseline
+version_name: ver_1.4.5_geglu_dropout_full
 
 train:
   cg_path: ../pokemon_tcg_ai_battle/sample_submission
   data: data/training_cache
   replay_episodes: ../replay_episodes
   output: outputs/${version_name}
-  epochs: 3
+  epochs: 5
   batch_size: 4096
   learning_rate: 0.0003
   weight_decay: 0.01
@@ -17,7 +17,7 @@ train:
   device: cuda         # auto, cpu, cuda, or cuda:0
   precision: bf16      # fp32, fp16, or bf16
   log_every_steps: 10
-  eval_every_steps: 1000
+  eval_every_steps: 270
   save_every_steps: 1000
   save_every_epoch: true
   ema_alpha: 0.99
@@ -44,24 +44,33 @@ train:
   grad_clip_norm: 1.0
 
 model:
-  d_model: 128
-  ffn_multiplier: 2     # d_feedforward = d_model * ffn_multiplier
-  num_heads: 2          # d_model must be divisible by num_heads.
-  encoder_layers: 1
-  decoder_layers: 1
+  d_model: 512
+  ffn_multiplier: 4     # d_feedforward = d_model * ffn_multiplier
+  num_heads: 8          # d_model must be divisible by num_heads.
+  encoder_layers: 3
+  decoder_layers: 3
   norm_mode: postnorm   # prenorm or postnorm
-  summary_mlp_layers: 1         # Own/opponent/global summary projections.
+  transformer_activation: geglu # relu, gelu (tanh approximation), or geglu.
+  transformer_dropout: 0.1
+  dropout_embedding: true          # LayerNorm + dropout on encoder/action inputs.
+  dropout_attention_probs: true    # After attention softmax.
+  dropout_attention_output: true   # After attention output projection.
+  dropout_ffn_output: true         # After FFN output projection.
+  summary_mlp_layers: 3         # Own/opponent/global summary projections.
   card_mlp_layers: 1            # 0 disables every static-card embedding.
-  card_mlp_scope: region        # shared or region-specific projection MLPs.
-  option_numeric_mlp_layers: 1  # Five non-embedded option numbers -> d_model.
-  option_token_mlp_layers: 0    # 0=sum embeddings; >0 applies post-sum d_model MLP.
+  card_mlp_scope: shared        # shared or region-specific projection MLPs.
+  option_numeric_mlp_layers: 3  # Five non-embedded option numbers -> d_model.
+  option_token_mlp_layers: 2    # 0=sum embeddings; >0 applies post-sum d_model MLP.
   pokemon_appear_embedding: true
-  bench_token_mlp_layers: 1     # Separate own/opponent weights.
-  active_token_mlp_layers: 1    # Separate own/opponent weights.
-  discard_token_mlp_layers: 1   # Separate own/opponent weights.
-  hand_token_mlp_layers: 1      # Own hand token only.
-  deck_token_mlp_layers: 1      # Own remaining-deck token only.
-  region_token_mlp_residual: true
+  bench_token_mlp_layers: 2     # Separate own/opponent weights.
+  active_token_mlp_layers: 2    # Separate own/opponent weights.
+  discard_token_mlp_layers: 2   # Separate own/opponent weights.
+  hand_token_mlp_layers: 2      # Own hand token only.
+  deck_token_mlp_layers: 2      # Own remaining-deck token only.
+  region_token_mlp_residual: false
+  history_encoding: full          # off, basic, structural, or full.
+  history_action_mlp_layers: 1   # Shared by the three historical actions.
+  history_sequence_mlp_layers: 2 # [t-3,t-2,t-1] concatenation -> one token.
 
 wandb:
   enabled: true
