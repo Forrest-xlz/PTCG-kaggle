@@ -165,10 +165,15 @@ class DatasetSplits:
     in_distribution: np.ndarray
     in_distribution_expert_mask: np.ndarray
     in_distribution_top_deck_mask: np.ndarray
+    in_distribution_expert_top_deck_mask: np.ndarray
+    in_distribution_top_deck_masks: tuple[np.ndarray, ...]
+    in_distribution_expert_top_deck_masks: tuple[np.ndarray, ...]
     latest: np.ndarray
     latest_expert_mask: np.ndarray
     latest_top_deck_mask: np.ndarray
     latest_expert_top_deck_mask: np.ndarray
+    latest_top_deck_masks: tuple[np.ndarray, ...]
+    latest_expert_top_deck_masks: tuple[np.ndarray, ...]
     latest_date: tuple[int, int]
     eligible_train_samples: int
     eligible_train_replays: int
@@ -965,7 +970,7 @@ class MmapFeatureDataset:
         validation_seed: int,
         expert_episode_keys: dict[tuple[int, int], set[int] | frozenset[int]]
         | None = None,
-        top_deck_keys: set[int] | frozenset[int] | None = None,
+        top_deck_keys: Iterable[int] | None = None,
         train_replay_ratio: float = 1.0,
         train_replay_seed: int = 0,
         isolation_episode_keys: Mapping[
@@ -986,6 +991,11 @@ class MmapFeatureDataset:
         )
         threshold = int(validation_ratio * (1 << 32))
         train_threshold = int(train_replay_ratio * (1 << 32))
+        ordered_top_deck_keys = (
+            None
+            if top_deck_keys is None
+            else tuple(int(key) for key in top_deck_keys)
+        )
         train_parts = []
         isolation_parts = []
         eligible_train_samples = 0
@@ -994,9 +1004,15 @@ class MmapFeatureDataset:
         in_distribution_parts = []
         in_distribution_expert_parts = []
         in_distribution_top_deck_parts = []
+        in_distribution_per_deck_parts = [
+            [] for _ in ordered_top_deck_keys or ()
+        ]
         latest_parts = []
         latest_expert_parts = []
         latest_top_deck_parts = []
+        latest_per_deck_parts = [
+            [] for _ in ordered_top_deck_keys or ()
+        ]
         isolation_names = sorted(
             map(str, (isolation_episode_keys or {}).keys())
         )
@@ -1054,15 +1070,15 @@ class MmapFeatureDataset:
                 expert_mask = np.isin(
                     shard.arrays["episode_key"], keys, assume_unique=False
                 )
-            if top_deck_keys is None:
+            if ordered_top_deck_keys is None:
+                per_deck_masks: tuple[np.ndarray, ...] = ()
                 top_deck_mask = np.zeros(len(shard), dtype=np.bool_)
             else:
-                deck_keys = np.fromiter(top_deck_keys, dtype=np.uint64)
-                top_deck_mask = np.isin(
-                    shard.arrays["deck_key"],
-                    deck_keys,
-                    assume_unique=False,
+                per_deck_masks = tuple(
+                    shard.arrays["deck_key"] == deck_key
+                    for deck_key in ordered_top_deck_keys
                 )
+                top_deck_mask = np.logical_or.reduce(per_deck_masks)
             namespace_masks: dict[str, np.ndarray] = {}
             for name in isolation_names:
                 keys = np.fromiter(
@@ -1092,6 +1108,10 @@ class MmapFeatureDataset:
                 latest_parts.append(global_ids[latest_mask])
                 latest_expert_parts.append(expert_mask[latest_mask])
                 latest_top_deck_parts.append(top_deck_mask[latest_mask])
+                for parts, deck_mask in zip(
+                    latest_per_deck_parts, per_deck_masks
+                ):
+                    parts.append(deck_mask[latest_mask])
                 continue
             mixed = _mix_episode_keys(
                 shard.arrays["episode_key"], validation_seed
@@ -1107,6 +1127,10 @@ class MmapFeatureDataset:
             in_distribution_top_deck_parts.append(
                 top_deck_mask[validation_mask]
             )
+            for parts, deck_mask in zip(
+                in_distribution_per_deck_parts, per_deck_masks
+            ):
+                parts.append(deck_mask[validation_mask])
             eligible_mask = ~isolation_mask & ~validation_mask
             train_selection = (
                 _mix_episode_keys(
@@ -1181,12 +1205,30 @@ class MmapFeatureDataset:
         latest_expert_top_deck_mask = (
             latest_expert_mask & latest_top_deck_mask
         )
+        in_distribution_expert_top_deck_mask = (
+            in_distribution_expert_mask & in_distribution_top_deck_mask
+        )
+        in_distribution_top_deck_masks = tuple(
+            np.concatenate(parts).astype(np.bool_, copy=False)
+            for parts in in_distribution_per_deck_parts
+        )
+        latest_top_deck_masks = tuple(
+            np.concatenate(parts).astype(np.bool_, copy=False)
+            for parts in latest_per_deck_parts
+        )
+        in_distribution_expert_top_deck_masks = tuple(
+            in_distribution_expert_mask & mask
+            for mask in in_distribution_top_deck_masks
+        )
+        latest_expert_top_deck_masks = tuple(
+            latest_expert_mask & mask for mask in latest_top_deck_masks
+        )
         if expert_episode_keys is not None:
             if not np.any(in_distribution_expert_mask):
                 raise ValueError("in-distribution expert validation is empty")
             if not np.any(latest_expert_mask):
                 raise ValueError("latest-date expert validation is empty")
-        if top_deck_keys is not None:
+        if ordered_top_deck_keys is not None:
             if not np.any(in_distribution_top_deck_mask):
                 raise ValueError("in-distribution top-deck validation is empty")
             if not np.any(latest_top_deck_mask):
@@ -1194,6 +1236,40 @@ class MmapFeatureDataset:
             if not np.any(latest_expert_top_deck_mask):
                 raise ValueError(
                     "latest-date expert top-deck validation is empty"
+                )
+            named_masks = {
+                **{
+                    f"in-distribution deck{index}": mask
+                    for index, mask in enumerate(
+                        in_distribution_top_deck_masks, start=1
+                    )
+                },
+                **{
+                    f"in-distribution expert deck{index}": mask
+                    for index, mask in enumerate(
+                        in_distribution_expert_top_deck_masks, start=1
+                    )
+                },
+                **{
+                    f"latest-date deck{index}": mask
+                    for index, mask in enumerate(
+                        latest_top_deck_masks, start=1
+                    )
+                },
+                **{
+                    f"latest-date expert deck{index}": mask
+                    for index, mask in enumerate(
+                        latest_expert_top_deck_masks, start=1
+                    )
+                },
+            }
+            empty_masks = [
+                name for name, mask in named_masks.items() if not np.any(mask)
+            ]
+            if empty_masks:
+                raise ValueError(
+                    "configured top-deck validation subsets are empty: "
+                    f"{empty_masks}"
                 )
         train = combine(train_parts, "train")
 
@@ -1215,10 +1291,19 @@ class MmapFeatureDataset:
             in_distribution=in_distribution,
             in_distribution_expert_mask=in_distribution_expert_mask,
             in_distribution_top_deck_mask=in_distribution_top_deck_mask,
+            in_distribution_expert_top_deck_mask=(
+                in_distribution_expert_top_deck_mask
+            ),
+            in_distribution_top_deck_masks=in_distribution_top_deck_masks,
+            in_distribution_expert_top_deck_masks=(
+                in_distribution_expert_top_deck_masks
+            ),
             latest=latest,
             latest_expert_mask=latest_expert_mask,
             latest_top_deck_mask=latest_top_deck_mask,
             latest_expert_top_deck_mask=latest_expert_top_deck_mask,
+            latest_top_deck_masks=latest_top_deck_masks,
+            latest_expert_top_deck_masks=latest_expert_top_deck_masks,
             latest_date=latest_date,
             eligible_train_samples=eligible_train_samples,
             eligible_train_replays=unique_count(eligible_train_key_parts),

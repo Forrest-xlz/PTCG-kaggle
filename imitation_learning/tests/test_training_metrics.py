@@ -28,8 +28,11 @@ from training.feature_cache import (
 )
 from training.train import (
     ExponentialMovingAverage,
+    PolicyMetrics,
+    _log_validation,
     evaluate_dataset,
     policy_metrics,
+    top_deck_subgroup_masks,
 )
 
 
@@ -156,3 +159,59 @@ def test_validation_subgroups_share_model_forwards() -> None:
     assert result.overall.samples == 5
     assert result.subgroups["expert"].samples == 3
     assert result.subgroups["top_deck"].samples == 2
+
+
+def test_top_deck_subgroup_names_follow_yaml_order() -> None:
+    deck_masks = (
+        np.asarray([True, False]),
+        np.asarray([False, True]),
+    )
+    expert_masks = (
+        np.asarray([False, False]),
+        np.asarray([False, True]),
+    )
+
+    masks = top_deck_subgroup_masks(
+        "val_in_distribution", deck_masks, expert_masks
+    )
+
+    assert list(masks) == [
+        "val_in_distribution_deck1",
+        "val_in_distribution_expert_deck1",
+        "val_in_distribution_deck2",
+        "val_in_distribution_expert_deck2",
+    ]
+    assert masks["val_in_distribution_deck1"] is deck_masks[0]
+    assert masks["val_in_distribution_expert_deck2"] is expert_masks[1]
+
+
+def test_validation_wandb_group_contains_only_policy_metrics() -> None:
+    class Run:
+        def __init__(self) -> None:
+            self.payload = None
+
+        def log(self, payload) -> None:
+            self.payload = payload
+
+    run = Run()
+    _log_validation(
+        "val_latest_deck1",
+        PolicyMetrics(
+            loss=1.25,
+            top1_correct=2,
+            top3_correct=3,
+            top5_correct=4,
+            samples=4,
+        ),
+        seconds=0.5,
+        global_step=7,
+        wandb_run=run,
+    )
+
+    assert set(run.payload) == {
+        "val_latest_deck1/loss",
+        "val_latest_deck1/top1_accuracy",
+        "val_latest_deck1/top3_accuracy",
+        "val_latest_deck1/top5_accuracy",
+        "optimizer_step",
+    }
