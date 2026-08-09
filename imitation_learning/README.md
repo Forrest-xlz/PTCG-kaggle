@@ -199,6 +199,24 @@ When WandB is enabled, checkpoints and history are written to
 local run-ID folder without uploading model artifacts. When WandB is disabled,
 they are written under `train.output`.
 
+To continue an interrupted run from a completed epoch checkpoint, configure:
+
+```yaml
+train:
+  resume: true
+  resume_checkpoint: outputs/ver_1.6.0/checkpoints/epoch-002.pt
+  epochs: 5
+```
+
+Only `epoch-*.pt` training checkpoints are accepted. The checkpoint epoch is
+already complete, so the example continues with epochs 3 through 5; `epochs`
+is the final total rather than a number of additional epochs. Model, optimizer,
+learning-rate scheduler, FP16 scaler, EMA metrics, history, and optimizer step
+are restored. New checkpoints also preserve RNG state. Older epoch checkpoints
+without RNG state remain usable, but their dropout sequence is not bit-for-bit
+identical to an uninterrupted run. Inference-only and `step-*.pt` checkpoints
+cannot be used for resume.
+
 Open `deck/deck_eda.ipynb` after deck extraction. Set the extracted-deck and
 `EN_Card_Data.csv` paths in its setup cell, then run top-to-bottom. The
 notebook classifies rule-based archetypes, assigns stable SHA-256 exact-deck

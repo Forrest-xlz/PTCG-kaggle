@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -80,6 +81,8 @@ class TrainSettings:
     data: str
     replay_episodes: str
     output: str
+    resume: bool
+    resume_checkpoint: str | None
     epochs: int
     batch_size: int
     learning_rate: float
@@ -188,6 +191,13 @@ class ValidationResult:
     seconds: float
 
 
+@dataclass(frozen=True, slots=True)
+class ResumeState:
+    start_epoch_index: int
+    global_step: int
+    history: list[dict]
+
+
 class ExponentialMovingAverage:
     def __init__(self, alpha: float):
         if not 0 <= alpha < 1:
@@ -205,6 +215,15 @@ class ExponentialMovingAverage:
 
     def state_dict(self) -> dict:
         return {"alpha": self.alpha, "value": self.value}
+
+    def load_state_dict(self, state: dict) -> None:
+        alpha = float(state["alpha"])
+        if not math.isclose(alpha, self.alpha):
+            raise ValueError(
+                f"EMA alpha mismatch: checkpoint={alpha}, config={self.alpha}"
+            )
+        value = state.get("value")
+        self.value = None if value is None else float(value)
 
 
 def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
@@ -276,6 +295,21 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
     train, model = settings.train, settings.model
     if train.epochs < 1 or train.batch_size < 1:
         raise ValueError("train.epochs and train.batch_size must be >= 1")
+    if type(train.resume) is not bool:
+        raise ValueError("train.resume must be true or false")
+    if train.resume:
+        if not isinstance(train.resume_checkpoint, str):
+            raise ValueError(
+                "train.resume_checkpoint must be a path when train.resume is true"
+            )
+        if not train.resume_checkpoint.strip():
+            raise ValueError(
+                "train.resume_checkpoint must not be empty when resume is true"
+            )
+    elif train.resume_checkpoint is not None and not isinstance(
+        train.resume_checkpoint, str
+    ):
+        raise ValueError("train.resume_checkpoint must be null or a path")
     if train.max_samples is not None and train.max_samples < 1:
         raise ValueError("train.max_samples must be null or >= 1")
     for name in ("log_every_steps", "eval_every_steps", "save_every_steps"):
@@ -398,6 +432,117 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
 def project_path(value: str | Path) -> Path:
     path = Path(value)
     return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def _capture_rng_state() -> dict:
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _restore_rng_state(state: dict) -> None:
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"].cpu())
+    cuda_state = state.get("cuda")
+    if cuda_state is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all([item.cpu() for item in cuda_state])
+
+
+def load_epoch_checkpoint(
+    path: Path,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    precision: PrecisionContext,
+    ema: dict[str, ExponentialMovingAverage],
+    expected_model_config: dict,
+    target_epochs: int,
+) -> ResumeState:
+    path = Path(path)
+    match = re.fullmatch(r"epoch-(\d+)\.pt", path.name)
+    if match is None:
+        raise ValueError(
+            "training can resume only from a completed epoch-*.pt checkpoint"
+        )
+    if not path.is_file():
+        raise FileNotFoundError(f"Resume checkpoint not found: {path}")
+    try:
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(path, map_location="cpu")
+    if not isinstance(checkpoint, dict):
+        raise ValueError("Resume checkpoint root must be a mapping")
+    required = {
+        "model",
+        "optimizer",
+        "scheduler",
+        "scaler",
+        "global_step",
+        "epoch",
+        "config",
+        "ema",
+        "history",
+    }
+    missing = sorted(required - checkpoint.keys())
+    if missing:
+        raise ValueError(
+            "Checkpoint is not a complete training checkpoint; missing: "
+            f"{missing}"
+        )
+    completed_epoch = checkpoint["epoch"]
+    if type(completed_epoch) is not int or completed_epoch < 1:
+        raise ValueError("checkpoint epoch must be a positive integer")
+    filename_epoch = int(match.group(1))
+    if filename_epoch != completed_epoch:
+        raise ValueError(
+            f"checkpoint filename epoch {filename_epoch} does not match "
+            f"payload epoch {completed_epoch}"
+        )
+    if completed_epoch >= target_epochs:
+        raise ValueError(
+            f"checkpoint already completed epoch {completed_epoch}, but "
+            f"train.epochs is {target_epochs}; set a larger total epoch count"
+        )
+    if checkpoint["config"] != expected_model_config:
+        raise ValueError(
+            "checkpoint model configuration does not match the current model"
+        )
+
+    model.load_state_dict(checkpoint["model"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
+    scheduler.load_state_dict(checkpoint["scheduler"])
+    precision.load_state_dict(checkpoint["scaler"])
+    checkpoint_ema = checkpoint["ema"]
+    if set(checkpoint_ema) != set(ema):
+        raise ValueError("checkpoint EMA metrics do not match current metrics")
+    for name, tracker in ema.items():
+        tracker.load_state_dict(checkpoint_ema[name])
+    history = checkpoint["history"]
+    if not isinstance(history, list):
+        raise ValueError("checkpoint history must be a list")
+    global_step = checkpoint["global_step"]
+    if type(global_step) is not int or global_step < 0:
+        raise ValueError("checkpoint global_step must be a non-negative integer")
+    rng_state = checkpoint.get("rng_state")
+    if rng_state is not None:
+        _restore_rng_state(rng_state)
+    else:
+        print(
+            "warning: checkpoint has no RNG state; resume is valid but not "
+            "bit-for-bit identical to uninterrupted training",
+            flush=True,
+        )
+    return ResumeState(
+        start_epoch_index=completed_epoch,
+        global_step=global_step,
+        history=list(history),
+    )
 
 
 def build_lr_scheduler(
@@ -699,6 +844,7 @@ def checkpoint_payload(
         },
         "ema": {name: tracker.state_dict() for name, tracker in ema.items()},
         "history": history,
+        "rng_state": _capture_rng_state(),
     }
 
 
@@ -898,6 +1044,40 @@ def main() -> None:
         warmup_steps=train_cfg.warmup_steps,
     )
 
+    ema = {
+        name: ExponentialMovingAverage(train_cfg.ema_alpha)
+        for name in ("loss", "top1", "top3", "top5")
+    }
+    history: list[dict] = []
+    global_step = 0
+    start_epoch_index = 0
+    if train_cfg.resume:
+        checkpoint_path = project_path(train_cfg.resume_checkpoint or "")
+        try:
+            resume_state = load_epoch_checkpoint(
+                path=checkpoint_path,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                precision=precision,
+                ema=ema,
+                expected_model_config=config.to_dict(),
+                target_epochs=train_cfg.epochs,
+            )
+        except Exception:
+            dataset.close()
+            raise
+        start_epoch_index = resume_state.start_epoch_index
+        global_step = resume_state.global_step
+        history = resume_state.history
+        print(
+            f"resumed_from={checkpoint_path} "
+            f"completed_epoch={start_epoch_index} "
+            f"next_epoch={start_epoch_index + 1} "
+            f"optimizer_step={global_step:,}",
+            flush=True,
+        )
+
     wandb_run = None
     if wandb_cfg.enabled:
         try:
@@ -1079,16 +1259,10 @@ def main() -> None:
                 "schedule/steps_per_epoch": steps_per_epoch,
                 "schedule/total_steps": total_steps,
                 "schedule/warmup_steps": train_cfg.warmup_steps,
-                "optimizer_step": 0,
+                "optimizer_step": global_step,
             }
         )
 
-    ema = {
-        name: ExponentialMovingAverage(train_cfg.ema_alpha)
-        for name in ("loss", "top1", "top3", "top5")
-    }
-    history: list[dict] = []
-    global_step = 0
     skipped_updates = 0
     train_samples_seen = 0
     train_compute_seconds = 0.0
@@ -1193,7 +1367,7 @@ def main() -> None:
         last_eval_step = global_step
 
     try:
-        for epoch_index in range(train_cfg.epochs):
+        for epoch_index in range(start_epoch_index, train_cfg.epochs):
             epoch = epoch_index + 1
             epoch_started = time.perf_counter()
             model.train()

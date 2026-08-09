@@ -67,6 +67,15 @@ class PrecisionContext:
     def state_dict(self) -> dict:
         return self.scaler.state_dict() if self.scaler.is_enabled() else {}
 
+    def load_state_dict(self, state: dict) -> None:
+        if self.scaler.is_enabled():
+            self.scaler.load_state_dict(state)
+        elif state:
+            raise ValueError(
+                "checkpoint contains an FP16 scaler state, but the current "
+                "precision does not use GradScaler"
+            )
+
     def backward_step(
         self,
         loss: torch.Tensor,

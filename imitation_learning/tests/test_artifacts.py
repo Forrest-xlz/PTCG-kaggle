@@ -30,6 +30,8 @@ def test_train_yaml_uses_validation_and_step_configuration() -> None:
         (PROJECT_ROOT / "cfg" / "train.yaml").read_text(encoding="utf-8")
     )
     train = config["train"]
+    assert train["resume"] is False
+    assert train["resume_checkpoint"] is None
     assert "shuffle_mode" not in train
     assert "warmup_ratio" not in train
     assert train["warmup_steps"] >= 0
