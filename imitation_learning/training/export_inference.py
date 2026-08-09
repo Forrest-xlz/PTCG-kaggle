@@ -16,7 +16,7 @@ PRECISION_DTYPES = {
 
 # Configure the export here; no command-line arguments are used.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CHECKPOINT_PATH = PROJECT_ROOT / "training" / "step-00009000.pt"
+CHECKPOINT_PATH = PROJECT_ROOT / "training" / "step-00018000.pt"
 OUTPUT_PATH: Path | None = PROJECT_ROOT / "model_submission.pt"
 PRECISION = "fp16"  # fp16, bf16, or fp32
 
@@ -38,7 +38,11 @@ class ExportSummary:
 
 def _load_checkpoint(path: Path) -> Mapping:
     try:
-        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+        # Training checkpoints contain optimizer and RNG state, including a
+        # NumPy array that PyTorch's restricted weights-only loader rejects.
+        # This script only accepts the explicitly configured local checkpoint;
+        # never point it at an untrusted pickle file.
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
     except TypeError:
         # PyTorch 2.0 does not expose the weights_only argument.
         checkpoint = torch.load(path, map_location="cpu")
