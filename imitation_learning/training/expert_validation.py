@@ -27,6 +27,26 @@ class ExpertDateInfo:
         return len(self.expert_episode_keys)
 
 
+@dataclass(frozen=True, slots=True)
+class ExpertLoserDateInfo:
+    date: tuple[int, int]
+    cutoff: float
+    participant_count: int
+    episode_count: int
+    eligible_episode_keys: frozenset[int]
+
+    @property
+    def eligible_episode_count(self) -> int:
+        return len(self.eligible_episode_keys)
+
+
+@dataclass(frozen=True, slots=True)
+class _ManifestEpisode:
+    episode_key: int
+    low_score: float
+    high_score: float
+
+
 def _archive_by_date(root: Path) -> dict[tuple[int, int], Path]:
     archives: dict[tuple[int, int], Path] = {}
     for path in root.glob("*.zip"):
@@ -43,11 +63,9 @@ def _archive_by_date(root: Path) -> dict[tuple[int, int], Path]:
     return archives
 
 
-def _read_manifest(
+def _read_manifest_episodes(
     archive_path: Path,
-    date: tuple[int, int],
-    ratio: float,
-) -> ExpertDateInfo:
+) -> tuple[_ManifestEpisode, ...]:
     with zipfile.ZipFile(archive_path) as archive:
         manifest_names = [
             name
@@ -68,8 +86,7 @@ def _read_manifest(
                     f"{archive_path} manifest.csv is missing columns: "
                     f"{sorted(missing)}"
                 )
-            episodes: list[tuple[int, float]] = []
-            scores: list[float] = []
+            episodes: list[_ManifestEpisode] = []
             seen_ids: set[str] = set()
             for row_number, row in enumerate(reader, start=2):
                 episode_id = str(row["episode_id"]).strip()
@@ -105,17 +122,41 @@ def _read_manifest(
                         f"{archive_path} manifest row {row_number} has inconsistent "
                         "min_score and sum_score"
                     )
-                episodes.append((stable_episode_key(episode_id), high_score))
-                scores.extend((low_score, high_score))
+                episodes.append(
+                    _ManifestEpisode(
+                        episode_key=stable_episode_key(episode_id),
+                        low_score=low_score,
+                        high_score=high_score,
+                    )
+                )
 
     if not episodes:
         raise ValueError(f"{archive_path} manifest.csv contains no episodes")
-    top_count = max(1, math.ceil(len(scores) * ratio))
-    cutoff = sorted(scores, reverse=True)[top_count - 1]
+    return tuple(episodes)
+
+
+def _score_cutoff(scores: Iterable[float], ratio: float) -> float:
+    values = list(scores)
+    top_count = max(1, math.ceil(len(values) * ratio))
+    return sorted(values, reverse=True)[top_count - 1]
+
+
+def _read_manifest(
+    archive_path: Path,
+    date: tuple[int, int],
+    ratio: float,
+) -> ExpertDateInfo:
+    episodes = _read_manifest_episodes(archive_path)
+    scores = [
+        score
+        for episode in episodes
+        for score in (episode.low_score, episode.high_score)
+    ]
+    cutoff = _score_cutoff(scores, ratio)
     expert_keys = frozenset(
-        episode_key
-        for episode_key, high_score in episodes
-        if high_score >= cutoff
+        episode.episode_key
+        for episode in episodes
+        if episode.high_score >= cutoff
     )
     if not expert_keys:
         raise ValueError(f"{archive_path} produced an empty expert episode set")
@@ -124,6 +165,32 @@ def _read_manifest(
         cutoff=cutoff,
         episode_count=len(episodes),
         expert_episode_keys=expert_keys,
+    )
+
+
+def _read_loser_manifest(
+    archive_path: Path,
+    date: tuple[int, int],
+    ratio: float,
+) -> ExpertLoserDateInfo:
+    episodes = _read_manifest_episodes(archive_path)
+    scores = [
+        score
+        for episode in episodes
+        for score in (episode.low_score, episode.high_score)
+    ]
+    cutoff = _score_cutoff(scores, ratio)
+    eligible_keys = frozenset(
+        episode.episode_key
+        for episode in episodes
+        if episode.low_score >= cutoff
+    )
+    return ExpertLoserDateInfo(
+        date=date,
+        cutoff=cutoff,
+        participant_count=len(scores),
+        episode_count=len(episodes),
+        eligible_episode_keys=eligible_keys,
     )
 
 
@@ -149,5 +216,31 @@ def load_expert_date_info(
         )
     return {
         date: _read_manifest(archives[date], date, ratio)
+        for date in dates
+    }
+
+
+def load_expert_loser_date_info(
+    replay_root: Path,
+    required_dates: Iterable[tuple[int, int]],
+    ratio: float,
+) -> dict[tuple[int, int], ExpertLoserDateInfo]:
+    if not 0 < ratio <= 1:
+        raise ValueError("expert loser ratio must be in (0, 1]")
+    replay_root = Path(replay_root)
+    if not replay_root.is_dir():
+        raise FileNotFoundError(
+            f"Replay archive directory not found: {replay_root}"
+        )
+    archives = _archive_by_date(replay_root)
+    dates = sorted(set(required_dates))
+    missing = [date for date in dates if date not in archives]
+    if missing:
+        labels = ", ".join(f"{month}.{day}" for month, day in missing)
+        raise FileNotFoundError(
+            f"Replay archives required by loser augmentation are missing: {labels}"
+        )
+    return {
+        date: _read_loser_manifest(archives[date], date, ratio)
         for date in dates
     }
