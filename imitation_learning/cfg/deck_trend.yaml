@@ -6,7 +6,7 @@ extract:
   force: false         # Rebuild every archive when true.
 
 analysis:
-  snapshot_interval_days: 3
+  snapshot_interval_days: 2
   start_date: null       # Optional inclusive month.day, for example 6.26.
   end_date: null         # Optional inclusive month.day, for example 7.27.
   min_share_percent: 1.0  # Daily line/Sankey threshold; pooled threshold for matchups.
