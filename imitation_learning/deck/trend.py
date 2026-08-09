@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import date
 from typing import Any, Iterable, Sequence
 
@@ -24,6 +25,72 @@ PLAYER_ROW_COLUMNS = {
     "reward",
     "result",
 }
+
+SANKEY_PALETTE = (
+    "#8e44ad",
+    "#d16ba5",
+    "#c77c35",
+    "#4169d8",
+    "#59b3c3",
+    "#7692ad",
+    "#4f9d7a",
+    "#5da349",
+    "#b09b3b",
+    "#7aa6d8",
+    "#557f5f",
+    "#b6a38a",
+    "#d4bd24",
+    "#ef8a62",
+    "#9c6ade",
+    "#17becf",
+    "#bcbd22",
+    "#e377c2",
+    "#8c564b",
+    "#1f77b4",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SankeyNode:
+    date: str
+    archetype: str
+    share_percent: float
+    uses: int
+    rank: int
+    x: float
+    bottom: float
+    top: float
+    color: str
+
+    @property
+    def key(self) -> tuple[str, str]:
+        return self.date, self.archetype
+
+    @property
+    def height(self) -> float:
+        return self.top - self.bottom
+
+
+@dataclass(frozen=True, slots=True)
+class SankeyRibbon:
+    source: tuple[str, str]
+    target: tuple[str, str]
+    teams: int
+    source_bottom: float
+    source_top: float
+    target_bottom: float
+    target_top: float
+    color: str
+
+
+@dataclass(frozen=True, slots=True)
+class SankeyLayout:
+    dates: tuple[str, ...]
+    nodes: tuple[SankeyNode, ...]
+    ribbons: tuple[SankeyRibbon, ...]
+    color_by_archetype: dict[str, str]
+    games_by_date: dict[str, int]
+    node_width: float
 
 
 def _parse_deck(value: Any) -> list[int]:
@@ -217,6 +284,56 @@ def build_daily_metrics(
     ).reset_index(drop=True)
 
 
+def _validate_share_threshold(value: float) -> float:
+    if isinstance(value, bool):
+        raise ValueError("share threshold must be between 0 and 100")
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("share threshold must be between 0 and 100") from exc
+    if pd.isna(threshold) or not 0 <= threshold <= 100:
+        raise ValueError("share threshold must be between 0 and 100")
+    return threshold
+
+
+def daily_share_visibility(
+    rows: pd.DataFrame,
+    min_share_percent: float,
+) -> pd.Series:
+    """Return which archetype/date rows meet the configured daily share."""
+    if "share_percent" not in rows:
+        raise ValueError("daily metrics are missing share_percent")
+    threshold = _validate_share_threshold(min_share_percent)
+    shares = pd.to_numeric(rows["share_percent"], errors="raise")
+    if shares.isna().any() or not shares.between(0, 100).all():
+        raise ValueError("daily share_percent values must be between 0 and 100")
+    return shares.ge(threshold)
+
+
+def build_pooled_archetype_shares(rows: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate uses-weighted archetype share across selected snapshots."""
+    required = {"archetype", "uses"}
+    missing = required - set(rows.columns)
+    if missing:
+        raise ValueError(f"daily metrics are missing columns: {sorted(missing)}")
+    values = rows[["archetype", "uses"]].copy()
+    values["archetype"] = values["archetype"].astype(str)
+    values["uses"] = pd.to_numeric(values["uses"], errors="raise")
+    if values["uses"].isna().any() or (values["uses"] < 0).any():
+        raise ValueError("daily metric uses must be non-negative")
+    pooled = (
+        values.groupby("archetype", as_index=False, observed=True)["uses"]
+        .sum()
+    )
+    total_uses = pooled["uses"].sum()
+    if total_uses <= 0:
+        raise ValueError("pooled archetype uses must be positive")
+    pooled["share_percent"] = 100.0 * pooled["uses"] / total_uses
+    return pooled.sort_values(
+        ["uses", "archetype"], ascending=[False, True]
+    ).reset_index(drop=True)
+
+
 def build_team_modal_archetypes(rows: pd.DataFrame) -> pd.DataFrame:
     """Choose each team's most-used archetype per date deterministically."""
     required = {"date", "team_name", "archetype"}
@@ -350,3 +467,371 @@ def build_matchups(
             "win_rate",
         ]
     ].sort_values(["row_archetype", "column_archetype"]).reset_index(drop=True)
+
+
+def _sankey_colors(shares: pd.DataFrame) -> dict[str, str]:
+    totals = (
+        shares.groupby("display_archetype", observed=True)["uses"]
+        .sum()
+        .sort_values(ascending=False)
+    )
+    ordered = sorted(
+        (str(name) for name in totals.index if str(name) != "Other"),
+        key=lambda name: (-int(totals.loc[name]), name),
+    )
+    colors = {
+        name: SANKEY_PALETTE[index % len(SANKEY_PALETTE)]
+        for index, name in enumerate(ordered)
+    }
+    if "Other" in totals.index:
+        colors["Other"] = "#9e9e9e"
+    return colors
+
+
+def build_sankey_layout(
+    display_shares: pd.DataFrame,
+    flows: pd.DataFrame,
+    snapshot_dates: Sequence[str],
+    *,
+    bottom: float = 0.08,
+    top: float = 0.92,
+    gap: float = 0.006,
+    node_width: float = 0.012,
+) -> SankeyLayout:
+    """Lay out share-sized nodes and globally scaled team-flow ribbons."""
+    share_columns = {"date", "display_archetype", "share_percent", "uses"}
+    missing = share_columns - set(display_shares.columns)
+    if missing:
+        raise ValueError(f"display shares are missing columns: {sorted(missing)}")
+    flow_columns = {
+        "from_date",
+        "to_date",
+        "source_archetype",
+        "target_archetype",
+        "teams",
+    }
+    missing = flow_columns - set(flows.columns)
+    if missing:
+        raise ValueError(f"flows are missing columns: {sorted(missing)}")
+    dates = tuple(str(value) for value in snapshot_dates)
+    if not dates or len(set(dates)) != len(dates):
+        raise ValueError("snapshot_dates must contain unique date labels")
+    if not 0 <= bottom < top <= 1:
+        raise ValueError("Sankey vertical bounds must satisfy 0 <= bottom < top <= 1")
+    if gap < 0 or node_width <= 0:
+        raise ValueError("Sankey gap must be non-negative and node width positive")
+
+    shares = display_shares.copy()
+    shares["date"] = shares["date"].astype(str)
+    shares["display_archetype"] = shares["display_archetype"].astype(str)
+    shares = shares[shares["date"].isin(dates)]
+    shares["share_percent"] = pd.to_numeric(
+        shares["share_percent"], errors="raise"
+    )
+    shares["uses"] = pd.to_numeric(shares["uses"], errors="raise")
+    shares = (
+        shares.groupby(
+            ["date", "display_archetype"], as_index=False, observed=True
+        )[["share_percent", "uses"]]
+        .sum()
+    )
+    if (shares["share_percent"] <= 0).any() or (shares["uses"] < 0).any():
+        raise ValueError("Sankey shares must be positive and uses non-negative")
+    daily_totals = shares.groupby("date", observed=True)["share_percent"].sum()
+    missing_dates = [date_label for date_label in dates if date_label not in daily_totals]
+    if missing_dates:
+        raise ValueError(f"display shares are missing dates: {missing_dates}")
+    invalid_totals = daily_totals[~daily_totals.between(99.999, 100.001)]
+    if not invalid_totals.empty:
+        raise ValueError(
+            "display shares must sum to 100% for every date: "
+            f"{invalid_totals.to_dict()}"
+        )
+
+    colors = _sankey_colors(shares)
+    x_by_date = {
+        date_label: (
+            0.5
+            if len(dates) == 1
+            else 0.03 + 0.94 * index / (len(dates) - 1)
+        )
+        for index, date_label in enumerate(dates)
+    }
+    nodes: list[SankeyNode] = []
+    for date_label in dates:
+        day = shares[shares["date"] == date_label].sort_values(
+            ["share_percent", "display_archetype"],
+            ascending=[False, True],
+        )
+        usable_height = top - bottom - gap * (len(day) - 1)
+        if usable_height <= 0:
+            raise ValueError(f"too many Sankey nodes for date {date_label}")
+        cursor = top
+        for rank, row in enumerate(day.itertuples(index=False)):
+            height = usable_height * float(row.share_percent) / 100.0
+            node_bottom = cursor - height
+            archetype = str(row.display_archetype)
+            nodes.append(
+                SankeyNode(
+                    date=date_label,
+                    archetype=archetype,
+                    share_percent=float(row.share_percent),
+                    uses=int(row.uses),
+                    rank=rank,
+                    x=x_by_date[date_label],
+                    bottom=node_bottom,
+                    top=cursor,
+                    color=colors[archetype],
+                )
+            )
+            cursor = node_bottom - gap
+
+    node_by_key = {node.key: node for node in nodes}
+    date_pairs = set(zip(dates, dates[1:]))
+    prepared_flows = flows.copy()
+    for column in (
+        "from_date",
+        "to_date",
+        "source_archetype",
+        "target_archetype",
+    ):
+        prepared_flows[column] = prepared_flows[column].astype(str)
+    prepared_flows["teams"] = pd.to_numeric(
+        prepared_flows["teams"], errors="raise"
+    )
+    if (prepared_flows["teams"] < 0).any():
+        raise ValueError("Sankey flow team counts must be non-negative")
+    prepared_flows = prepared_flows[
+        prepared_flows.apply(
+            lambda row: (row["from_date"], row["to_date"]) in date_pairs,
+            axis=1,
+        )
+    ]
+    prepared_flows = (
+        prepared_flows.groupby(
+            [
+                "from_date",
+                "to_date",
+                "source_archetype",
+                "target_archetype",
+            ],
+            as_index=False,
+            observed=True,
+        )["teams"]
+        .sum()
+    )
+    records = []
+    for row in prepared_flows.itertuples(index=False):
+        source = (row.from_date, row.source_archetype)
+        target = (row.to_date, row.target_archetype)
+        teams = int(row.teams)
+        if source in node_by_key and target in node_by_key and teams > 0:
+            records.append({"source": source, "target": target, "teams": teams})
+
+    outgoing: dict[tuple[str, str], int] = {}
+    incoming: dict[tuple[str, str], int] = {}
+    for record in records:
+        outgoing[record["source"]] = outgoing.get(record["source"], 0) + record[
+            "teams"
+        ]
+        incoming[record["target"]] = incoming.get(record["target"], 0) + record[
+            "teams"
+        ]
+    scale_candidates = []
+    for key, node in node_by_key.items():
+        teams = max(outgoing.get(key, 0), incoming.get(key, 0))
+        if teams:
+            scale_candidates.append(node.height / teams)
+    ribbon_scale = min(scale_candidates) * 0.94 if scale_candidates else 0.0
+
+    source_bounds: dict[int, tuple[float, float]] = {}
+    target_bounds: dict[int, tuple[float, float]] = {}
+    for key, node in node_by_key.items():
+        source_indices = sorted(
+            (index for index, record in enumerate(records) if record["source"] == key),
+            key=lambda index: (
+                node_by_key[records[index]["target"]].rank,
+                records[index]["target"][1],
+            ),
+        )
+        source_total = sum(records[index]["teams"] for index in source_indices)
+        cursor = node.top - (node.height - source_total * ribbon_scale) / 2
+        for index in source_indices:
+            width = records[index]["teams"] * ribbon_scale
+            source_bounds[index] = (cursor - width, cursor)
+            cursor -= width
+
+        target_indices = sorted(
+            (index for index, record in enumerate(records) if record["target"] == key),
+            key=lambda index: (
+                node_by_key[records[index]["source"]].rank,
+                records[index]["source"][1],
+            ),
+        )
+        target_total = sum(records[index]["teams"] for index in target_indices)
+        cursor = node.top - (node.height - target_total * ribbon_scale) / 2
+        for index in target_indices:
+            width = records[index]["teams"] * ribbon_scale
+            target_bounds[index] = (cursor - width, cursor)
+            cursor -= width
+
+    ribbons = tuple(
+        SankeyRibbon(
+            source=record["source"],
+            target=record["target"],
+            teams=record["teams"],
+            source_bottom=source_bounds[index][0],
+            source_top=source_bounds[index][1],
+            target_bottom=target_bounds[index][0],
+            target_top=target_bounds[index][1],
+            color=node_by_key[record["source"]].color,
+        )
+        for index, record in enumerate(records)
+    )
+    games_by_date = {
+        date_label: int(round(shares.loc[shares["date"] == date_label, "uses"].sum() / 2))
+        for date_label in dates
+    }
+    return SankeyLayout(
+        dates=dates,
+        nodes=tuple(nodes),
+        ribbons=ribbons,
+        color_by_archetype=colors,
+        games_by_date=games_by_date,
+        node_width=node_width,
+    )
+
+
+def _display_date(value: str) -> str:
+    parsed = parse_month_day(value)
+    return f"{parsed.month:02d}/{parsed.day:02d}"
+
+
+def plot_archetype_sankey(
+    display_shares: pd.DataFrame,
+    flows: pd.DataFrame,
+    snapshot_dates: Sequence[str],
+):
+    """Render a compact, share-faithful static archetype Sankey figure."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import PathPatch, Patch, Rectangle
+    from matplotlib.path import Path
+
+    layout = build_sankey_layout(display_shares, flows, snapshot_dates)
+    node_by_key = {node.key: node for node in layout.nodes}
+    figure_width = max(14.0, 1.15 * len(layout.dates))
+    figure, axis = plt.subplots(figsize=(figure_width, 8.0))
+
+    for ribbon in sorted(layout.ribbons, key=lambda value: value.teams, reverse=True):
+        source = node_by_key[ribbon.source]
+        target = node_by_key[ribbon.target]
+        source_x = source.x + layout.node_width / 2
+        target_x = target.x - layout.node_width / 2
+        control_1 = source_x + 0.42 * (target_x - source_x)
+        control_2 = source_x + 0.58 * (target_x - source_x)
+        vertices = [
+            (source_x, ribbon.source_bottom),
+            (control_1, ribbon.source_bottom),
+            (control_2, ribbon.target_bottom),
+            (target_x, ribbon.target_bottom),
+            (target_x, ribbon.target_top),
+            (control_2, ribbon.target_top),
+            (control_1, ribbon.source_top),
+            (source_x, ribbon.source_top),
+            (source_x, ribbon.source_bottom),
+        ]
+        codes = [
+            Path.MOVETO,
+            Path.CURVE4,
+            Path.CURVE4,
+            Path.CURVE4,
+            Path.LINETO,
+            Path.CURVE4,
+            Path.CURVE4,
+            Path.CURVE4,
+            Path.CLOSEPOLY,
+        ]
+        axis.add_patch(
+            PathPatch(
+                Path(vertices, codes),
+                facecolor=to_rgba(ribbon.color, 0.30),
+                edgecolor="none",
+                zorder=1,
+            )
+        )
+
+    for node in layout.nodes:
+        axis.add_patch(
+            Rectangle(
+                (node.x - layout.node_width / 2, node.bottom),
+                layout.node_width,
+                node.height,
+                facecolor=node.color,
+                edgecolor="white",
+                linewidth=0.6,
+                zorder=3,
+            )
+        )
+        axis.text(
+            node.x + layout.node_width * 0.7,
+            (node.bottom + node.top) / 2,
+            f"{node.share_percent:.1f}%",
+            ha="left",
+            va="center",
+            fontsize=6.5,
+            color="#27364d",
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.55, "pad": 0.4},
+            zorder=4,
+        )
+
+    for date_label in layout.dates:
+        x = next(node.x for node in layout.nodes if node.date == date_label)
+        axis.text(
+            x,
+            0.965,
+            _display_date(date_label),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            color="#4b5563",
+        )
+        axis.text(
+            x,
+            0.035,
+            f"{layout.games_by_date[date_label]:,}",
+            ha="center",
+            va="top",
+            fontsize=6.5,
+            color="#7a7a7a",
+        )
+
+    legend_handles = [
+        Patch(facecolor=color, edgecolor="none", label=archetype)
+        for archetype, color in layout.color_by_archetype.items()
+    ]
+    if legend_handles:
+        axis.legend(
+            handles=legend_handles,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.075),
+            ncol=min(8, max(1, len(legend_handles))),
+            frameon=False,
+            fontsize=7,
+            columnspacing=1.2,
+            handlelength=1.8,
+        )
+    total_games = sum(layout.games_by_date.values())
+    first, last = _display_date(layout.dates[0]), _display_date(layout.dates[-1])
+    axis.set_title(
+        "PTCG AI Battle - top-band meta evolution "
+        f"({first}-{last}, all {total_games:,} games; "
+        "ribbons = team deck switches)",
+        fontsize=13,
+        pad=18,
+    )
+    axis.set_xlim(0, 1)
+    axis.set_ylim(0, 1.02)
+    axis.axis("off")
+    figure.subplots_adjust(left=0.025, right=0.985, top=0.91, bottom=0.17)
+    return figure

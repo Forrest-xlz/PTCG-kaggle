@@ -43,8 +43,13 @@ def test_deck_trend_notebook_is_valid_and_complete() -> None:
             "add_trend_archetypes",
             "build_daily_metrics",
             "build_team_flows",
-            "go.Sankey",
+            "plot_archetype_sankey",
             "build_matchups",
+            "daily_share_visibility",
+            "build_pooled_archetype_shares",
+            "global_visible_archetypes",
             "matchup_matrix_long.csv",
         )
     )
+    assert "groupby('archetype')['share_percent'].max()" not in source
+    assert "go.Sankey" not in source

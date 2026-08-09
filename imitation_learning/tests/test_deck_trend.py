@@ -17,9 +17,13 @@ from deck.trend import (
     add_trend_archetypes,
     build_daily_metrics,
     build_matchups,
+    build_pooled_archetype_shares,
+    build_sankey_layout,
     build_team_flows,
     build_team_modal_archetypes,
     classify_trend_archetype,
+    daily_share_visibility,
+    plot_archetype_sankey,
     select_snapshot_dates,
 )
 
@@ -115,3 +119,83 @@ def test_metrics_modal_flows_and_matchups_reconcile() -> None:
     assert (
         matchups["wins"] + matchups["losses"] + matchups["draws"]
     ).equals(matchups["games"])
+
+
+def sankey_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+    shares = pd.DataFrame(
+        [
+            ("6.26", "Alpha", 60, 120),
+            ("6.26", "Beta", 40, 80),
+            ("6.29", "Gamma", 75, 150),
+            ("6.29", "Alpha", 25, 50),
+        ],
+        columns=["date", "display_archetype", "share_percent", "uses"],
+    )
+    flows = pd.DataFrame(
+        [
+            ("6.26", "6.29", "Alpha", "Gamma", 20),
+            ("6.26", "6.29", "Beta", "Alpha", 10),
+        ],
+        columns=[
+            "from_date",
+            "to_date",
+            "source_archetype",
+            "target_archetype",
+            "teams",
+        ],
+    )
+    return shares, flows
+
+
+def test_sankey_layout_uses_share_heights_and_global_ribbon_scale() -> None:
+    shares, flows = sankey_frames()
+    layout = build_sankey_layout(shares, flows, ["6.26", "6.29"])
+    nodes = {node.key: node for node in layout.nodes}
+    assert nodes[("6.26", "Alpha")].height / nodes[
+        ("6.26", "Beta")
+    ].height == pytest.approx(60 / 40)
+    assert nodes[("6.29", "Gamma")].rank == 0
+    assert nodes[("6.29", "Alpha")].rank == 1
+    widths = {
+        ribbon.teams: ribbon.source_top - ribbon.source_bottom
+        for ribbon in layout.ribbons
+    }
+    assert widths[20] / widths[10] == pytest.approx(2.0)
+    assert layout.games_by_date == {"6.26": 100, "6.29": 100}
+
+
+def test_static_sankey_contains_compact_labels_and_legend() -> None:
+    shares, flows = sankey_frames()
+    figure = plot_archetype_sankey(shares, flows, ["6.26", "6.29"])
+    axis = figure.axes[0]
+    labels = {text.get_text() for text in axis.texts}
+    assert {"06/26", "06/29", "60.0%", "75.0%"} <= labels
+    assert axis.get_legend() is not None
+    assert "team deck switches" in axis.get_title().lower()
+
+
+def test_daily_visibility_is_per_date_and_pooled_share_is_uses_weighted() -> None:
+    metrics = pd.DataFrame(
+        [
+            ("6.26", "Alpha", 12, 60.0),
+            ("6.26", "Beta", 8, 40.0),
+            ("6.29", "Alpha", 4, 2.0),
+            ("6.29", "Beta", 196, 98.0),
+        ],
+        columns=["date", "archetype", "uses", "share_percent"],
+    )
+
+    visibility = daily_share_visibility(metrics, 10.0)
+    assert visibility.tolist() == [True, True, False, True]
+
+    pooled = build_pooled_archetype_shares(metrics).set_index("archetype")
+    assert pooled.loc["Alpha", "uses"] == 16
+    assert pooled.loc["Alpha", "share_percent"] == pytest.approx(100 * 16 / 220)
+    assert pooled.loc["Alpha", "share_percent"] < 10.0
+
+
+@pytest.mark.parametrize("threshold", [-0.1, 100.1])
+def test_daily_visibility_rejects_invalid_threshold(threshold: float) -> None:
+    metrics = pd.DataFrame({"share_percent": [10.0]})
+    with pytest.raises(ValueError, match="between 0 and 100"):
+        daily_share_visibility(metrics, threshold)
