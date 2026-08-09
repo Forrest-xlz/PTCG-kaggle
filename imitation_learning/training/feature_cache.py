@@ -14,7 +14,7 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 15
+CACHE_SCHEMA_VERSION = 16
 ENCODER_WORDS = 26
 POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
@@ -28,6 +28,12 @@ HISTORY_STEPS = 3
 HISTORY_STRUCTURAL_DIM = 8
 MAX_ACTIONS = 64
 ALIGNMENT = 64
+PLAYER_RESULT_WIN = 1
+PLAYER_RESULT_LOSS = 2
+PLAYER_RESULT_DRAW = 3
+PLAYER_RESULTS = frozenset(
+    {PLAYER_RESULT_WIN, PLAYER_RESULT_LOSS, PLAYER_RESULT_DRAW}
+)
 
 SECTION_DTYPES = {
     "encoder_index": np.dtype("<u2"),
@@ -59,6 +65,7 @@ SECTION_DTYPES = {
     "action_count": np.dtype("u1"),
     "episode_key": np.dtype("<u4"),
     "deck_key": np.dtype("<u8"),
+    "player_result": np.dtype("u1"),
 }
 
 
@@ -89,6 +96,7 @@ class FeatureRecord:
     history_pokemon_dynamic: list[float]
     history_attack_dynamic: list[float]
     history_option_offset: list[int]
+    player_result: int = PLAYER_RESULT_WIN
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +118,7 @@ class FeatureView:
     action_count: int
     episode_key: int
     deck_key: int
+    player_result: int
     history_select_type: np.ndarray
     history_select_context: np.ndarray
     history_valid: np.ndarray
@@ -178,6 +187,19 @@ class DatasetSplits:
     eligible_train_samples: int
     eligible_train_replays: int
     selected_train_replays: int
+    loser_augmentation_counts: dict[
+        tuple[int, int], "LoserAugmentationCounts"
+    ]
+    loser_augmentation_replays: int
+    loser_augmentation_samples: int
+    loser_fraction_in_train: float
+
+
+@dataclass(frozen=True, slots=True)
+class LoserAugmentationCounts:
+    after_validation_episodes: int
+    selected_train_episodes: int
+    loser_samples: int
 
 
 def stable_episode_key(episode_id: object) -> int:
@@ -392,6 +414,8 @@ class PackedShardWriter:
             raise ValueError("episode_key must fit uint32")
         if not 0 <= int(record.deck_key) <= np.iinfo(np.uint64).max:
             raise ValueError("deck_key must fit uint64")
+        if int(record.player_result) not in PLAYER_RESULTS:
+            raise ValueError("player_result must be win, loss, or draw")
 
         _validate_unsigned("encoder_index", record.encoder_index, np.iinfo(np.uint16).max)
         _validate_unsigned("encoder_offset", record.encoder_offset, np.iinfo(np.uint16).max)
@@ -523,6 +547,7 @@ class PackedShardWriter:
         self._append("action_count", int(record.action_count))
         self._append("episode_key", int(record.episode_key))
         self._append("deck_key", int(record.deck_key))
+        self._append("player_result", int(record.player_result))
         self._samples += 1
         self._buffered_samples += 1
         if self._buffered_samples >= self.flush_samples:
@@ -715,6 +740,12 @@ class PackedShard:
             raise ValueError("episode_key length does not match sample count")
         if self.arrays["deck_key"].size != self.samples:
             raise ValueError("deck_key length does not match sample count")
+        if self.arrays["player_result"].size != self.samples:
+            raise ValueError("player_result length does not match sample count")
+        if not np.isin(
+            self.arrays["player_result"], tuple(PLAYER_RESULTS)
+        ).all():
+            raise ValueError("player_result contains an invalid value")
         option_count = int(self.arrays["option_ptr"][-1])
         if (
             self.arrays["option_categorical"].size
@@ -847,6 +878,7 @@ class PackedShard:
             action_count=int(self.arrays["action_count"][local_id]),
             episode_key=int(self.arrays["episode_key"][local_id]),
             deck_key=int(self.arrays["deck_key"][local_id]),
+            player_result=int(self.arrays["player_result"][local_id]),
             history_select_type=self.arrays["history_select_type"][
                 history_fixed_start:history_fixed_start + HISTORY_STEPS
             ],
@@ -978,6 +1010,10 @@ class MmapFeatureDataset:
             Mapping[tuple[int, int], AbstractSet[int]],
         ]
         | None = None,
+        loser_episode_keys: Mapping[
+            tuple[int, int], AbstractSet[int]
+        ]
+        | None = None,
     ) -> DatasetSplits:
         if not 0 < validation_ratio < 1:
             raise ValueError("validation_ratio must be strictly between 0 and 1")
@@ -1001,6 +1037,11 @@ class MmapFeatureDataset:
         eligible_train_samples = 0
         eligible_train_key_parts = []
         selected_train_key_parts = []
+        loser_count_parts: dict[
+            tuple[int, int], list[tuple[np.ndarray, np.ndarray, int]]
+        ] = {
+            date: [] for date in (loser_episode_keys or {})
+        }
         in_distribution_parts = []
         in_distribution_expert_parts = []
         in_distribution_top_deck_parts = []
@@ -1021,6 +1062,14 @@ class MmapFeatureDataset:
         }
         isolation_union_replay_ids: set[tuple[tuple[int, int], int]] = set()
         required_dates = set(self.shard_dates)
+        unknown_loser_dates = set(loser_count_parts) - required_dates
+        if unknown_loser_dates:
+            labels = ", ".join(
+                f"{month}.{day}" for month, day in sorted(unknown_loser_dates)
+            )
+            raise ValueError(
+                f"loser augmentation dates are absent from cache: {labels}"
+            )
         if isolation_episode_keys is not None:
             if not isolation_names:
                 raise ValueError(
@@ -1061,6 +1110,9 @@ class MmapFeatureDataset:
                 dtype=dtype,
             )
             date = self.shard_dates[shard_id]
+            player_results = shard.arrays["player_result"]
+            winner_mask = player_results == PLAYER_RESULT_WIN
+            loss_mask = player_results == PLAYER_RESULT_LOSS
             if expert_episode_keys is None:
                 expert_mask = np.zeros(len(shard), dtype=np.bool_)
             else:
@@ -1091,17 +1143,22 @@ class MmapFeatureDataset:
                     assume_unique=False,
                 )
             if namespace_masks:
-                isolation_mask = np.logical_or.reduce(
+                isolation_replay_mask = np.logical_or.reduce(
                     tuple(namespace_masks.values())
                 )
-                isolation_parts.append(global_ids[isolation_mask])
+                isolation_validation_mask = (
+                    isolation_replay_mask & winner_mask
+                )
+                isolation_parts.append(global_ids[isolation_validation_mask])
                 for name, mask in namespace_masks.items():
-                    isolation_mask_parts[name].append(mask[isolation_mask])
+                    isolation_mask_parts[name].append(
+                        mask[isolation_validation_mask]
+                    )
             else:
-                isolation_mask = np.zeros(len(shard), dtype=np.bool_)
+                isolation_replay_mask = np.zeros(len(shard), dtype=np.bool_)
             if date == latest_date:
-                latest_mask = ~isolation_mask
-                if np.any(isolation_mask & latest_mask):
+                latest_mask = ~isolation_replay_mask & winner_mask
+                if np.any(isolation_replay_mask & latest_mask):
                     raise RuntimeError(
                         "isolation validation overlaps latest-date samples"
                     )
@@ -1116,10 +1173,11 @@ class MmapFeatureDataset:
             mixed = _mix_episode_keys(
                 shard.arrays["episode_key"], validation_seed
             )
-            validation_mask = (
-                ~isolation_mask
+            validation_replay_mask = (
+                ~isolation_replay_mask
                 & (mixed.astype(np.uint64) < threshold)
             )
+            validation_mask = validation_replay_mask & winner_mask
             in_distribution_parts.append(global_ids[validation_mask])
             in_distribution_expert_parts.append(
                 expert_mask[validation_mask]
@@ -1131,7 +1189,9 @@ class MmapFeatureDataset:
                 in_distribution_per_deck_parts, per_deck_masks
             ):
                 parts.append(deck_mask[validation_mask])
-            eligible_mask = ~isolation_mask & ~validation_mask
+            eligible_replay_mask = (
+                ~isolation_replay_mask & ~validation_replay_mask
+            )
             train_selection = (
                 _mix_episode_keys(
                     shard.arrays["episode_key"],
@@ -1139,21 +1199,60 @@ class MmapFeatureDataset:
                 ).astype(np.uint64)
                 < train_threshold
             )
-            selected_mask = eligible_mask & train_selection
+            if date in loser_count_parts:
+                loser_keys = np.fromiter(
+                    loser_episode_keys[date], dtype=np.uint32
+                )
+                score_eligible_loss_mask = loss_mask & np.isin(
+                    shard.arrays["episode_key"],
+                    loser_keys,
+                    assume_unique=False,
+                )
+            else:
+                score_eligible_loss_mask = np.zeros(
+                    len(shard), dtype=np.bool_
+                )
+            train_eligible_sample_mask = (
+                winner_mask | score_eligible_loss_mask
+            )
+            selected_mask = (
+                eligible_replay_mask
+                & train_selection
+                & train_eligible_sample_mask
+            )
             if np.any(
-                isolation_mask & (validation_mask | selected_mask)
+                isolation_replay_mask & (validation_mask | selected_mask)
             ):
                 raise RuntimeError(
                     "isolation validation overlaps later split samples"
                 )
             train_parts.append(global_ids[selected_mask])
-            eligible_train_samples += int(eligible_mask.sum())
+            eligible_sample_mask = (
+                eligible_replay_mask & train_eligible_sample_mask
+            )
+            eligible_train_samples += int(eligible_sample_mask.sum())
             eligible_train_key_parts.append(
-                np.unique(shard.arrays["episode_key"][eligible_mask])
+                np.unique(shard.arrays["episode_key"][eligible_sample_mask])
             )
             selected_train_key_parts.append(
                 np.unique(shard.arrays["episode_key"][selected_mask])
             )
+            if date in loser_count_parts:
+                after_validation_mask = (
+                    eligible_replay_mask & score_eligible_loss_mask
+                )
+                selected_loser_mask = after_validation_mask & train_selection
+                loser_count_parts[date].append(
+                    (
+                        np.unique(
+                            shard.arrays["episode_key"][after_validation_mask]
+                        ),
+                        np.unique(
+                            shard.arrays["episode_key"][selected_loser_mask]
+                        ),
+                        int(selected_loser_mask.sum()),
+                    )
+                )
 
         def combine(parts: list[np.ndarray], name: str) -> np.ndarray:
             nonempty = [part for part in parts if part.size]
@@ -1279,6 +1378,24 @@ class MmapFeatureDataset:
                 return 0
             return int(np.unique(np.concatenate(nonempty)).size)
 
+        loser_augmentation_counts = {}
+        for date, parts in loser_count_parts.items():
+            after_parts = [after for after, _, _ in parts]
+            selected_parts = [selected for _, selected, _ in parts]
+            loser_augmentation_counts[date] = LoserAugmentationCounts(
+                after_validation_episodes=unique_count(after_parts),
+                selected_train_episodes=unique_count(selected_parts),
+                loser_samples=sum(samples for _, _, samples in parts),
+            )
+        loser_augmentation_replays = sum(
+            counts.selected_train_episodes
+            for counts in loser_augmentation_counts.values()
+        )
+        loser_augmentation_samples = sum(
+            counts.loser_samples
+            for counts in loser_augmentation_counts.values()
+        )
+
         return DatasetSplits(
             train=train,
             isolation=isolation,
@@ -1308,6 +1425,14 @@ class MmapFeatureDataset:
             eligible_train_samples=eligible_train_samples,
             eligible_train_replays=unique_count(eligible_train_key_parts),
             selected_train_replays=unique_count(selected_train_key_parts),
+            loser_augmentation_counts=loser_augmentation_counts,
+            loser_augmentation_replays=loser_augmentation_replays,
+            loser_augmentation_samples=loser_augmentation_samples,
+            loser_fraction_in_train=(
+                loser_augmentation_samples / len(train)
+                if len(train)
+                else 0.0
+            ),
         )
 
     def collate(self, index_batch: IndexBatch) -> CachedBatch:

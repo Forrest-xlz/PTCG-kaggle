@@ -56,6 +56,9 @@ from training.feature_cache import (
     HISTORY_STRUCTURAL_DIM,
     OPTION_CATEGORICAL_DIM,
     OPTION_NUMERIC_DIM,
+    PLAYER_RESULT_DRAW,
+    PLAYER_RESULT_LOSS,
+    PLAYER_RESULT_WIN,
     POKEMON_DYNAMIC_DIM,
     FeatureRecord,
     PackedShard,
@@ -63,6 +66,13 @@ from training.feature_cache import (
     stable_deck_key,
     stable_episode_key,
 )
+
+
+PLAYER_RESULT_CODES = {
+    "win": PLAYER_RESULT_WIN,
+    "loss": PLAYER_RESULT_LOSS,
+    "draw": PLAYER_RESULT_DRAW,
+}
 
 
 def _pack_history(history: list[HistoryActionFeatures]) -> dict[str, list]:
@@ -225,6 +235,7 @@ def _prepare_record(
             action_count=len(actions),
             episode_key=stable_episode_key(record["episode_id"]),
             deck_key=stable_deck_key(record["deck"]),
+            player_result=PLAYER_RESULT_CODES[record["player_result"]],
             **packed_history,
         ),
         None,
@@ -247,11 +258,12 @@ def _source_meta(path: Path) -> dict:
     if not meta.exists():
         raise FileNotFoundError(f"extract metadata not found for {path.name}: {meta}")
     payload = json.loads(meta.read_text(encoding="utf-8"))
-    if payload.get("winner_only") is not True:
+    if payload.get("player_results") != "win-loss-draw":
         raise ValueError(
-            f"{path.name} was not extracted with winner_only=true; rerun extraction"
+            f"{path.name} does not contain win/loss/draw player results; "
+            "rerun training.extract"
         )
-    if int(payload.get("schema_version", 0)) < 3:
+    if int(payload.get("schema_version", 0)) < 4:
         raise ValueError(
             f"{path.name} uses the old action alignment; rerun training.extract"
         )

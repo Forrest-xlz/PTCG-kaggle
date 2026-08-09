@@ -62,7 +62,11 @@ def _record() -> FeatureRecord:
 
 def test_history_round_trip_and_collation(tmp_path: Path) -> None:
     destination = tmp_path / "history.part-00000.cache"
-    writer = PackedShardWriter(destination, {"history": "v1"}, {})
+    writer = PackedShardWriter(
+        destination,
+        {"history": "v1"},
+        {"name": "7.1.jsonl.gz"},
+    )
     writer.add(_record())
     writer.finalize()
 

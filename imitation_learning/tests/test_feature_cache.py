@@ -25,6 +25,9 @@ from training.feature_cache import (
     OPTION_NUMERIC_DIM,
     POKEMON_DYNAMIC_DIM,
     OWN_SUMMARY_DIM,
+    PLAYER_RESULT_DRAW,
+    PLAYER_RESULT_LOSS,
+    PLAYER_RESULT_WIN,
     FeatureRecord,
     MmapFeatureDataset,
     PackedShard,
@@ -45,7 +48,13 @@ SIGNATURE = {
 }
 
 
-def record(marker: int, action_count: int = 2) -> FeatureRecord:
+def record(
+    marker: int,
+    action_count: int = 2,
+    *,
+    episode_id: str | None = None,
+    player_result: int = PLAYER_RESULT_WIN,
+) -> FeatureRecord:
     encoder_offset = [0] * ENCODER_WORDS
     encoder_offset[-1] = 1
     action_memberships = [[0, 1], [0]][:action_count]
@@ -86,8 +95,9 @@ def record(marker: int, action_count: int = 2) -> FeatureRecord:
         action_option_offset=action_option_offset,
         target=min(1, action_count - 1),
         action_count=action_count,
-        episode_key=stable_episode_key(f"episode-{marker}"),
+        episode_key=stable_episode_key(episode_id or f"episode-{marker}"),
         deck_key=stable_deck_key([marker] * 60),
+        player_result=player_result,
     )
 
 
@@ -169,6 +179,106 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
         assert shard.arrays["deck_key"].dtype == np.dtype("<u8")
     finally:
         shard.close()
+
+
+def test_player_result_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "results.cache"
+    writer = PackedShardWriter(path, SIGNATURE, {"name": "7.1.jsonl.gz"})
+    writer.add(record(1, player_result=PLAYER_RESULT_WIN))
+    writer.add(record(2, player_result=PLAYER_RESULT_LOSS))
+    writer.add(record(3, player_result=PLAYER_RESULT_DRAW))
+    writer.finalize()
+
+    shard = PackedShard(path, expected_signature=SIGNATURE)
+    try:
+        np.testing.assert_array_equal(
+            shard.arrays["player_result"],
+            [PLAYER_RESULT_WIN, PLAYER_RESULT_LOSS, PLAYER_RESULT_DRAW],
+        )
+        assert shard.sample(1).player_result == PLAYER_RESULT_LOSS
+    finally:
+        shard.close()
+
+
+def test_splits_keep_validation_winner_only_and_add_qualified_losses(
+    tmp_path: Path,
+) -> None:
+    old_path = tmp_path / "7.23-part.cache"
+    writer = PackedShardWriter(
+        old_path, SIGNATURE, {"name": "7.23.jsonl.gz"}
+    )
+    writer.add(
+        record(1, episode_id="qualified", player_result=PLAYER_RESULT_WIN)
+    )
+    writer.add(
+        record(2, episode_id="qualified", player_result=PLAYER_RESULT_LOSS)
+    )
+    writer.add(
+        record(3, episode_id="unqualified", player_result=PLAYER_RESULT_WIN)
+    )
+    writer.add(
+        record(4, episode_id="unqualified", player_result=PLAYER_RESULT_LOSS)
+    )
+    writer.add(record(5, episode_id="draw", player_result=PLAYER_RESULT_DRAW))
+    for marker in range(10, 210):
+        writer.add(record(marker))
+    writer.finalize()
+
+    latest_path = tmp_path / "7.24-part.cache"
+    writer = PackedShardWriter(
+        latest_path, SIGNATURE, {"name": "7.24.jsonl.gz"}
+    )
+    writer.add(record(300, episode_id="latest", player_result=PLAYER_RESULT_WIN))
+    writer.add(
+        record(301, episode_id="latest", player_result=PLAYER_RESULT_LOSS)
+    )
+    writer.add(record(302, episode_id="latest-draw", player_result=PLAYER_RESULT_DRAW))
+    writer.finalize()
+
+    dataset = MmapFeatureDataset(tmp_path, SIGNATURE)
+    try:
+        validation_seed = next(
+            seed
+            for seed in range(10_000)
+            if stable_episode_key("qualified")
+            not in {
+                int(dataset.shards[0].arrays["episode_key"][index])
+                for index in dataset.build_splits(
+                    validation_ratio=0.05,
+                    validation_seed=seed,
+                ).in_distribution
+            }
+        )
+        splits = dataset.build_splits(
+            validation_ratio=0.05,
+            validation_seed=validation_seed,
+            loser_episode_keys={
+                (7, 23): {stable_episode_key("qualified")}
+            },
+        )
+
+        old_count = len(dataset.shards[0])
+        train_old_ids = splits.train[splits.train < old_count]
+        train_results = dataset.shards[0].arrays["player_result"][train_old_ids]
+        assert PLAYER_RESULT_LOSS in train_results
+        assert PLAYER_RESULT_DRAW not in train_results
+        assert 3 not in train_old_ids
+        assert 4 not in train_old_ids
+
+        latest_local_ids = splits.latest - old_count
+        np.testing.assert_array_equal(latest_local_ids, [0])
+        assert dataset.shards[1].arrays["player_result"][latest_local_ids[0]] == (
+            PLAYER_RESULT_WIN
+        )
+
+        counts = splits.loser_augmentation_counts[(7, 23)]
+        assert counts.after_validation_episodes == 1
+        assert counts.selected_train_episodes == 1
+        assert counts.loser_samples == 1
+        assert splits.loser_augmentation_replays == 1
+        assert splits.loser_augmentation_samples == 1
+    finally:
+        dataset.close()
 
 
 def test_writer_rejects_encoder_index_outside_uint16(tmp_path: Path) -> None:
@@ -316,7 +426,7 @@ def test_expert_masks_align_with_existing_validation_splits(
     tmp_path: Path,
 ) -> None:
     build_shard(
-        tmp_path / "old.cache",
+        tmp_path / "7.19-old.cache",
         list(range(1, 101)),
         source_name="7.19.jsonl.gz",
         deck_markers=[101] * 100,
@@ -371,7 +481,7 @@ def test_top_deck_masks_preserve_configuration_order_and_expert_intersections(
         deck_markers=[101 if marker % 2 else 102 for marker in old_markers],
     )
     build_shard(
-        tmp_path / "latest.cache",
+        tmp_path / "7.24-latest.cache",
         [101, 102, 103],
         source_name="7.24.jsonl.gz",
         deck_markers=[101, 102, 999],
@@ -425,12 +535,12 @@ def test_isolation_precedes_latest_and_in_distribution_splits(
     tmp_path: Path,
 ) -> None:
     build_shard(
-        tmp_path / "old.cache",
+        tmp_path / "7.19-old.cache",
         list(range(1, 101)),
         source_name="7.19.jsonl.gz",
     )
     build_shard(
-        tmp_path / "latest.cache",
+        tmp_path / "7.24-latest.cache",
         [101, 102, 103],
         source_name="7.24.jsonl.gz",
     )
@@ -485,12 +595,12 @@ def test_train_replay_sampling_is_deterministic_and_keeps_replays_together(
 ) -> None:
     old_markers = list(range(1, 101)) * 2
     build_shard(
-        tmp_path / "old.cache",
+        tmp_path / "7.19-old.cache",
         old_markers,
         source_name="7.19.jsonl.gz",
     )
     build_shard(
-        tmp_path / "latest.cache",
+        tmp_path / "7.24-latest.cache",
         [101, 102],
         source_name="7.24.jsonl.gz",
     )
