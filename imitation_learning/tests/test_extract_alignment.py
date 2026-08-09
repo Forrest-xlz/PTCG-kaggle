@@ -8,7 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from training.extract import _iter_player_records
+from training.extract import _iter_player_records, _player_results
 
 
 def state(status: str, marker: int, action: list[int]) -> dict:
@@ -37,6 +37,7 @@ def test_action_is_taken_from_next_step_and_inactive_states_are_ignored() -> Non
             episode=123,
             date="7.24",
             deck=[1] * 60,
+            player_result="win",
         )
     )
 
@@ -48,3 +49,14 @@ def test_action_is_taken_from_next_step_and_inactive_states_are_ignored() -> Non
         10,
         30,
     ]
+    assert {record["player_result"] for record in records} == {"win"}
+
+
+def test_player_results_keep_both_sides_of_decisive_replay() -> None:
+    assert _player_results([1, -1], player_count=2) == ("win", "loss")
+    assert _player_results([-1, 1], player_count=2) == ("loss", "win")
+
+
+def test_player_results_keep_no_winner_replay_as_draw() -> None:
+    assert _player_results([0, 0], player_count=2) == ("draw", "draw")
+    assert _player_results([], player_count=2) == ("draw", "draw")
