@@ -197,6 +197,7 @@ class DatasetSplits:
 
 @dataclass(frozen=True, slots=True)
 class LoserAugmentationCounts:
+    score_eligible_episodes: int
     after_validation_episodes: int
     selected_train_episodes: int
     loser_samples: int
@@ -1038,7 +1039,8 @@ class MmapFeatureDataset:
         eligible_train_key_parts = []
         selected_train_key_parts = []
         loser_count_parts: dict[
-            tuple[int, int], list[tuple[np.ndarray, np.ndarray, int]]
+            tuple[int, int],
+            list[tuple[np.ndarray, np.ndarray, np.ndarray, int]],
         ] = {
             date: [] for date in (loser_episode_keys or {})
         }
@@ -1245,6 +1247,11 @@ class MmapFeatureDataset:
                 loser_count_parts[date].append(
                     (
                         np.unique(
+                            shard.arrays["episode_key"][
+                                score_eligible_loss_mask
+                            ]
+                        ),
+                        np.unique(
                             shard.arrays["episode_key"][after_validation_mask]
                         ),
                         np.unique(
@@ -1380,12 +1387,14 @@ class MmapFeatureDataset:
 
         loser_augmentation_counts = {}
         for date, parts in loser_count_parts.items():
-            after_parts = [after for after, _, _ in parts]
-            selected_parts = [selected for _, selected, _ in parts]
+            score_parts = [score for score, _, _, _ in parts]
+            after_parts = [after for _, after, _, _ in parts]
+            selected_parts = [selected for _, _, selected, _ in parts]
             loser_augmentation_counts[date] = LoserAugmentationCounts(
+                score_eligible_episodes=unique_count(score_parts),
                 after_validation_episodes=unique_count(after_parts),
                 selected_train_episodes=unique_count(selected_parts),
-                loser_samples=sum(samples for _, _, samples in parts),
+                loser_samples=sum(samples for _, _, _, samples in parts),
             )
         loser_augmentation_replays = sum(
             counts.selected_train_episodes

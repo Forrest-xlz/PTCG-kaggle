@@ -37,6 +37,10 @@ def test_train_yaml_uses_validation_and_step_configuration() -> None:
     assert train["warmup_steps"] >= 0
     assert train["validation_ratio"] == pytest.approx(0.05)
     assert train["expert_validation_ratio"] == pytest.approx(0.05)
+    loser_augmentation = train["loser_augmentation"]
+    assert loser_augmentation["enabled"] is True
+    assert loser_augmentation["recent_dates"] >= 1
+    assert 0 < loser_augmentation["expert_ratio"] <= 1
     assert train["replay_episodes"]
     isolation = train["isolation_validation"]
     assert isolation["deck_data"] == "data/deck"

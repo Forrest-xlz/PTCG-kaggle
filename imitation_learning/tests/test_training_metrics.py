@@ -13,7 +13,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from training.feature_cache import CachedBatch
+from training.expert_validation import ExpertLoserDateInfo
+from training.feature_cache import CachedBatch, LoserAugmentationCounts
 from training.feature_cache import (
     ENCODER_WORDS,
     GLOBAL_SUMMARY_DIM,
@@ -33,6 +34,8 @@ from training.train import (
     evaluate_dataset,
     policy_metrics,
     top_deck_subgroup_masks,
+    format_loser_augmentation_line,
+    select_loser_augmentation_dates,
 )
 
 
@@ -41,6 +44,42 @@ def test_ema_initializes_from_first_value_and_persists() -> None:
     assert ema.update(2.0) == pytest.approx(2.0)
     assert ema.update(1.0) == pytest.approx(1.99)
     assert ema.update(0.0) == pytest.approx(1.9701)
+
+
+def test_loser_augmentation_dates_exclude_latest_validation_date() -> None:
+    assert select_loser_augmentation_dates(
+        [(7, 20), (7, 22), (7, 24), (7, 22)], recent_dates=2
+    ) == ((7, 20), (7, 22))
+
+    with pytest.raises(ValueError, match="recent_dates=3"):
+        select_loser_augmentation_dates(
+            [(7, 20), (7, 22), (7, 24)], recent_dates=3
+        )
+
+
+def test_loser_augmentation_line_reports_each_filter_stage() -> None:
+    line = format_loser_augmentation_line(
+        ExpertLoserDateInfo(
+            date=(7, 21),
+            cutoff=1184.0,
+            participant_count=18_420,
+            episode_count=9_210,
+            eligible_episode_keys=frozenset({1, 2, 3}),
+        ),
+        LoserAugmentationCounts(
+            score_eligible_episodes=3,
+            after_validation_episodes=2,
+            selected_train_episodes=1,
+            loser_samples=17,
+        ),
+    )
+
+    assert line == (
+        "loser_aug_date=7.21 cutoff=1184 participant_scores=18,420 "
+        "episodes=9,210 score_eligible_episodes=3 "
+        "after_validation_episodes=2 selected_train_episodes=1 "
+        "loser_samples=17"
+    )
 
 
 def test_policy_metrics_mask_invalid_actions_and_compute_topk() -> None:

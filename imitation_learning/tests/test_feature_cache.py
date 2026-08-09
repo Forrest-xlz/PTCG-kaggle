@@ -272,6 +272,7 @@ def test_splits_keep_validation_winner_only_and_add_qualified_losses(
         )
 
         counts = splits.loser_augmentation_counts[(7, 23)]
+        assert counts.score_eligible_episodes == 1
         assert counts.after_validation_episodes == 1
         assert counts.selected_train_episodes == 1
         assert counts.loser_samples == 1

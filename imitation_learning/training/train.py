@@ -42,7 +42,11 @@ from cg.api import all_attack, all_card_data
 from model.attack_features import build_attack_feature_table
 from model.card_features import build_card_feature_table
 from model.network import ModelConfig, PTCGTransformer
-from training.expert_validation import load_expert_date_info
+from training.expert_validation import (
+    ExpertLoserDateInfo,
+    load_expert_date_info,
+    load_expert_loser_date_info,
+)
 from training.feature_cache import (
     CACHE_SCHEMA_VERSION,
     ENCODER_WORDS,
@@ -56,6 +60,7 @@ from training.feature_cache import (
     CachedBatch,
     IndexBatch,
     MmapFeatureDataset,
+    LoserAugmentationCounts,
     stable_deck_key,
 )
 from training.isolation_validation import load_isolation_replay_sets
@@ -73,6 +78,13 @@ ISOLATION_SELECTION_NAMES = (
 class IsolationValidationSettings:
     deck_data: str
     selections: dict[str, str]
+
+
+@dataclass(frozen=True)
+class LoserAugmentationSettings:
+    enabled: bool
+    recent_dates: int
+    expert_ratio: float
 
 
 @dataclass(frozen=True)
@@ -102,6 +114,7 @@ class TrainSettings:
     validation_ratio: float
     validation_seed: int
     expert_validation_ratio: float
+    loser_augmentation: LoserAugmentationSettings
     isolation_validation: IsolationValidationSettings
     top_decks: list[list[int]]
     train_replay_ratio: float
@@ -226,6 +239,39 @@ class ExponentialMovingAverage:
         self.value = None if value is None else float(value)
 
 
+def select_loser_augmentation_dates(
+    shard_dates: list[tuple[int, int]] | tuple[tuple[int, int], ...],
+    recent_dates: int,
+) -> tuple[tuple[int, int], ...]:
+    dates = sorted(set(shard_dates))
+    if not dates:
+        raise ValueError("cache contains no replay dates")
+    training_dates = dates[:-1]
+    if len(training_dates) < recent_dates:
+        raise ValueError(
+            "loser augmentation requested "
+            f"recent_dates={recent_dates}, but only {len(training_dates)} "
+            "training dates remain after excluding latest-date validation"
+        )
+    return tuple(training_dates[-recent_dates:])
+
+
+def format_loser_augmentation_line(
+    info: ExpertLoserDateInfo,
+    counts: LoserAugmentationCounts,
+) -> str:
+    date = info.date
+    return (
+        f"loser_aug_date={date[0]}.{date[1]} cutoff={info.cutoff:g} "
+        f"participant_scores={info.participant_count:,} "
+        f"episodes={info.episode_count:,} "
+        f"score_eligible_episodes={counts.score_eligible_episodes:,} "
+        f"after_validation_episodes={counts.after_validation_episodes:,} "
+        f"selected_train_episodes={counts.selected_train_episodes:,} "
+        f"loser_samples={counts.loser_samples:,}"
+    )
+
+
 def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
     if not path.exists():
         raise FileNotFoundError(f"Training config not found: {path}")
@@ -251,6 +297,16 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
 
     raw = interpolate(raw)
     train_raw = dict(raw["train"])
+    loser_raw = train_raw.pop("loser_augmentation", None)
+    if not isinstance(loser_raw, dict):
+        raise ValueError("train.loser_augmentation must be a mapping")
+    try:
+        loser_settings = LoserAugmentationSettings(**loser_raw)
+    except TypeError as exc:
+        raise ValueError(
+            "train.loser_augmentation must contain enabled, recent_dates, "
+            "and expert_ratio"
+        ) from exc
     isolation_raw = train_raw.pop("isolation_validation", None)
     if not isinstance(isolation_raw, dict):
         raise ValueError(
@@ -287,6 +343,7 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         version_name=version_name,
         train=TrainSettings(
             isolation_validation=isolation_settings,
+            loser_augmentation=loser_settings,
             **train_raw,
         ),
         model=ModelSettings(**raw["model"]),
@@ -469,6 +526,17 @@ def load_epoch_checkpoint(
     if match is None:
         raise ValueError(
             "training can resume only from a completed epoch-*.pt checkpoint"
+        )
+    loser = train.loser_augmentation
+    if type(loser.enabled) is not bool:
+        raise ValueError("train.loser_augmentation.enabled must be true or false")
+    if type(loser.recent_dates) is not int or loser.recent_dates < 1:
+        raise ValueError(
+            "train.loser_augmentation.recent_dates must be an integer >= 1"
+        )
+    if not 0 < loser.expert_ratio <= 1:
+        raise ValueError(
+            "train.loser_augmentation.expert_ratio must be in (0, 1]"
         )
     if not path.is_file():
         raise FileNotFoundError(f"Resume checkpoint not found: {path}")
@@ -988,6 +1056,24 @@ def main() -> None:
                 f"expert_episodes={info.expert_episode_count:,}",
                 flush=True,
             )
+        if train_cfg.loser_augmentation.enabled:
+            loser_dates = select_loser_augmentation_dates(
+                dataset.shard_dates,
+                train_cfg.loser_augmentation.recent_dates,
+            )
+            loser_date_info = load_expert_loser_date_info(
+                replay_root=replay_root,
+                required_dates=loser_dates,
+                ratio=train_cfg.loser_augmentation.expert_ratio,
+            )
+            loser_episode_keys = {
+                date: info.eligible_episode_keys
+                for date, info in loser_date_info.items()
+            }
+        else:
+            loser_dates = ()
+            loser_date_info = {}
+            loser_episode_keys = None
         splits = dataset.build_splits(
             validation_ratio=train_cfg.validation_ratio,
             validation_seed=train_cfg.validation_seed,
@@ -999,11 +1085,33 @@ def main() -> None:
             train_replay_ratio=train_cfg.train_replay_ratio,
             train_replay_seed=train_cfg.train_replay_seed,
             isolation_episode_keys=isolation_sets.by_namespace,
+            loser_episode_keys=loser_episode_keys,
         )
     except Exception:
         dataset.close()
         raise
     cache_open_seconds = time.perf_counter() - cache_started
+    if train_cfg.loser_augmentation.enabled:
+        for date in loser_dates:
+            print(
+                format_loser_augmentation_line(
+                    loser_date_info[date],
+                    splits.loser_augmentation_counts[date],
+                ),
+                flush=True,
+            )
+    else:
+        print("loser_augmentation=disabled", flush=True)
+    print(
+        f"loser_augmentation_dates={len(loser_dates):,} "
+        f"loser_augmentation_replays="
+        f"{splits.loser_augmentation_replays:,} "
+        f"loser_augmentation_samples="
+        f"{splits.loser_augmentation_samples:,} "
+        f"loser_fraction_in_train="
+        f"{splits.loser_fraction_in_train:.6f}",
+        flush=True,
+    )
     realized_train_sample_ratio = (
         len(splits.train) / splits.eligible_train_samples
     )
@@ -1228,10 +1336,42 @@ def main() -> None:
                     ),
                 }
             )
+        loser_data_metrics = {
+            "data/loser_augmentation_dates": len(loser_dates),
+            "data/loser_augmentation_replays": (
+                splits.loser_augmentation_replays
+            ),
+            "data/loser_augmentation_samples": (
+                splits.loser_augmentation_samples
+            ),
+            "data/loser_fraction_in_train": splits.loser_fraction_in_train,
+        }
+        for date in loser_dates:
+            info = loser_date_info[date]
+            counts = splits.loser_augmentation_counts[date]
+            prefix = f"data/loser_aug_{date[0]}_{date[1]}"
+            loser_data_metrics.update(
+                {
+                    f"{prefix}_cutoff": info.cutoff,
+                    f"{prefix}_participant_scores": info.participant_count,
+                    f"{prefix}_episodes": info.episode_count,
+                    f"{prefix}_score_eligible_episodes": (
+                        counts.score_eligible_episodes
+                    ),
+                    f"{prefix}_after_validation_episodes": (
+                        counts.after_validation_episodes
+                    ),
+                    f"{prefix}_selected_train_episodes": (
+                        counts.selected_train_episodes
+                    ),
+                    f"{prefix}_loser_samples": counts.loser_samples,
+                }
+            )
         wandb_run.log(
             {
                 **isolation_data_metrics,
                 **top_deck_data_metrics,
+                **loser_data_metrics,
                 "data/cache_open_seconds": cache_open_seconds,
                 "data/cache_shards": len(dataset.shards),
                 "data/cache_samples": len(dataset),

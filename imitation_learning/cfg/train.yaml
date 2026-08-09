@@ -26,6 +26,10 @@ train:
   validation_ratio: 0.05
   validation_seed: 42
   expert_validation_ratio: 0.05
+  loser_augmentation:
+    enabled: true
+    recent_dates: 3      # Latest training dates after latest-date validation.
+    expert_ratio: 0.05   # Daily top-player fraction used for the cutoff.
   isolation_validation:
     deck_data: data/deck
     selections:
