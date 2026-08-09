@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,7 @@ from training.train import (
     policy_metrics,
     top_deck_subgroup_masks,
     format_loser_augmentation_line,
+    load_settings,
     select_loser_augmentation_dates,
 )
 
@@ -80,6 +82,33 @@ def test_loser_augmentation_line_reports_each_filter_stage() -> None:
         "after_validation_episodes=2 selected_train_episodes=1 "
         "loser_samples=17"
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("enabled", 1, "enabled"),
+        ("recent_dates", 0, "recent_dates"),
+        ("expert_ratio", 0.0, "expert_ratio"),
+        ("expert_ratio", 1.1, "expert_ratio"),
+    ],
+)
+def test_loser_augmentation_settings_validate_ranges(
+    tmp_path: Path,
+    field: str,
+    value,
+    message: str,
+) -> None:
+    config_path = PROJECT_ROOT / "cfg" / "train.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["train"]["loser_augmentation"][field] = value
+    invalid_path = tmp_path / "train.yaml"
+    invalid_path.write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_settings(invalid_path)
 
 
 def test_policy_metrics_mask_invalid_actions_and_compute_topk() -> None:

@@ -34,14 +34,14 @@ has no command-line parameters and reads `cfg/deck_extract.yaml`; its input,
 output, worker count, smoke-test limit, and rebuild behavior are configured
 there. Training extraction reads `cfg/extract.yaml`; its
 `workers`, `limit_members`, and `force` fields control parallelism, smoke tests,
-and rebuilding. With `winner_only: true`, only decisions made by players whose
-final replay reward is positive are written; draws produce no samples. Replay
-actions are stored one step after the observation that produced them, so the
+and rebuilding. Both players are written with an explicit `win`, `loss`, or
+`draw` result so training can select losing-player actions without extracting
+again. Replay actions are stored one step after the observation that produced them, so the
 extractor pairs `steps[t]` observations with `steps[t + 1]` actions and keeps
 only states whose player status is `ACTIVE`. Keep the worker count modest because ZIP decompression and JSON
 parsing are both CPU- and memory-intensive.
 
-`training.cache_features` reads `cfg/cache.yaml` and converts the winner-only
+`training.cache_features` reads `cfg/cache.yaml` and converts the two-player
 JSONL records into model-ready mmap shards. `samples_per_shard` bounds the
 number of samples in each physical shard; completed compatible source caches
 are skipped, so cache construction is resumable. Encoder indices/offsets and
@@ -50,10 +50,11 @@ because they are always one, and only the current batch is materialized in
 ordinary CPU memory. Candidate selections cover every legal size from
 `maxCount` down to `minCount`, retain at most the first 64 combinations, and
 treat replay selection order as irrelevant. Each sample also stores a stable
-32-bit replay key used for validation splitting and a stable 64-bit key for
-its complete deck plus the acting player's previous three actions. Cache
-schema 15 is required, so older feature caches must be
-rebuilt; replay extraction does not need to be repeated.
+32-bit replay key used for validation splitting, a stable 64-bit key for
+its complete deck, the player's result, and the acting player's previous three
+actions. Cache schema 16 is required. Winner-only JSONL and older caches must
+both be rebuilt once with `training.extract` followed by
+`training.cache_features`.
 
 Training has no command-line parameters. It reads `cfg/train.yaml`, whose
 `train`, `model`, and `wandb` sections control cache paths, batching, network
@@ -70,7 +71,8 @@ their replay union is removed before every later split. This lookup is
 performed at training startup and does not require rebuilding feature caches.
 
 After isolation, the numerically latest `month.day` source becomes the
-latest-date validation set. Older remaining replays are assigned as a group to
+latest-date validation set. Validation arrays retain winner samples only.
+Older remaining replays are assigned as a group to
 training or in-distribution validation using `validation_ratio` and
 `validation_seed`; different states from the same replay can never cross
 these splits. Every `eval_every_steps` successful optimizer updates, the
@@ -104,6 +106,19 @@ deterministic fraction of the remaining replays using `train_replay_seed`.
 Every selected replay keeps all of its samples, and the fixed subset is reused
 for every epoch. The realized sample ratio can differ from the replay ratio
 because games contain different numbers of decisions.
+
+`train.loser_augmentation` optionally adds high-skill losing-player actions
+after all validation replays are fixed. `recent_dates` selects the newest
+training dates after excluding the latest-date validation date. For each date
+independently, `expert_ratio` defines a participant-score cutoff; a replay's
+loser is eligible only when `min_score` reaches that cutoff, which ensures both
+players are above it. The same replay-level `train_replay_ratio` applies to
+both sides. Draws and every replay assigned to any validation split remain
+excluded. Startup logs show each date's cutoff and the replay/sample counts
+after every filter stage. This ratio is independent of
+`expert_validation_ratio`. After the one-time two-player extraction and
+schema-16 cache rebuild, changing loser-augmentation settings requires only a
+new training run.
 
 `train.precision` accepts `fp32`, `fp16`, or `bf16`. FP16 uses autocast and
 gradient scaling; BF16 uses autocast without a scaler and requires a supported
@@ -176,8 +191,8 @@ numeric/dynamic projections are summed in `d_model` space.
 uses that sum directly; positive values apply the standard projection MLP to
 each completed option token. Exact candidate action combinations are still
 enumerated up to 64, and their option tokens are summed before the
-cross-attention-only decoder. Rebuild the feature cache after this change;
-existing winner-only extracted JSONL files remain valid.
+cross-attention-only decoder. Rebuild the feature cache after feature-layout
+changes.
 
 `model.history_encoding` optionally appends one action-history token to the
 encoder. `basic` uses the previous three decisions' select type, select
@@ -190,9 +205,7 @@ Historical options in a combination action are summed, one shared
 and their concatenation is mapped by `history_sequence_mlp_layers` to one
 token. All trainable history parameters are independent from the current-action
 decoder. Switching among `basic`, `structural`, and `full` reuses the same
-schema-15 cache. Older caches must be rebuilt with
-`python -m training.cache_features`; replay extraction does not need to be
-rerun.
+schema-16 cache.
 
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the

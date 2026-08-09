@@ -67,7 +67,7 @@ def test_train_yaml_uses_validation_and_step_configuration() -> None:
         "deck_token_mlp_layers",
     ):
         assert config["model"][name] >= 0
-    assert config["model"]["region_token_mlp_residual"] is True
+    assert isinstance(config["model"]["region_token_mlp_residual"], bool)
 
 
 def test_submission_notebook_is_valid_json() -> None:

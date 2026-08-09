@@ -1,4 +1,4 @@
-"""Convert winner-only replay JSONL shards into packed mmap feature caches."""
+"""Convert two-player replay JSONL shards into packed mmap feature caches."""
 from __future__ import annotations
 
 import gzip

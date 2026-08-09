@@ -390,6 +390,17 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError(
             "train.expert_validation_ratio must be in (0, 1]"
         )
+    loser = train.loser_augmentation
+    if type(loser.enabled) is not bool:
+        raise ValueError("train.loser_augmentation.enabled must be true or false")
+    if type(loser.recent_dates) is not int or loser.recent_dates < 1:
+        raise ValueError(
+            "train.loser_augmentation.recent_dates must be an integer >= 1"
+        )
+    if not 0 < loser.expert_ratio <= 1:
+        raise ValueError(
+            "train.loser_augmentation.expert_ratio must be in (0, 1]"
+        )
     isolation = train.isolation_validation
     if not isolation.deck_data:
         raise ValueError(
@@ -526,17 +537,6 @@ def load_epoch_checkpoint(
     if match is None:
         raise ValueError(
             "training can resume only from a completed epoch-*.pt checkpoint"
-        )
-    loser = train.loser_augmentation
-    if type(loser.enabled) is not bool:
-        raise ValueError("train.loser_augmentation.enabled must be true or false")
-    if type(loser.recent_dates) is not int or loser.recent_dates < 1:
-        raise ValueError(
-            "train.loser_augmentation.recent_dates must be an integer >= 1"
-        )
-    if not 0 < loser.expert_ratio <= 1:
-        raise ValueError(
-            "train.loser_augmentation.expert_ratio must be in (0, 1]"
         )
     if not path.is_file():
         raise FileNotFoundError(f"Resume checkpoint not found: {path}")
