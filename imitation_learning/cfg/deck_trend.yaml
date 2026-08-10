@@ -6,8 +6,8 @@ extract:
   force: false         # Rebuild every archive when true.
 
 analysis:
-  snapshot_interval_days: 2
-  start_date: null       # Optional inclusive month.day, for example 6.26.
-  end_date: null         # Optional inclusive month.day, for example 7.27.
+  snapshot_interval_days: 1
+  start_date: 8.4       # Optional inclusive month.day, for example 6.26.
+  end_date: 8.7         # Optional inclusive month.day, for example 7.27.
   min_share_percent: 1.0  # Daily line/Sankey threshold; pooled threshold for matchups.
   exclude_mirror_matches: true  # 会影响总体胜率，算上镜像对局的话
