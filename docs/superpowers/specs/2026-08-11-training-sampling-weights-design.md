@@ -2,10 +2,10 @@
 
 ## Goal
 
-Add deterministic per-epoch oversampling for winning samples from expert
-replays, configured exact decks, and their intersections. Preserve the full
-base training set, existing replay-level splits, loser augmentation, and global
-epoch shuffle.
+Add deterministic per-epoch base sampling plus extra sampling for winning
+samples from expert replays, configured exact decks, and their intersections.
+Preserve existing replay-level splits, loser augmentation eligibility, and
+global epoch shuffle.
 
 ## Configuration
 
@@ -13,20 +13,22 @@ Add the following nested mapping under `train`:
 
 ```yaml
 sampling:
+  base_sample_ratio: 0.8       # Random fraction of the full training set used each epoch.
   expert_score_threshold: 1200  # Replay is expert when its higher player score reaches this value.
-  expert_weight: 1.5            # Extra sampling for winning samples from expert replays.
-  deck_weights:                 # deckN follows the order of train.top_decks; omitted decks use 1.0.
-    deck1: 2.0
-    deck2: 1.2
+  expert_extra_weight: 1.0      # Extra copies of expert-replay winning samples.
+  deck_extra_weights:           # deckN follows train.top_decks order; omitted decks add nothing.
+    deck1: 1.0
+    deck2: 0.2
     deck4: 1.5
-  expert_deck_weights:          # Extra sampling for winning samples in both expert and deckN.
-    deck1: 3.0
-    deck2: 2.0
+  expert_deck_extra_weights:    # Extra expert winners using deckN.
+    deck1: 2.0
+    deck2: 1.0
 ```
 
-All weights must be finite numbers greater than or equal to `1.0`. Deck keys
+`base_sample_ratio` must be in `(0, 1]`. All extra weights must be finite
+numbers greater than or equal to `0.0`. Deck keys
 must have the exact form `deckN`, where `N` is between 1 and the number of
-configured `train.top_decks`. Omitted deck keys mean weight `1.0`. The score
+configured `train.top_decks`. Omitted deck keys mean no extra samples. The score
 threshold must be finite.
 
 ## Expert and Deck Membership
@@ -42,26 +44,30 @@ the stable keys of `train.top_decks`. `deck1`, `deck2`, and later numbers refer
 to that YAML list's order.
 
 Construct masks only after isolation, latest-date, and in-distribution
-validation replays have been fixed. Masks align with `splits.train`. Additional
-sampling requires `player_result == WIN`. Existing losing samples, including
-loser augmentation, remain in the base training indices once and are never
-duplicated by these rules.
+validation replays have been fixed. Masks align with `splits.train`. Extra
+sampling requires `player_result == WIN`. Losing samples, including loser
+augmentation, can enter an epoch only through base sampling and are never
+duplicated by extra rules.
 
-## Independent Additive Oversampling
+## Base Sampling and Independent Extra Sampling
 
-Start each epoch with every base training index exactly once. Apply the three
-rule families independently:
+Start each epoch with a without-replacement random sample of
+`floor(base_sample_ratio * train_sample_count)` indices from the complete final
+training split. Independently apply three extra rule families to their complete
+eligible subsets, not merely to members selected by the base sample:
 
-1. Expert winning samples add `expert_weight - 1`.
-2. Each exact deck's winning samples add `deck_weight - 1`.
+1. Expert winning samples add `expert_extra_weight`.
+2. Each exact deck's winning samples add its `deck_extra_weight`.
 3. Each expert/exact-deck winning intersection adds
-   `expert_deck_weight - 1`.
+   its `expert_deck_extra_weight`.
 
 Overlapping rules add rather than replace or maximize one another. For each
-rule with weight `w`, append `floor(w) - 1` complete copies of its eligible
+extra rule with weight `w`, append `floor(w)` complete copies of its eligible
 indices, then append a without-replacement random sample of size
-`floor((w - floor(w)) * eligible_count)`. A weight of `1.0` adds nothing; `2.0`
-adds one complete copy; `1.2` adds 20 percent of eligible indices.
+`floor((w - floor(w)) * eligible_count)`. A weight of `2.0` adds two complete
+copies, while `0.2` adds 20 percent of eligible indices. More explicitly, `0`
+adds nothing, `1.0` adds one full extra copy, and `1.5` adds one full copy plus
+a random 50 percent.
 
 Use a deterministic RNG derived from `train.seed + epoch_index`. Fractional
 subsets therefore change between epochs but reproduce under identical config,
@@ -71,17 +77,18 @@ a second shuffle.
 
 ## Epoch Length, Scheduling, and Limits
 
-The oversampled count is constant across epochs because fractional sample sizes
-use `floor`, although the selected members change. Compute `samples_per_epoch`,
-`steps_per_epoch`, cosine schedule length, and warmup validation from this
-weighted count. If `train.max_samples` is set, apply it after the combined
-global shuffle; scheduler length uses the same truncated count.
+The combined count is constant across epochs because base and fractional sample
+sizes use `floor`, although selected members change. Compute
+`samples_per_epoch`, `steps_per_epoch`, cosine schedule length, and warmup
+validation from this count. If `train.max_samples` is set, apply it after the
+combined global shuffle; scheduler length uses the same truncated count.
 
-At startup print the expert threshold, eligible winning-sample count and added
-count for every active expert/deck/intersection rule, base sample count,
-weighted epoch count, and effective multiplier. Record equivalent data metrics
-when experiment tracking is enabled. Existing training, validation, and epoch
-metrics retain their names.
+At startup print the base sampling ratio and selected count, expert threshold,
+eligible winning-sample count and added count for every active
+expert/deck/intersection rule, complete training count, combined epoch count,
+and effective multiplier. Record equivalent data metrics when experiment
+tracking is enabled. Existing training, validation, and epoch metrics retain
+their names.
 
 ## Data and Compatibility
 
@@ -90,14 +97,15 @@ already contains episode keys, acting-player deck keys, dates, and player
 results. Add a bounded-memory metadata lookup aligned to `splits.train`; do not
 materialize observations or decoder features while constructing masks.
 
-Invalid thresholds, weights, deck names, empty configured rule subsets, or
-metadata misalignment fail before model training begins. An omitted deck rule
-is not considered an error because it has effective weight `1.0`.
+Invalid ratios, thresholds, weights, deck names, empty active rule subsets, or
+metadata misalignment fail before model training begins. An omitted or
+zero-weight deck rule is inactive and is not an error.
 
 ## Tests
 
 Cover YAML validation and comments, threshold-based episode selection,
 winner-only aligned masks, arbitrary valid `deckN` keys, rejection beyond the
-configured deck list, additive overlaps, exact integer and fractional counts,
-per-epoch deterministic variation, global permutation integrity, loser
-non-duplication, weighted scheduler length, and resume reproducibility.
+configured deck list, base ratio counts, additive overlaps, exact integer and
+fractional extra counts, per-epoch deterministic variation, global permutation
+integrity, loser base-only sampling, combined scheduler length, and resume
+reproducibility.
