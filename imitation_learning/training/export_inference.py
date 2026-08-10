@@ -16,7 +16,7 @@ PRECISION_DTYPES = {
 
 # Configure the export here; no command-line arguments are used.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CHECKPOINT_PATH = PROJECT_ROOT / "training" / "step-00018000.pt"
+CHECKPOINT_PATH = PROJECT_ROOT / "training" / "ver_1.6.1_1.pt"
 OUTPUT_PATH: Path | None = PROJECT_ROOT / "model_submission.pt"
 PRECISION = "fp16"  # fp16, bf16, or fp32
 
