@@ -11,6 +11,7 @@ value head is intentionally removed for pure behavioral cloning.
 deck/       parallel deck extraction and deck EDA
 model/      sparse features and the notebook transformer
 training/   replay extraction and model training CLIs
+validation/ standalone, read-only checkpoint evaluation
 data/       generated caches (gitignored)
 ```
 
@@ -26,6 +27,7 @@ python -m deck.extract
 python -m training.extract
 python -m training.cache_features
 python -m training.train
+python -m validation.evaluate
 ```
 
 Both extractors create one output shard and one metadata file per ZIP. Existing
@@ -119,6 +121,31 @@ after every filter stage. This ratio is independent of
 `expert_validation_ratio`. After the one-time two-player extraction and
 schema-16 cache rebuild, changing loser-augmentation settings requires only a
 new training run.
+
+Standalone validation has no command-line parameters and reads
+`cfg/validation.yaml`. Configure `validation.ensemble.checkpoints` with
+complete epoch checkpoints or inference-only checkpoints; every file must
+contain `model` and `config`. With `enabled: false`, exactly one path is
+required. With `enabled: true`, provide at least two distinct paths. Each
+architecture is reconstructed independently from its saved config, so model
+settings do not need to be duplicated in the validation YAML.
+
+Ensemble models may use different widths, depths, normalization modes, and
+projection settings, but their cache feature signatures and action spaces must
+match. For each batch, invalid actions are masked independently, each model's
+softmax is computed in FP32, and the legal-action probabilities are averaged
+with equal weight before CE loss and Top-1/3/5 are computed. All models remain
+resident on the selected device, so required GPU memory is approximately the
+sum of their parameter and inference-activation memory.
+
+`validation.train_config` points to the training YAML that defines the cache,
+replay archives, expert ratio, replay-level validation ratio and seed, three
+isolation selections, and ordered top decks. The standalone command therefore
+rebuilds the same winner-only validation sets as training. It prints CE loss
+and Top-1/3/5 accuracy for the isolation groups, latest-date base and
+subgroups, and in-distribution base and subgroups. Subgroups reuse their parent
+split's logits. The evaluator does not change the cache or create result files
+or remote experiment runs.
 
 `train.precision` accepts `fp32`, `fp16`, or `bf16`. FP16 uses autocast and
 gradient scaling; BF16 uses autocast without a scaler and requires a supported

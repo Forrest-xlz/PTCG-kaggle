@@ -1,0 +1,10 @@
+validation:
+  # Relative paths are resolved from imitation_learning/.
+  train_config: cfg/train.yaml
+  ensemble:
+    enabled: false
+    checkpoints:
+      - outputs/${version_name}/checkpoints/epoch-005.pt
+  batch_size: 4096
+  device: cuda       # auto, cpu, cuda, or cuda:0
+  precision: bf16    # fp32, fp16, or bf16
