@@ -1,5 +1,6 @@
 cache:
   cg_path: ../pokemon_tcg_ai_battle/sample_submission
+  train_config: cfg/train.yaml  # Supplies replay path and expert ratio.
   input: data/training
   output: data/training_cache
   workers: 16

@@ -106,6 +106,20 @@ def feature_signature(config: ModelConfig) -> dict[str, Any]:
     }
 
 
+def cache_feature_signature(
+    config: ModelConfig,
+    expert_ratio: float,
+) -> dict[str, Any]:
+    signature = feature_signature(config)
+    signature.update(
+        {
+            "global_summary_layout": "expert-conditioned-v1",
+            "expert_ratio": float(expert_ratio),
+        }
+    )
+    return signature
+
+
 def validate_compatible_configs(
     configs: Sequence[ModelConfig],
 ) -> dict[str, Any]:
@@ -283,8 +297,11 @@ def main() -> None:
         )
         del checkpoint
 
-    shared_signature = validate_compatible_configs(configs)
+    validate_compatible_configs(configs)
     config = configs[0]
+    shared_signature = cache_feature_signature(
+        config, settings.expert_validation_ratio
+    )
     invalid_card_ids = sorted(
         card_id
         for deck in settings.top_decks

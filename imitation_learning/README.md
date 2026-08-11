@@ -151,6 +151,21 @@ or remote experiment runs.
 gradient scaling; BF16 uses autocast without a scaler and requires a supported
 CUDA GPU. Model parameters and saved checkpoints remain FP32.
 
+The global summary contains an expert-conditioning value as its final (74th)
+feature. During cache construction, `cfg/cache.yaml` references `cfg/train.yaml`
+and uses `expert_validation_ratio` plus each replay archive's `manifest.csv` to
+compute a separate daily score cutoff. If either participant reaches that
+cutoff, every retained sample from the replay receives `is_expert=1`; other
+samples receive zero. The cache signature records this ratio, so changing it
+requires rerunning `training/cache_features.py`. Extraction does not need to be
+repeated. Schema-16 caches and checkpoints trained with the old 73-dimensional
+global summary are intentionally incompatible.
+
+The Kaggle submission notebook exposes `IS_EXPERT`. Set it to `True` to request
+the expert-conditioned policy during live play, or `False` for an ablation.
+Live games cannot infer their future replay ranking, so this value is always an
+explicit submission setting.
+
 `train.cg_path` must point to the parent directory containing the competition
 `cg` package. The default repository layout uses
 `../pokemon_tcg_ai_battle/sample_submission`.

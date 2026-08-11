@@ -66,6 +66,8 @@ from training.feature_cache import (
     stable_deck_key,
     stable_episode_key,
 )
+from training.expert_validation import load_expert_date_info
+from training.feature_cache import parse_source_date
 
 
 PLAYER_RESULT_CODES = {
@@ -123,6 +125,7 @@ def _pack_history(history: list[HistoryActionFeatures]) -> dict[str, list]:
 @dataclass(frozen=True)
 class CacheSettings:
     cg_path: str
+    train_config: str
     input: str
     output: str
     workers: int
@@ -149,13 +152,15 @@ def load_settings(path: Path = CONFIG_PATH) -> CacheSettings:
     return settings
 
 
-def feature_signature(config: ModelConfig) -> dict:
+def feature_signature(config: ModelConfig, expert_ratio: float) -> dict:
     return {
         "card_count": config.card_count,
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
         "encoder_tokens": ENCODER_WORDS,
         "encoder_layout": "numeric-summary-26-appear-v2",
+        "global_summary_layout": "expert-conditioned-v1",
+        "expert_ratio": float(expert_ratio),
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_layout": "routed-option-dynamics-plus-numeric-v7",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,
@@ -174,12 +179,14 @@ def _prepare_record(
     record: dict,
     config: ModelConfig,
     history: list[HistoryActionFeatures] | None = None,
+    expert_episode_keys: frozenset[int] = frozenset(),
 ) -> tuple[
     FeatureRecord | None,
     str | None,
     HistoryActionFeatures | None,
 ]:
     obs = to_observation_class(record["observation"])
+    episode_key = stable_episode_key(record["episode_id"])
     actions = enumerate_actions(
         len(obs.select.option),
         obs.select.minCount,
@@ -204,7 +211,12 @@ def _prepare_record(
             config.attack_count,
         )
         return None, "outside_first_64", current_history
-    encoder = encoder_features(obs, record["deck"], config.card_count)
+    encoder = encoder_features(
+        obs,
+        record["deck"],
+        config.card_count,
+        is_expert=episode_key in expert_episode_keys,
+    )
     decoder = decoder_features(
         obs, actions, config.card_count, config.attack_count
     )
@@ -233,7 +245,7 @@ def _prepare_record(
             action_option_offset=decoder.action_offset.tolist(),
             target=target,
             action_count=len(actions),
-            episode_key=stable_episode_key(record["episode_id"]),
+            episode_key=episode_key,
             deck_key=stable_deck_key(record["deck"]),
             player_result=PLAYER_RESULT_CODES[record["player_result"]],
             **packed_history,
@@ -246,6 +258,43 @@ def _prepare_record(
 def prepare_record(record: dict, config: ModelConfig) -> FeatureRecord | None:
     """Prepare one record; return None when its expert action is unsupported."""
     return _prepare_record(record, config)[0]
+
+
+def load_expert_cache_settings(
+    settings: CacheSettings,
+) -> tuple[Path, float]:
+    train_config = project_path(settings.train_config)
+    if not train_config.is_file():
+        raise FileNotFoundError(
+            f"cache.train_config not found: {train_config}"
+        )
+    raw = yaml.safe_load(train_config.read_text(encoding="utf-8"))
+    train = raw.get("train") if isinstance(raw, dict) else None
+    if not isinstance(train, dict):
+        raise ValueError("cache.train_config must contain a train mapping")
+    replay_value = train.get("replay_episodes")
+    if not isinstance(replay_value, str) or not replay_value.strip():
+        raise ValueError("train.replay_episodes must be a path")
+    ratio = train.get("expert_validation_ratio")
+    if (
+        isinstance(ratio, bool)
+        or not isinstance(ratio, (int, float))
+        or not 0 < float(ratio) <= 1
+    ):
+        raise ValueError("train.expert_validation_ratio must be in (0, 1]")
+    replay_root = project_path(replay_value)
+    if not replay_root.is_dir():
+        raise FileNotFoundError(f"Replay archive directory not found: {replay_root}")
+    return replay_root, float(ratio)
+
+
+def expert_keys_for_source(source: Path, expert_dates) -> frozenset[int]:
+    date = parse_source_date(Path(source).name)
+    if date not in expert_dates:
+        raise ValueError(
+            f"source {date[0]}.{date[1]} has no expert episode set"
+        )
+    return frozenset(expert_dates[date].expert_episode_keys)
 
 
 def _source_stem(path: Path) -> str:
@@ -354,6 +403,7 @@ def process_source(job) -> dict:
     signature = job[3]
     samples_per_shard = int(job[4])
     force = bool(job[5])
+    expert_episode_keys = frozenset(job[6])
     stem = _source_stem(source)
     _source_meta(source)
 
@@ -394,6 +444,7 @@ def process_source(job) -> dict:
                         raw_record,
                         config,
                         list(player_history),
+                        expert_episode_keys,
                     )
                     if current_action is not None:
                         player_history.append(current_action)
@@ -463,13 +514,20 @@ def main() -> None:
     if not sources:
         raise FileNotFoundError(f"No .jsonl.gz files found under {input_path}")
     output_path.mkdir(parents=True, exist_ok=True)
+    replay_root, expert_ratio = load_expert_cache_settings(settings)
+    source_dates = [parse_source_date(source.name) for source in sources]
+    expert_dates = load_expert_date_info(
+        replay_root,
+        required_dates=source_dates,
+        ratio=expert_ratio,
+    )
 
     cards = all_card_data()
     config = ModelConfig(
         card_count=max(card.cardId for card in cards) + 1,
         attack_count=max(attack.attackId for attack in all_attack()) + 1,
     )
-    signature = feature_signature(config)
+    signature = feature_signature(config, expert_ratio)
     jobs = [
         (
             str(source),
@@ -478,6 +536,7 @@ def main() -> None:
             signature,
             settings.samples_per_shard,
             settings.force,
+            expert_keys_for_source(source, expert_dates),
         )
         for source in sources
     ]
@@ -485,7 +544,8 @@ def main() -> None:
     results = []
     print(
         f"config={CONFIG_PATH} sources={len(sources)} workers={workers} "
-        f"samples_per_shard={settings.samples_per_shard:,}",
+        f"samples_per_shard={settings.samples_per_shard:,} "
+        f"expert_ratio={expert_ratio:g}",
         flush=True,
     )
     if workers == 1:

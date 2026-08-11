@@ -636,13 +636,15 @@ def build_lr_scheduler(
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_multiplier)
 
 
-def feature_signature(config: ModelConfig) -> dict:
+def feature_signature(config: ModelConfig, expert_ratio: float) -> dict:
     return {
         "card_count": config.card_count,
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
         "encoder_tokens": ENCODER_WORDS,
         "encoder_layout": "numeric-summary-26-appear-v2",
+        "global_summary_layout": "expert-conditioned-v1",
+        "expert_ratio": float(expert_ratio),
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_layout": "routed-option-dynamics-plus-numeric-v7",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,
@@ -908,7 +910,9 @@ def checkpoint_payload(
             "train": asdict(settings.train),
             "model": asdict(settings.model),
             "wandb": asdict(settings.wandb),
-            "cache_signature": feature_signature(config),
+            "cache_signature": feature_signature(
+                config, settings.train.expert_validation_ratio
+            ),
         },
         "ema": {name: tracker.state_dict() for name, tracker in ema.items()},
         "history": history,
@@ -1031,7 +1035,9 @@ def main() -> None:
     cache_started = time.perf_counter()
     dataset = MmapFeatureDataset(
         data_path,
-        expected_signature=feature_signature(config),
+        expected_signature=feature_signature(
+            config, train_cfg.expert_validation_ratio
+        ),
     )
     try:
         isolation_cfg = train_cfg.isolation_validation
@@ -1206,7 +1212,9 @@ def main() -> None:
                 "train": asdict(train_cfg),
                 "model": asdict(model_cfg),
                 "network": config.to_dict(),
-                "cache_signature": feature_signature(config),
+                "cache_signature": feature_signature(
+                    config, train_cfg.expert_validation_ratio
+                ),
             },
         )
         wandb.define_metric("optimizer_step")

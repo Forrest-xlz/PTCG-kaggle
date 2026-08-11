@@ -35,7 +35,7 @@ ENCODER_TOKENS = 26
 POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
 OPPONENT_SUMMARY_DIM = 71
-GLOBAL_SUMMARY_DIM = 73
+GLOBAL_SUMMARY_DIM = 74
 SELECT_TYPE_DIM = 11
 SELECT_CONTEXT_DIM = 49
 OPTION_CATEGORICAL_DIM = 11
@@ -477,7 +477,11 @@ def _opponent_revealed_summary(
     return result
 
 
-def _global_summary(obs: Any, yours: int) -> list[float]:
+def _global_summary(
+    obs: Any,
+    yours: int,
+    is_expert: bool = False,
+) -> list[float]:
     state = obs.current
     select = obs.select
     first_relative = (
@@ -512,8 +516,9 @@ def _global_summary(obs: Any, yours: int) -> list[float]:
             len(select.option) / 64.0,
         ]
     )
+    result.append(float(bool(is_expert)))
     if len(result) != GLOBAL_SUMMARY_DIM:
-        raise RuntimeError("global summary must contain 73 values")
+        raise RuntimeError("global summary must contain 74 values")
     return result
 
 
@@ -523,6 +528,7 @@ def encoder_features(
     card_count: int,
     *,
     numeric_catalog: NumericFeatureCatalog | None = None,
+    is_expert: bool = False,
 ) -> EncoderFeatures:
     catalog = numeric_catalog or _default_numeric_catalog(card_count)
     state, yours, sparse = obs.current, obs.current.yourIndex, SparseVector()
@@ -608,7 +614,7 @@ def encoder_features(
         pokemon_appear=pokemon_appear,
         own_summary=own_summary,
         opponent_summary=opponent_summary,
-        global_summary=_global_summary(obs, yours),
+        global_summary=_global_summary(obs, yours, is_expert=is_expert),
     )
 
 
