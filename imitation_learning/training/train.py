@@ -65,6 +65,11 @@ from training.feature_cache import (
 )
 from training.isolation_validation import load_isolation_replay_sets
 from training.precision import PrecisionContext
+from training.sampling import (
+    build_epoch_indices,
+    build_sampling_plan,
+    epoch_sample_count,
+)
 
 
 ISOLATION_SELECTION_NAMES = (
@@ -85,6 +90,15 @@ class LoserAugmentationSettings:
     enabled: bool
     recent_dates: int
     expert_ratio: float
+
+
+@dataclass(frozen=True)
+class SamplingSettings:
+    base_sample_ratio: float
+    expert_ratio: float
+    expert_extra_weight: float
+    deck_extra_weights: dict[int, float]
+    expert_deck_extra_weights: dict[int, float]
 
 
 @dataclass(frozen=True)
@@ -114,6 +128,7 @@ class TrainSettings:
     validation_ratio: float
     validation_seed: int
     expert_validation_ratio: float
+    sampling: SamplingSettings
     loser_augmentation: LoserAugmentationSettings
     isolation_validation: IsolationValidationSettings
     top_decks: list[list[int]]
@@ -297,6 +312,72 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
 
     raw = interpolate(raw)
     train_raw = dict(raw["train"])
+    sampling_raw = train_raw.pop("sampling", None)
+    if not isinstance(sampling_raw, dict):
+        raise ValueError("train.sampling must be a mapping")
+
+    def finite_number(value, name: str) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"train.sampling.{name} must be numeric")
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError(f"train.sampling.{name} must be finite")
+        return result
+
+    def extra_weights(value, name: str) -> dict[int, float]:
+        if not isinstance(value, dict):
+            raise ValueError(f"train.sampling.{name} must be a mapping")
+        parsed: dict[int, float] = {}
+        for raw_key, raw_weight in value.items():
+            key = str(raw_key)
+            match = re.fullmatch(r"deck([1-9][0-9]*)", key)
+            if match is None:
+                raise ValueError(
+                    f"train.sampling.{name} has invalid key {key!r}"
+                )
+            deck_index = int(match.group(1))
+            weight = finite_number(raw_weight, f"{name}.{key}")
+            if weight < 0:
+                raise ValueError(
+                    f"train.sampling.{name}.{key} must be >= 0"
+                )
+            parsed[deck_index] = weight
+        return parsed
+
+    required_sampling = {
+        "base_sample_ratio",
+        "expert_ratio",
+        "expert_extra_weight",
+        "deck_extra_weights",
+        "expert_deck_extra_weights",
+    }
+    missing_sampling = required_sampling - sampling_raw.keys()
+    extra_sampling = sampling_raw.keys() - required_sampling
+    if missing_sampling or extra_sampling:
+        raise ValueError(
+            "train.sampling fields mismatch: "
+            f"missing={sorted(missing_sampling)} "
+            f"extra={sorted(extra_sampling)}"
+        )
+    sampling_settings = SamplingSettings(
+        base_sample_ratio=finite_number(
+            sampling_raw["base_sample_ratio"], "base_sample_ratio"
+        ),
+        expert_ratio=finite_number(
+            sampling_raw["expert_ratio"],
+            "expert_ratio",
+        ),
+        expert_extra_weight=finite_number(
+            sampling_raw["expert_extra_weight"], "expert_extra_weight"
+        ),
+        deck_extra_weights=extra_weights(
+            sampling_raw["deck_extra_weights"], "deck_extra_weights"
+        ),
+        expert_deck_extra_weights=extra_weights(
+            sampling_raw["expert_deck_extra_weights"],
+            "expert_deck_extra_weights",
+        ),
+    )
     loser_raw = train_raw.pop("loser_augmentation", None)
     if not isinstance(loser_raw, dict):
         raise ValueError("train.loser_augmentation must be a mapping")
@@ -344,6 +425,7 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         train=TrainSettings(
             isolation_validation=isolation_settings,
             loser_augmentation=loser_settings,
+            sampling=sampling_settings,
             **train_raw,
         ),
         model=ModelSettings(**raw["model"]),
@@ -389,6 +471,19 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
     if not 0 < train.expert_validation_ratio <= 1:
         raise ValueError(
             "train.expert_validation_ratio must be in (0, 1]"
+        )
+    sampling = train.sampling
+    if not 0 < sampling.base_sample_ratio <= 1:
+        raise ValueError(
+            "train.sampling.base_sample_ratio must be in (0, 1]"
+        )
+    if not 0 < sampling.expert_ratio <= 1:
+        raise ValueError(
+            "train.sampling.expert_ratio must be in (0, 1]"
+        )
+    if sampling.expert_extra_weight < 0:
+        raise ValueError(
+            "train.sampling.expert_extra_weight must be >= 0"
         )
     loser = train.loser_augmentation
     if type(loser.enabled) is not bool:
@@ -437,6 +532,19 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         if any(type(card_id) is not int or card_id < 0 for card_id in deck):
             raise ValueError(
                 f"train.top_decks[{deck_index}] must contain non-negative integers"
+            )
+    for name, weights in (
+        ("deck_extra_weights", sampling.deck_extra_weights),
+        ("expert_deck_extra_weights", sampling.expert_deck_extra_weights),
+    ):
+        invalid = sorted(
+            index for index in weights if index > len(train.top_decks)
+        )
+        if invalid:
+            labels = [f"deck{index}" for index in invalid]
+            raise ValueError(
+                f"train.sampling.{name} references unconfigured decks: "
+                f"{labels}"
             )
     if not isinstance(train.save_every_epoch, bool):
         raise ValueError("train.save_every_epoch must be true or false")
@@ -1087,6 +1195,32 @@ def main() -> None:
             isolation_episode_keys=isolation_sets.by_namespace,
             loser_episode_keys=loser_episode_keys,
         )
+        sampling_needs_expert = (
+            train_cfg.sampling.expert_extra_weight > 0
+            or any(
+                weight > 0
+                for weight in train_cfg.sampling.expert_deck_extra_weights.values()
+            )
+        )
+        sampling_expert_episode_keys = None
+        sampling_expert_dates = {}
+        if sampling_needs_expert:
+            sampling_expert_dates = load_expert_date_info(
+                replay_root=replay_root,
+                required_dates=dataset.shard_dates,
+                ratio=train_cfg.sampling.expert_ratio,
+            )
+            sampling_expert_episode_keys = {
+                date: info.expert_episode_keys
+                for date, info in sampling_expert_dates.items()
+            }
+        sampling_plan = build_sampling_plan(
+            dataset=dataset,
+            train_indices=splits.train,
+            expert_episode_keys=sampling_expert_episode_keys,
+            top_deck_keys=top_deck_keys,
+            settings=train_cfg.sampling,
+        )
     except Exception:
         dataset.close()
         raise
@@ -1118,9 +1252,35 @@ def main() -> None:
     realized_train_replay_ratio = (
         splits.selected_train_replays / splits.eligible_train_replays
     )
-    samples_per_epoch = len(splits.train)
+    for date in sorted(sampling_expert_dates):
+        info = sampling_expert_dates[date]
+        print(
+            f"sampling_expert_date={date[0]}.{date[1]} "
+            f"ratio={train_cfg.sampling.expert_ratio:g} "
+            f"cutoff={info.cutoff:g} "
+            f"episodes={info.episode_count:,} "
+            f"expert_episodes={info.expert_episode_count:,}",
+            flush=True,
+        )
+    print(
+        f"sampling_base_total={len(sampling_plan.base_indices):,} "
+        f"base_ratio={sampling_plan.base_sample_ratio:g} "
+        f"base_samples={sampling_plan.base_samples:,}",
+        flush=True,
+    )
+    for rule in sampling_plan.rules:
+        print(
+            f"sampling_rule={rule.name} weight={rule.weight:g} "
+            f"eligible_winner_samples={rule.eligible_samples:,} "
+            f"added_samples={rule.added_samples:,}",
+            flush=True,
+        )
+    samples_per_epoch = epoch_sample_count(sampling_plan)
     if train_cfg.max_samples is not None:
         samples_per_epoch = min(samples_per_epoch, train_cfg.max_samples)
+    if samples_per_epoch < 1:
+        dataset.close()
+        raise ValueError("training sampling configuration produces an empty epoch")
     steps_per_epoch = math.ceil(samples_per_epoch / train_cfg.batch_size)
     total_steps = steps_per_epoch * train_cfg.epochs
     if train_cfg.warmup_steps >= total_steps:
@@ -1367,11 +1527,40 @@ def main() -> None:
                     f"{prefix}_loser_samples": counts.loser_samples,
                 }
             )
+        sampling_data_metrics = {
+            "data/sampling_base_total": len(sampling_plan.base_indices),
+            "data/sampling_base_ratio": sampling_plan.base_sample_ratio,
+            "data/sampling_base_samples": sampling_plan.base_samples,
+            "data/sampling_epoch_samples": epoch_sample_count(sampling_plan),
+        }
+        for rule in sampling_plan.rules:
+            sampling_data_metrics.update(
+                {
+                    f"data/sampling_{rule.name}_weight": rule.weight,
+                    f"data/sampling_{rule.name}_eligible_samples": (
+                        rule.eligible_samples
+                    ),
+                    f"data/sampling_{rule.name}_added_samples": (
+                        rule.added_samples
+                    ),
+                }
+            )
+        for date, info in sorted(sampling_expert_dates.items()):
+            prefix = f"data/sampling_expert_{date[0]}_{date[1]}"
+            sampling_data_metrics.update(
+                {
+                    f"{prefix}_ratio": train_cfg.sampling.expert_ratio,
+                    f"{prefix}_cutoff": info.cutoff,
+                    f"{prefix}_episodes": info.episode_count,
+                    f"{prefix}_expert_episodes": info.expert_episode_count,
+                }
+            )
         wandb_run.log(
             {
                 **isolation_data_metrics,
                 **top_deck_data_metrics,
                 **loser_data_metrics,
+                **sampling_data_metrics,
                 "data/cache_open_seconds": cache_open_seconds,
                 "data/cache_shards": len(dataset.shards),
                 "data/cache_samples": len(dataset),
@@ -1513,11 +1702,14 @@ def main() -> None:
             model.train()
             epoch_loss_sum = 0.0
             epoch_top1 = epoch_top3 = epoch_top5 = epoch_samples = 0
+            epoch_indices = build_epoch_indices(
+                sampling_plan, seed=train_cfg.seed + epoch_index
+            )
             for batch in dataset.iter_batches(
-                indices=splits.train,
+                indices=epoch_indices,
                 batch_size=train_cfg.batch_size,
                 seed=train_cfg.seed + epoch_index,
-                shuffle=True,
+                shuffle=False,
                 max_samples=train_cfg.max_samples,
             ):
                 batch_started = time.perf_counter()

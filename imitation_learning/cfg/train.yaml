@@ -26,6 +26,12 @@ train:
   validation_ratio: 0.05
   validation_seed: 42
   expert_validation_ratio: 0.05
+  sampling:
+    base_sample_ratio: 1.0        # Random fraction of the full training set per epoch.
+    expert_ratio: 0.05            # Daily top-player fraction used for expert cutoff.
+    expert_extra_weight: 0.0      # Extra copies of expert-replay winning samples.
+    deck_extra_weights: {}        # deckN follows train.top_decks order; omitted decks add nothing.
+    expert_deck_extra_weights: {} # Expert winners using deckN; omitted decks add nothing.
   loser_augmentation:
     enabled: true
     recent_dates: 3      # Latest training dates after latest-date validation.

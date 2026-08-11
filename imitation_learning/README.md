@@ -109,6 +109,23 @@ Every selected replay keeps all of its samples, and the fixed subset is reused
 for every epoch. The realized sample ratio can differ from the replay ratio
 because games contain different numbers of decisions.
 
+`train.sampling.base_sample_ratio` then selects a fresh random fraction of
+that complete final training split at the start of every epoch. Sampling is
+without replacement and deterministic from `train.seed + epoch_index`.
+Expert, exact-deck, and expert/exact-deck extra weights are additive and are
+all calculated from their complete eligible subsets. For example, weight
+`1.2` adds one complete extra copy plus a random 20% without replacement;
+overlapping rules add independently. For each date, `expert_ratio` ranks all
+participant scores and uses that date's top-score cutoff, with ties retained;
+an episode is expert when either player reaches it. `deck1`, `deck2`, and later
+names follow `train.top_decks` configuration order. This sampling ratio is
+independent of `expert_validation_ratio`. Only winning
+samples can receive extra copies. Losing samples remain eligible for the base
+fraction once, including loser augmentation. The combined epoch indices are
+globally shuffled once, and their final count determines the learning-rate
+schedule. These settings use existing cache metadata and do not require a new
+extract or cache build.
+
 `train.loser_augmentation` optionally adds high-skill losing-player actions
 after all validation replays are fixed. `recent_dates` selects the newest
 training dates after excluding the latest-date validation date. For each date
