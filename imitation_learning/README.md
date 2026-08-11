@@ -147,6 +147,28 @@ subgroups, and in-distribution base and subgroups. Subgroups reuse their parent
 split's logits. The evaluator does not change the cache or create result files
 or remote experiment runs.
 
+Standalone fine-tuning reads `cfg/finetune.yaml` and runs with:
+
+```bash
+python imitation_learning/finetune/finetune.py
+```
+
+The referenced `train_config` supplies the unchanged cache paths, validation
+splits, validation groups, batching, precision, optimizer defaults, evaluation
+cadence, and checkpoint cadence. Fine-tuning requires a complete
+`epoch-NNN.pt` checkpoint. It restores model, AdamW, and compatible FP16 scaler
+state, then starts a fresh warmup-plus-cosine schedule, EMA, global step, and
+history. The checkpoint architecture is authoritative.
+
+`in_distribution_ratio` selects a deterministic replay-level fraction of the
+complete post-validation training pool. For every date independently,
+`expert_ratio` computes the same participant-score quantile used by expert
+validation. Winning samples whose acting-player exact deck matches
+`finetune.deck` are appended in full. Overlap with the generic sample is kept
+twice as intentional weighting. All existing isolation, latest-date, and
+in-distribution validation groups remain unchanged. Fine-tuning needs no new
+extraction or feature-cache build.
+
 `train.precision` accepts `fp32`, `fp16`, or `bf16`. FP16 uses autocast and
 gradient scaling; BF16 uses autocast without a scaler and requires a supported
 CUDA GPU. Model parameters and saved checkpoints remain FP32.

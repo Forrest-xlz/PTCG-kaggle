@@ -1,0 +1,26 @@
+version_name: finetune_deck1
+
+finetune:
+  train_config: cfg/train.yaml
+  checkpoint: outputs/ver_1.6.1/checkpoints/epoch-005.pt
+  output: outputs/${version_name}
+  epochs: 2
+  in_distribution_ratio: 0.1  # Replay-level fraction of generic training data.
+  in_distribution_seed: 42
+  expert_ratio: 0.05           # Daily top-player fraction for expert replays.
+  learning_rate: null          # null inherits train.yaml; otherwise overrides it.
+  deck: [7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+         104, 104, 112, 112, 112, 112,
+         646, 646, 646, 646, 647, 647, 647, 648, 648, 648,
+         860, 860, 1079, 1079, 1079, 1080,
+         1086, 1086, 1086, 1086, 1097, 1097, 1097, 1122, 1137,
+         1152, 1152, 1152, 1152, 1182, 1182,
+         1219, 1219, 1219, 1219, 1227, 1227, 1227, 1227,
+         1231, 1259, 1259, 1259, 1259]
+
+wandb:
+  enabled: false
+  project: ""
+  group: finetune
+  name: ${version_name}
+  mode: online
