@@ -14,7 +14,7 @@ Add the following nested mapping under `train`:
 ```yaml
 sampling:
   base_sample_ratio: 0.8       # Random fraction of the full training set used each epoch.
-  expert_score_threshold: 1200  # Replay is expert when its higher player score reaches this value.
+  expert_ratio: 0.05            # Daily top-player fraction used for expert replay cutoff.
   expert_extra_weight: 1.0      # Extra copies of expert-replay winning samples.
   deck_extra_weights:           # deckN follows train.top_decks order; omitted decks add nothing.
     deck1: 1.0
@@ -28,16 +28,20 @@ sampling:
 `base_sample_ratio` must be in `(0, 1]`. All extra weights must be finite
 numbers greater than or equal to `0.0`. Deck keys
 must have the exact form `deckN`, where `N` is between 1 and the number of
-configured `train.top_decks`. Omitted deck keys mean no extra samples. The score
-threshold must be finite.
+configured `train.top_decks`. Omitted deck keys mean no extra samples.
+`expert_ratio` must be finite and in `(0, 1]`.
 
 ## Expert and Deck Membership
 
 Read each replay archive's existing `manifest.csv`. Reconstruct the higher
 participant score from `min_score` and `sum_score`, matching current expert
-validation parsing. An episode is expert when its higher score is at least
-`expert_score_threshold`. This is an episode-level label because the cache and
-manifest do not map the higher score back to an acting player.
+validation parsing. For each date independently, rank all participant scores
+and calculate the top-`expert_ratio` cutoff with the same quantile and tie
+behavior as expert validation. An episode is expert when either participant's
+score reaches that date's cutoff. This remains an episode-level label because
+the cache and manifest do not map the higher score back to an acting player.
+The sampling ratio is independent of `expert_validation_ratio` so training
+weights can be tuned without changing validation subsets.
 
 Exact-deck membership uses each cached sample's acting-player `deck_key` and
 the stable keys of `train.top_decks`. `deck1`, `deck2`, and later numbers refer
@@ -83,7 +87,8 @@ sizes use `floor`, although selected members change. Compute
 validation from this count. If `train.max_samples` is set, apply it after the
 combined global shuffle; scheduler length uses the same truncated count.
 
-At startup print the base sampling ratio and selected count, expert threshold,
+At startup print the base sampling ratio and selected count, each date's expert
+ratio cutoff,
 eligible winning-sample count and added count for every active
 expert/deck/intersection rule, complete training count, combined epoch count,
 and effective multiplier. Record equivalent data metrics when experiment
@@ -97,13 +102,13 @@ already contains episode keys, acting-player deck keys, dates, and player
 results. Add a bounded-memory metadata lookup aligned to `splits.train`; do not
 materialize observations or decoder features while constructing masks.
 
-Invalid ratios, thresholds, weights, deck names, empty active rule subsets, or
+Invalid ratios, weights, deck names, empty active rule subsets, or
 metadata misalignment fail before model training begins. An omitted or
 zero-weight deck rule is inactive and is not an error.
 
 ## Tests
 
-Cover YAML validation and comments, threshold-based episode selection,
+Cover YAML validation and comments, daily ratio-based episode selection,
 winner-only aligned masks, arbitrary valid `deckN` keys, rejection beyond the
 configured deck list, base ratio counts, additive overlaps, exact integer and
 fractional extra counts, per-epoch deterministic variation, global permutation
