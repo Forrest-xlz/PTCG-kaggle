@@ -4,7 +4,7 @@
 
 **Goal:** Add deterministic base-ratio sampling plus additive extra sampling of winning expert, exact-deck, and expert/exact-deck samples without changing validation splits or cached features.
 
-**Architecture:** Parse extra weights into indexed deck rules, load threshold-based expert episode keys from manifests, and build compact rule-specific global-index arrays aligned to the final sorted training split. At every epoch, randomly sample the configured fraction of the complete training split, materialize full and fractional extras from complete eligible subsets, globally shuffle the combination once, and feed existing mmap batches without a second shuffle.
+**Architecture:** Parse extra weights into indexed deck rules, reuse the existing per-date expert quantile calculation for sampling expert episode keys, and build compact rule-specific global-index arrays aligned to the final sorted training split. At every epoch, randomly sample the configured fraction of the complete training split, materialize full and fractional extras from complete eligible subsets, globally shuffle the combination once, and feed existing mmap batches without a second shuffle.
 
 **Tech Stack:** Python 3.10+, PyYAML, NumPy, PyTorch, mmap feature cache, pytest.
 
@@ -27,26 +27,26 @@
 - Test: `imitation_learning/tests/test_training_sampling_config.py`
 
 **Interfaces:**
-- Produces: `SamplingSettings(base_sample_ratio: float, expert_score_threshold: float, expert_extra_weight: float, deck_extra_weights: dict[int, float], expert_deck_extra_weights: dict[int, float])` nested in `TrainSettings`.
+- Produces: `SamplingSettings(base_sample_ratio: float, expert_ratio: float, expert_extra_weight: float, deck_extra_weights: dict[int, float], expert_deck_extra_weights: dict[int, float])` nested in `TrainSettings`.
 
-- [ ] Write failing tests for the approved YAML, concise comments, base ratio `(0, 1]`, extra weight `>= 0`, finite threshold/weights, exact `deckN` syntax, arbitrary valid indices such as deck4/deck5, rejection beyond `len(top_decks)`, and omitted deck defaults.
+- [ ] Write failing tests for the approved YAML, concise comments, base and expert ratios in `(0, 1]`, extra weight `>= 0`, finite ratios/weights, exact `deckN` syntax, arbitrary valid indices such as deck4/deck5, rejection beyond `len(top_decks)`, and omitted deck defaults.
 - [ ] Run the focused config test and confirm failure because `SamplingSettings` is absent.
 - [ ] Parse `train.sampling` before constructing `TrainSettings`, normalize deck names to one-based integer keys, and validate them after `top_decks` is available.
 - [ ] Add the commented baseline configuration with every effective weight set to `1.0`.
 - [ ] Run the config tests and retain existing `load_settings` behavior.
 
-### Task 2: Threshold Expert Episode Sets
+### Task 2: Daily-Ratio Expert Episode Sets
 
 **Files:**
 - Modify: `imitation_learning/training/expert_validation.py`
 - Test: `imitation_learning/tests/test_expert_validation.py`
 
 **Interfaces:**
-- Produces: `ExpertThresholdDateInfo` and `load_expert_threshold_date_info(replay_root, required_dates, threshold)`.
+- Reuses: `ExpertDateInfo` and `load_expert_date_info(replay_root, required_dates, ratio)`.
 
-- [ ] Write a failing ZIP-manifest test proving `high_score = sum_score - min_score`, inclusive threshold comparison, date isolation, and finite-threshold validation.
-- [ ] Run the focused expert test and confirm the new API is missing.
-- [ ] Reuse `_archive_by_date` and `_read_manifest_episodes`; return per-date counts and episode keys whose higher score reaches the absolute threshold.
+- [ ] Write failing tests proving sampling calls the existing daily-ratio API with `sampling.expert_ratio`, keeps per-date cutoffs separate, and does not call the removed absolute-threshold API.
+- [ ] Run the focused integration test and confirm it fails while the fixed-threshold path remains.
+- [ ] Delete `ExpertThresholdDateInfo` and `load_expert_threshold_date_info`; call `load_expert_date_info` with `sampling.expert_ratio` only when an expert-weight rule is active.
 - [ ] Run expert-validation tests.
 
 ### Task 3: Compact Sampling Plan and Epoch Indices
@@ -76,7 +76,7 @@
 - Produces: weighted `samples_per_epoch`, startup/W&B data metrics, and one globally shuffled weighted index array per epoch.
 
 - [ ] Write failing source/integration tests that split construction precedes sampling-plan construction, loser augmentation indices remain only in the base, scheduler length uses weighted/truncated count, epoch batches use `shuffle=False`, resume epoch derives the same seed, and validation inputs remain untouched.
-- [ ] Load threshold expert data only when expert or expert/deck extra weight exceeds zero. Build the plan after `dataset.build_splits`, print base selected count, per-date threshold counts and per-rule eligible/added counts, and log equivalent `data/sampling_*` values.
+- [ ] Load daily-ratio expert data only when expert or expert/deck extra weight exceeds zero. Build the plan after `dataset.build_splits`, print base selected count, each date's ratio cutoff and per-rule eligible/added counts, and log equivalent `data/sampling_*` values.
 - [ ] Replace base `len(splits.train)` scheduling with `epoch_sample_count(plan)`, truncated by `max_samples`. At epoch start call `build_epoch_indices(plan, train.seed + epoch_index)` and pass it to `dataset.iter_batches(..., shuffle=False, max_samples=max_samples)`.
 - [ ] Document additive overlap semantics, winner-only additions, deck numbering, schedule effects, and that no extract/cache rebuild is required.
 - [ ] Run all new focused tests together, compile changed packages, load real `cfg/train.yaml`, run `git diff --check`, and inspect scope.
