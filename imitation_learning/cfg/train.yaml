@@ -90,6 +90,9 @@ model:
   history_encoding: full          # off, basic, structural, or full.
   history_action_mlp_layers: 1   # Shared by the three historical actions.
   history_sequence_mlp_layers: 2 # [t-3,t-2,t-1] concatenation -> one token.
+  opponent_history_encoding: full          # Public opponent logs: off/basic/structural/full.
+  opponent_history_action_mlp_layers: 1   # Shared only across opponent actions.
+  opponent_history_sequence_mlp_layers: 2 # Opponent [t-3,t-2,t-1] -> one token.
 
 wandb:
   enabled: true
