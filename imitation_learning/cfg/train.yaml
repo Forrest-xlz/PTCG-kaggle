@@ -60,6 +60,17 @@ train:
     
   train_replay_ratio: 1.0
   train_replay_seed: 42
+  date_sampling:
+    enabled: true
+    mode: power          # linear or power; applies after validation splitting.
+    seed: 42             # Samples fractional copies once at startup.
+    linear:
+      start: 0.5         # Earliest training-date sample weight.
+      end: 1.2           # Latest training-date sample weight.
+    power:
+      start: 0.5
+      end: 1.2
+      exponent: 2.0      # Curve shape over elapsed calendar days.
   grad_clip_norm: 1.0
 
 model:
