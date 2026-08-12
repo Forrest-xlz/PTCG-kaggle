@@ -371,6 +371,30 @@ def test_dataset_global_shuffle_visits_every_sample_once(tmp_path: Path) -> None
         dataset.close()
 
 
+def test_dataset_dates_for_unsorted_repeated_global_indices(tmp_path: Path) -> None:
+    build_shard(
+        tmp_path / "first.cache", [1, 2, 3], source_name="7.1.jsonl.gz"
+    )
+    build_shard(
+        tmp_path / "second.cache", [4, 5], source_name="7.5.jsonl.gz"
+    )
+    dataset = MmapFeatureDataset(tmp_path, expected_signature=SIGNATURE)
+    try:
+        dates = dataset.dates_for_indices(
+            np.asarray([4, 0, 3, 3, 2], dtype=np.uint32)
+        )
+        np.testing.assert_array_equal(
+            dates,
+            [[7, 5], [7, 1], [7, 5], [7, 5], [7, 1]],
+        )
+        with pytest.raises(ValueError, match="one-dimensional"):
+            dataset.dates_for_indices(np.asarray([[0]], dtype=np.uint32))
+        with pytest.raises(IndexError, match="outside"):
+            dataset.dates_for_indices(np.asarray([5], dtype=np.uint32))
+    finally:
+        dataset.close()
+
+
 def test_splits_hold_out_latest_and_keep_replays_together(
     tmp_path: Path,
 ) -> None:

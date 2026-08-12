@@ -975,6 +975,18 @@ class MmapFeatureDataset:
     def __len__(self) -> int:
         return self.total_samples
 
+    def dates_for_indices(self, indices: np.ndarray) -> np.ndarray:
+        """Return month/day pairs aligned with arbitrary global sample IDs."""
+        indices = np.asarray(indices)
+        if indices.ndim != 1:
+            raise ValueError("sample indices must be one-dimensional")
+        if np.any(indices < 0) or np.any(indices >= self.total_samples):
+            raise IndexError("sample index is outside the dataset")
+        shard_ids = np.searchsorted(
+            self.ends, indices.astype(np.int64, copy=False), side="right"
+        )
+        return np.asarray(self.shard_dates, dtype=np.int16)[shard_ids]
+
     def iter_index_batches(
         self,
         indices: np.ndarray,

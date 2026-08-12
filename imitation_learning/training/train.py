@@ -42,6 +42,12 @@ from cg.api import all_attack, all_card_data
 from model.attack_features import build_attack_feature_table
 from model.card_features import build_card_feature_table
 from model.network import ModelConfig, PTCGTransformer
+from training.date_sampling import (
+    DateSamplingCurve,
+    DateSamplingResult,
+    build_date_weighted_indices,
+    date_weights,
+)
 from training.expert_validation import (
     ExpertLoserDateInfo,
     load_expert_date_info,
@@ -88,6 +94,22 @@ class LoserAugmentationSettings:
 
 
 @dataclass(frozen=True)
+class DateCurveSettings:
+    start: float
+    end: float
+    exponent: float | None = None
+
+
+@dataclass(frozen=True)
+class DateSamplingSettings:
+    enabled: bool
+    mode: str
+    seed: int
+    linear: DateCurveSettings
+    power: DateCurveSettings
+
+
+@dataclass(frozen=True)
 class TrainSettings:
     cg_path: str
     data: str
@@ -115,6 +137,7 @@ class TrainSettings:
     validation_seed: int
     expert_validation_ratio: float
     loser_augmentation: LoserAugmentationSettings
+    date_sampling: DateSamplingSettings
     isolation_validation: IsolationValidationSettings
     top_decks: list[list[int]]
     train_replay_ratio: float
@@ -272,6 +295,46 @@ def format_loser_augmentation_line(
     )
 
 
+def prepare_date_sampled_training_indices(
+    dataset: MmapFeatureDataset,
+    train_indices: np.ndarray,
+    settings: DateSamplingSettings,
+) -> DateSamplingResult:
+    if not settings.enabled:
+        return build_date_weighted_indices(
+            train_indices,
+            np.empty((len(train_indices), 2), dtype=np.int16),
+            weights={},
+            seed=settings.seed,
+            enabled=False,
+        )
+    dates = dataset.dates_for_indices(train_indices)
+    unique_dates = [
+        tuple(map(int, value)) for value in np.unique(dates, axis=0)
+    ]
+    selected = settings.linear if settings.mode == "linear" else settings.power
+    curve = DateSamplingCurve(
+        mode=settings.mode,
+        start=selected.start,
+        end=selected.end,
+        exponent=selected.exponent,
+    )
+    return build_date_weighted_indices(
+        train_indices,
+        dates,
+        weights=date_weights(unique_dates, curve),
+        seed=settings.seed,
+    )
+
+
+def effective_epoch_samples(
+    train_indices: np.ndarray, max_samples: int | None
+) -> int:
+    return len(train_indices) if max_samples is None else min(
+        len(train_indices), max_samples
+    )
+
+
 def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
     if not path.exists():
         raise FileNotFoundError(f"Training config not found: {path}")
@@ -297,6 +360,23 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
 
     raw = interpolate(raw)
     train_raw = dict(raw["train"])
+    date_sampling_raw = train_raw.pop("date_sampling", None)
+    if not isinstance(date_sampling_raw, dict):
+        raise ValueError("train.date_sampling must be a mapping")
+    linear_raw = date_sampling_raw.get("linear")
+    power_raw = date_sampling_raw.get("power")
+    if not isinstance(linear_raw, dict) or not isinstance(power_raw, dict):
+        raise ValueError("train.date_sampling linear and power must be mappings")
+    try:
+        date_sampling_settings = DateSamplingSettings(
+            enabled=date_sampling_raw["enabled"],
+            mode=date_sampling_raw["mode"],
+            seed=date_sampling_raw["seed"],
+            linear=DateCurveSettings(**linear_raw),
+            power=DateCurveSettings(**power_raw),
+        )
+    except (KeyError, TypeError) as exc:
+        raise ValueError("train.date_sampling has invalid fields") from exc
     loser_raw = train_raw.pop("loser_augmentation", None)
     if not isinstance(loser_raw, dict):
         raise ValueError("train.loser_augmentation must be a mapping")
@@ -344,6 +424,7 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         train=TrainSettings(
             isolation_validation=isolation_settings,
             loser_augmentation=loser_settings,
+            date_sampling=date_sampling_settings,
             **train_raw,
         ),
         model=ModelSettings(**raw["model"]),
@@ -400,6 +481,37 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
     if not 0 < loser.expert_ratio <= 1:
         raise ValueError(
             "train.loser_augmentation.expert_ratio must be in (0, 1]"
+        )
+    date_sampling = train.date_sampling
+    if type(date_sampling.enabled) is not bool:
+        raise ValueError("train.date_sampling.enabled must be true or false")
+    if date_sampling.mode not in {"linear", "power"}:
+        raise ValueError("train.date_sampling.mode must be linear or power")
+    if type(date_sampling.seed) is not int:
+        raise ValueError("train.date_sampling.seed must be an integer")
+    for curve_name in ("linear", "power"):
+        curve = getattr(date_sampling, curve_name)
+        for endpoint in ("start", "end"):
+            value = getattr(curve, endpoint)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(
+                    f"train.date_sampling.{curve_name}.{endpoint} must be "
+                    "finite and non-negative"
+                )
+    exponent = date_sampling.power.exponent
+    if (
+        isinstance(exponent, bool)
+        or not isinstance(exponent, (int, float))
+        or not math.isfinite(exponent)
+        or exponent <= 0
+    ):
+        raise ValueError(
+            "train.date_sampling.power.exponent must be finite and positive"
         )
     isolation = train.isolation_validation
     if not isolation.deck_data:
@@ -1124,9 +1236,13 @@ def main() -> None:
     realized_train_replay_ratio = (
         splits.selected_train_replays / splits.eligible_train_replays
     )
-    samples_per_epoch = len(splits.train)
-    if train_cfg.max_samples is not None:
-        samples_per_epoch = min(samples_per_epoch, train_cfg.max_samples)
+    date_sampling_result = prepare_date_sampled_training_indices(
+        dataset, splits.train, train_cfg.date_sampling
+    )
+    train_indices = date_sampling_result.indices
+    samples_per_epoch = effective_epoch_samples(
+        train_indices, train_cfg.max_samples
+    )
     steps_per_epoch = math.ceil(samples_per_epoch / train_cfg.batch_size)
     total_steps = steps_per_epoch * train_cfg.epochs
     if train_cfg.warmup_steps >= total_steps:
@@ -1253,6 +1369,24 @@ def main() -> None:
     (output_root / "resolved_config.yaml").write_text(
         yaml.safe_dump(resolved_config, sort_keys=False),
         encoding="utf-8",
+    )
+
+    for stats in date_sampling_result.dates:
+        print(
+            f"date_sampling_date={stats.date[0]}.{stats.date[1]} "
+            f"x={stats.coordinate:.6f} weight={stats.weight:.6f} "
+            f"source_samples={stats.source_samples:,} "
+            f"weighted_samples={stats.weighted_samples:,}",
+            flush=True,
+        )
+    print(
+        f"date_sampling_enabled={train_cfg.date_sampling.enabled} "
+        f"mode={train_cfg.date_sampling.mode} "
+        f"seed={train_cfg.date_sampling.seed} "
+        f"source_samples={len(splits.train):,} "
+        f"weighted_samples={len(train_indices):,} "
+        f"ratio={len(train_indices) / max(len(splits.train), 1):.6f}",
+        flush=True,
     )
 
     for namespace in sorted(isolation_sets.by_namespace):
@@ -1384,6 +1518,29 @@ def main() -> None:
                 "data/cache_shards": len(dataset.shards),
                 "data/cache_samples": len(dataset),
                 "data/train_samples": len(splits.train),
+                "data/weighted_train_samples": len(train_indices),
+                "data/date_sampling/realized_ratio": (
+                    len(train_indices) / max(len(splits.train), 1)
+                ),
+                **{
+                    "data/date_sampling/"
+                    f"{stats.date[0]}_{stats.date[1]}_weight": stats.weight
+                    for stats in date_sampling_result.dates
+                },
+                **{
+                    "data/date_sampling/"
+                    f"{stats.date[0]}_{stats.date[1]}_source_samples": (
+                        stats.source_samples
+                    )
+                    for stats in date_sampling_result.dates
+                },
+                **{
+                    "data/date_sampling/"
+                    f"{stats.date[0]}_{stats.date[1]}_weighted_samples": (
+                        stats.weighted_samples
+                    )
+                    for stats in date_sampling_result.dates
+                },
                 "data/eligible_train_samples":
                     splits.eligible_train_samples,
                 "data/eligible_train_replays":
@@ -1522,7 +1679,7 @@ def main() -> None:
             epoch_loss_sum = 0.0
             epoch_top1 = epoch_top3 = epoch_top5 = epoch_samples = 0
             for batch in dataset.iter_batches(
-                indices=splits.train,
+                indices=train_indices,
                 batch_size=train_cfg.batch_size,
                 seed=train_cfg.seed + epoch_index,
                 shuffle=True,
