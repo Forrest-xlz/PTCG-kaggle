@@ -190,7 +190,12 @@ Historical options in a combination action are summed, one shared
 and their concatenation is mapped by `history_sequence_mlp_layers` to one
 token. All trainable history parameters are independent from the current-action
 decoder. Switching among `basic`, `structural`, and `full` reuses the same
-schema-15 cache. Older caches must be rebuilt with
+schema-16 cache. `model.opponent_history_encoding` independently adds a second
+three-step history token built only from public opponent logs. `PLAY`, `ATTACH`,
+`EVOLVE`, `SWITCH`, `ATTACK`, and `TURN_END` start macro actions; public result
+logs are pooled into the preceding action. Its modes mirror the own-history
+capacity but use separate embeddings and MLPs, and hidden cards map to the
+learned unknown-card entry. Older caches must be rebuilt with
 `python -m training.cache_features`; replay extraction does not need to be
 rerun.
 
@@ -265,9 +270,9 @@ Dataset, then attach it to
 the `cg` directory. In the first code cell, set the exact `MODEL_PATH`,
 `CG_PATH`, and the agent's 60-card `DECK`, then run all cells.
 The notebook reads width, FFN size, attention heads, encoder/decoder depth,
-normalization mode, static-card projections, and action-history mode from the checkpoint;
+normalization mode, static-card projections, and both action-history modes from the checkpoint;
 these architecture fields are not configured twice. It embeds the inference
-code, including the 26-token base encoder layout and optional history token, and creates
+code, including the 26-token base encoder layout and optional own/opponent history tokens, and creates
 `/kaggle/working/submission.tar.gz`.
 
 ## Training records

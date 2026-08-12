@@ -42,10 +42,12 @@ from cg.api import all_attack, all_card_data, to_observation_class
 from model.features import (
     HISTORY_STEPS,
     HistoryActionFeatures,
+    OpponentHistoryActionFeatures,
     decoder_features,
     encoder_features,
     enumerate_actions,
     history_action_features,
+    opponent_history_actions,
 )
 from model.network import ModelConfig
 from training.feature_cache import (
@@ -56,6 +58,8 @@ from training.feature_cache import (
     HISTORY_STRUCTURAL_DIM,
     OPTION_CATEGORICAL_DIM,
     OPTION_NUMERIC_DIM,
+    OPPONENT_EVENT_CATEGORICAL_DIM,
+    OPPONENT_EVENT_NUMERIC_DIM,
     POKEMON_DYNAMIC_DIM,
     FeatureRecord,
     PackedShard,
@@ -110,6 +114,50 @@ def _pack_history(history: list[HistoryActionFeatures]) -> dict[str, list]:
     return result
 
 
+def _pack_opponent_history(
+    history,
+) -> dict[str, list]:
+    """Left-pad and flatten three observable opponent macro actions."""
+    recent = list(history)[-HISTORY_STEPS:]
+    padded: list[OpponentHistoryActionFeatures | None] = [
+        None
+    ] * (HISTORY_STEPS - len(recent)) + recent
+    result = {
+        "opponent_history_action_type": [],
+        "opponent_history_valid": [],
+        "opponent_history_event_categorical": [],
+        "opponent_history_event_numeric": [],
+        "opponent_history_pokemon_dynamic": [],
+        "opponent_history_attack_dynamic": [],
+        "opponent_history_event_offset": [0],
+    }
+    event_count = 0
+    for action in padded:
+        if action is None:
+            result["opponent_history_action_type"].append(0)
+            result["opponent_history_valid"].append(0)
+        else:
+            result["opponent_history_action_type"].append(
+                int(action.action_type)
+            )
+            result["opponent_history_valid"].append(1)
+            result["opponent_history_event_categorical"].extend(
+                action.event_categorical.reshape(-1).tolist()
+            )
+            result["opponent_history_event_numeric"].extend(
+                action.event_numeric.reshape(-1).tolist()
+            )
+            result["opponent_history_pokemon_dynamic"].extend(
+                action.pokemon_dynamic.reshape(-1).tolist()
+            )
+            result["opponent_history_attack_dynamic"].extend(
+                action.attack_dynamic.reshape(-1).tolist()
+            )
+            event_count += int(action.event_categorical.shape[0])
+        result["opponent_history_event_offset"].append(event_count)
+    return result
+
+
 @dataclass(frozen=True)
 class CacheSettings:
     cg_path: str
@@ -155,6 +203,9 @@ def feature_signature(config: ModelConfig) -> dict:
         "history_steps": HISTORY_STEPS,
         "history_structural_dim": HISTORY_STRUCTURAL_DIM,
         "history_layout": "selected-option-superset-v1",
+        "opponent_history_layout": "public-log-macro-actions-v1",
+        "opponent_event_categorical_dim": OPPONENT_EVENT_CATEGORICAL_DIM,
+        "opponent_event_numeric_dim": OPPONENT_EVENT_NUMERIC_DIM,
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
     }
@@ -164,6 +215,7 @@ def _prepare_record(
     record: dict,
     config: ModelConfig,
     history: list[HistoryActionFeatures] | None = None,
+    opponent_history: list[OpponentHistoryActionFeatures] | None = None,
 ) -> tuple[
     FeatureRecord | None,
     str | None,
@@ -206,6 +258,9 @@ def _prepare_record(
         encoded_options=decoder,
     )
     packed_history = _pack_history(list(history or []))
+    packed_opponent_history = _pack_opponent_history(
+        list(opponent_history or [])
+    )
     return (
         FeatureRecord(
             encoder_index=encoder.sparse.index,
@@ -226,6 +281,7 @@ def _prepare_record(
             episode_key=stable_episode_key(record["episode_id"]),
             deck_key=stable_deck_key(record["deck"]),
             **packed_history,
+            **packed_opponent_history,
         ),
         None,
         current_history,
@@ -364,6 +420,9 @@ def process_source(job) -> dict:
     part_names = []
     current_episode = None
     player_histories: dict[int, deque[HistoryActionFeatures]] = {}
+    opponent_histories: dict[
+        int, deque[OpponentHistoryActionFeatures]
+    ] = {}
     try:
         with gzip.open(source, "rt", encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, start=1):
@@ -373,15 +432,28 @@ def process_source(job) -> dict:
                     if episode != current_episode:
                         current_episode = episode
                         player_histories.clear()
+                        opponent_histories.clear()
                     player = int(raw_record["player"])
                     player_history = player_histories.setdefault(
                         player,
                         deque(maxlen=HISTORY_STEPS),
                     )
+                    opponent_history = opponent_histories.setdefault(
+                        player,
+                        deque(maxlen=HISTORY_STEPS),
+                    )
+                    opponent_history.extend(
+                        opponent_history_actions(
+                            to_observation_class(raw_record["observation"]),
+                            config.card_count,
+                            config.attack_count,
+                        )
+                    )
                     prepared, skip_reason, current_action = _prepare_record(
                         raw_record,
                         config,
                         list(player_history),
+                        list(opponent_history),
                     )
                     if current_action is not None:
                         player_history.append(current_action)

@@ -52,6 +52,8 @@ from training.feature_cache import (
     ATTACK_DYNAMIC_DIM,
     OPTION_CATEGORICAL_DIM,
     OPTION_NUMERIC_DIM,
+    OPPONENT_EVENT_CATEGORICAL_DIM,
+    OPPONENT_EVENT_NUMERIC_DIM,
     POKEMON_DYNAMIC_DIM,
     CachedBatch,
     IndexBatch,
@@ -138,6 +140,9 @@ class ModelSettings:
     history_encoding: str = "off"
     history_action_mlp_layers: int = 1
     history_sequence_mlp_layers: int = 2
+    opponent_history_encoding: str = "off"
+    opponent_history_action_mlp_layers: int = 1
+    opponent_history_sequence_mlp_layers: int = 2
 
 
 @dataclass(frozen=True)
@@ -584,6 +589,9 @@ def feature_signature(config: ModelConfig) -> dict:
         "history_steps": HISTORY_STEPS,
         "history_structural_dim": HISTORY_STRUCTURAL_DIM,
         "history_layout": "selected-option-superset-v1",
+        "opponent_history_layout": "public-log-macro-actions-v1",
+        "opponent_event_categorical_dim": OPPONENT_EVENT_CATEGORICAL_DIM,
+        "opponent_event_numeric_dim": OPPONENT_EVENT_NUMERIC_DIM,
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
     }
@@ -628,6 +636,34 @@ def _forward_batch(
     model: torch.nn.Module,
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    batch_size = len(batch)
+    opponent_action_type = batch.opponent_history_action_type
+    opponent_valid = batch.opponent_history_valid
+    opponent_categorical = batch.opponent_history_event_categorical
+    opponent_numeric = batch.opponent_history_event_numeric
+    opponent_pokemon = batch.opponent_history_pokemon_dynamic
+    opponent_attack = batch.opponent_history_attack_dynamic
+    opponent_offsets = batch.opponent_history_event_offset
+    if opponent_action_type is None:
+        opponent_action_type = np.zeros(
+            (batch_size, HISTORY_STEPS), dtype=np.uint8
+        )
+        opponent_valid = np.zeros_like(opponent_action_type)
+        opponent_categorical = np.empty(
+            (0, OPPONENT_EVENT_CATEGORICAL_DIM), dtype=np.int64
+        )
+        opponent_numeric = np.empty(
+            (0, OPPONENT_EVENT_NUMERIC_DIM), dtype=np.float16
+        )
+        opponent_pokemon = np.empty(
+            (0, POKEMON_DYNAMIC_DIM), dtype=np.float16
+        )
+        opponent_attack = np.empty(
+            (0, ATTACK_DYNAMIC_DIM), dtype=np.float16
+        )
+        opponent_offsets = np.zeros(
+            batch_size * HISTORY_STEPS + 1, dtype=np.int32
+        )
     logits = model(
         _to_device(batch.encoder_index, device),
         _to_device(batch.encoder_value, device, dtype=torch.float32),
@@ -660,6 +696,33 @@ def _forward_batch(
         _to_device(batch.attack_dynamic, device, dtype=torch.float32),
         _to_device(batch.action_option_index, device, dtype=torch.long),
         _to_device(batch.action_option_offset, device, dtype=torch.long),
+        _to_device(
+            opponent_action_type, device, dtype=torch.long
+        ),
+        _to_device(opponent_valid, device, dtype=torch.long),
+        _to_device(
+            opponent_categorical,
+            device,
+            dtype=torch.long,
+        ),
+        _to_device(
+            opponent_numeric,
+            device,
+            dtype=torch.float32,
+        ),
+        _to_device(
+            opponent_pokemon,
+            device,
+            dtype=torch.float32,
+        ),
+        _to_device(
+            opponent_attack,
+            device,
+            dtype=torch.float32,
+        ),
+        _to_device(
+            opponent_offsets, device, dtype=torch.long
+        ),
     )
     targets = _to_device(batch.target, device, dtype=torch.long)
     action_counts = _to_device(batch.action_count, device, dtype=torch.long)
@@ -939,6 +1002,13 @@ def main() -> None:
         history_encoding=model_cfg.history_encoding,
         history_action_mlp_layers=model_cfg.history_action_mlp_layers,
         history_sequence_mlp_layers=model_cfg.history_sequence_mlp_layers,
+        opponent_history_encoding=model_cfg.opponent_history_encoding,
+        opponent_history_action_mlp_layers=(
+            model_cfg.opponent_history_action_mlp_layers
+        ),
+        opponent_history_sequence_mlp_layers=(
+            model_cfg.opponent_history_sequence_mlp_layers
+        ),
     )
     invalid_card_ids = sorted(
         {

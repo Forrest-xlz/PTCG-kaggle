@@ -51,6 +51,20 @@ POKEMON_DYNAMIC_DIM = 2 * POKEMON_DYNAMIC_WORD_DIM
 ATTACK_DYNAMIC_DIM = 6
 HISTORY_STEPS = 3
 HISTORY_STRUCTURAL_DIM = 8
+OPPONENT_EVENT_CATEGORICAL_DIM = 8
+OPPONENT_EVENT_NUMERIC_DIM = 4
+OPPONENT_LOG_TYPE_DIM = 25
+OPPONENT_AREA_UNKNOWN = OPTION_AREA_DIM
+OPPONENT_AREA_DIM = OPTION_AREA_DIM + 1
+OPPONENT_ACTION_PADDING = 0
+OPPONENT_ACTION_PLAY = 1
+OPPONENT_ACTION_ATTACH = 2
+OPPONENT_ACTION_EVOLVE = 3
+OPPONENT_ACTION_SWITCH = 4
+OPPONENT_ACTION_ATTACK = 5
+OPPONENT_ACTION_TURN_END = 6
+OPPONENT_ACTION_OTHER = 7
+OPPONENT_ACTION_TYPE_DIM = 8
 
 OPTION_TYPE_INDEX = 0
 OPTION_CONTEXT_INDEX = 1
@@ -123,6 +137,17 @@ class HistoryActionFeatures:
     select_context: int
     option_categorical: np.ndarray
     structural: np.ndarray
+    pokemon_dynamic: np.ndarray
+    attack_dynamic: np.ndarray
+
+
+@dataclass(frozen=True)
+class OpponentHistoryActionFeatures:
+    """One observable opponent macro action built from public logs."""
+
+    action_type: int
+    event_categorical: np.ndarray
+    event_numeric: np.ndarray
     pokemon_dynamic: np.ndarray
     attack_dynamic: np.ndarray
 
@@ -995,6 +1020,241 @@ def decoder_features(
         action_index=np.asarray(action_index, dtype=np.int64),
         action_offset=np.asarray(action_offset, dtype=np.int64),
     )
+
+
+_OPPONENT_PRIMARY_LOG_TYPES = {
+    3: OPPONENT_ACTION_TURN_END,
+    8: OPPONENT_ACTION_SWITCH,
+    10: OPPONENT_ACTION_PLAY,
+    11: OPPONENT_ACTION_ATTACH,
+    12: OPPONENT_ACTION_EVOLVE,
+    15: OPPONENT_ACTION_ATTACK,
+}
+_OPPONENT_RESULT_LOG_TYPES = set(range(6, 10)) | set(range(13, 23))
+
+
+def _log_value(log: Any, name: str, default: Any = None) -> Any:
+    if isinstance(log, dict):
+        return log.get(name, default)
+    return getattr(log, name, default)
+
+
+def _bounded_log_id(value: Any, size: int) -> int:
+    if value is None or isinstance(value, bool):
+        return size
+    try:
+        index = int(value)
+    except (TypeError, ValueError):
+        return size
+    return index if 0 <= index < size else size
+
+
+def _opponent_area(value: Any) -> int:
+    return _bounded_log_id(value, OPTION_AREA_DIM)
+
+
+def _find_public_pokemon(
+    obs: Any,
+    serial: Any,
+) -> tuple[Any | None, bool, bool]:
+    if serial is None or obs.current is None:
+        return None, False, False
+    try:
+        wanted = int(serial)
+    except (TypeError, ValueError):
+        return None, False, False
+    yours = int(obs.current.yourIndex)
+    for player_index, player in enumerate(obs.current.players):
+        for pokemon in list(player.active or []):
+            if pokemon is not None and int(pokemon.serial) == wanted:
+                return pokemon, True, player_index == yours
+        for pokemon in list(player.bench or []):
+            if pokemon is not None and int(pokemon.serial) == wanted:
+                return pokemon, False, player_index == yours
+    return None, False, False
+
+
+def _opponent_log_row(
+    obs: Any,
+    log: Any,
+    card_count: int,
+    attack_count: int,
+    catalog: NumericFeatureCatalog,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    log_type = _bounded_log_id(_log_value(log, "type"), OPPONENT_LOG_TYPE_DIM - 1)
+    source_card = _log_value(log, "cardId")
+    target_card = _log_value(log, "cardIdTarget")
+    source_serial = _log_value(log, "serial")
+    target_serial = _log_value(log, "serialTarget")
+    if log_type == 8:
+        source_card = _log_value(log, "cardIdActive")
+        target_card = _log_value(log, "cardIdBench")
+        source_serial = _log_value(log, "serialActive")
+        target_serial = _log_value(log, "serialBench")
+
+    source_area = _log_value(log, "fromArea")
+    target_area = _log_value(log, "toArea")
+    if log_type == 10 and source_area is None:
+        source_area = 2  # HAND
+    elif log_type == 12 and source_area is None:
+        source_area = 2  # HAND
+    elif log_type == 15:
+        source_area = 4  # ACTIVE
+        target_area = 4  # ACTIVE
+
+    player_index = _log_value(log, "playerIndex")
+    relation = 0
+    if player_index is not None:
+        relation = 1 if int(player_index) == int(obs.current.yourIndex) else 2
+    special = _log_value(log, "specialConditionType")
+    special_index = _bounded_log_id(
+        None if special is None else int(special) + 1,
+        OPTION_SPECIAL_CONDITION_DIM,
+    )
+    categorical = np.asarray(
+        [
+            log_type,
+            _bounded_log_id(source_card, card_count),
+            _bounded_log_id(target_card, card_count),
+            _bounded_log_id(_log_value(log, "attackId"), attack_count),
+            _opponent_area(source_area),
+            _opponent_area(target_area),
+            relation,
+            special_index,
+        ],
+        dtype=np.int64,
+    )
+    numeric = np.asarray(
+        [
+            float(_log_value(log, "value", 0) or 0) / 400.0,
+            float(bool(_log_value(log, "isRecover", False))),
+            float(bool(_log_value(log, "head", False))),
+            float(bool(_log_value(log, "hasBasicPokemon", False))),
+        ],
+        dtype=np.float32,
+    )
+    source = _find_public_pokemon(obs, source_serial)
+    target = _find_public_pokemon(obs, target_serial)
+    if log_type == 15 and target[0] is None:
+        yours = int(obs.current.yourIndex)
+        own_active = _active(obs.current.players[yours])
+        target = (own_active, True, True)
+    pokemon_dynamic = np.concatenate(
+        (
+            _pokemon_dynamic_features(
+                source[0], is_active=source[1], is_own=source[2]
+            ),
+            _pokemon_dynamic_features(
+                target[0], is_active=target[1], is_own=target[2]
+            ),
+        )
+    )
+    attack_dynamic = np.zeros(ATTACK_DYNAMIC_DIM, dtype=np.float32)
+    attack_id = int(categorical[3])
+    if attack_id < attack_count:
+        target_hp = max(float(target[0].hp), 0.0) if target[0] is not None else 0.0
+        base_damage = (
+            float(catalog.attack_damage[attack_id]) * 300.0
+            if attack_id < len(catalog.attack_damage)
+            else 0.0
+        )
+        super_effective = False
+        resisted = False
+        if source[0] is not None and target[0] is not None:
+            source_id = int(source[0].id)
+            target_id = int(target[0].id)
+            if 0 <= source_id < card_count and 0 <= target_id < card_count:
+                source_type = int(
+                    np.argmax(
+                        catalog.card_features[
+                            source_id,
+                            CARD_ENERGY_TYPE_OFFSET:
+                            CARD_ENERGY_TYPE_OFFSET + ENERGY_TYPE_DIM,
+                        ]
+                    )
+                )
+                super_effective = bool(
+                    catalog.card_features[
+                        target_id, CARD_WEAKNESS_OFFSET + source_type
+                    ] > 0.5
+                )
+                resisted = bool(
+                    catalog.card_features[
+                        target_id, CARD_RESISTANCE_OFFSET + source_type
+                    ] > 0.5
+                )
+        attack_dynamic[:] = [
+            1.0,
+            min(base_damage / max(target_hp, 1.0), 4.0) / 4.0,
+            float(target[0] is not None and base_damage >= target_hp),
+            max(target_hp - base_damage, 0.0) / 400.0,
+            float(super_effective),
+            float(resisted),
+        ]
+    return categorical, numeric, pokemon_dynamic, attack_dynamic
+
+
+def opponent_history_actions(
+    obs: Any,
+    card_count: int,
+    attack_count: int,
+    *,
+    numeric_catalog: NumericFeatureCatalog | None = None,
+) -> list[OpponentHistoryActionFeatures]:
+    """Aggregate public logs into observable opponent macro actions."""
+    if obs.current is None:
+        return []
+    catalog = numeric_catalog or _default_numeric_catalog(card_count)
+    opponent = 1 - int(obs.current.yourIndex)
+    grouped: list[tuple[int, list[Any]]] = []
+    current: tuple[int, list[Any]] | None = None
+    suppress_results = False
+    for log in list(obs.logs or []):
+        raw_type = _log_value(log, "type")
+        try:
+            log_type = int(raw_type)
+        except (TypeError, ValueError):
+            continue
+        player_index = _log_value(log, "playerIndex")
+        is_opponent = (
+            player_index is not None and int(player_index) == opponent
+        )
+        action_type = _OPPONENT_PRIMARY_LOG_TYPES.get(log_type)
+        if action_type is not None:
+            if current is not None:
+                grouped.append(current)
+            current = (action_type, [log]) if is_opponent else None
+            suppress_results = not is_opponent
+        elif log_type == 2:  # TURN_START is a boundary, not an action token.
+            if current is not None:
+                grouped.append(current)
+            current = None
+            suppress_results = not is_opponent
+        elif current is not None:
+            current[1].append(log)
+        elif not suppress_results and (
+            is_opponent or log_type in _OPPONENT_RESULT_LOG_TYPES
+        ):
+            current = (OPPONENT_ACTION_OTHER, [log])
+    if current is not None:
+        grouped.append(current)
+
+    result: list[OpponentHistoryActionFeatures] = []
+    for action_type, logs in grouped:
+        rows = [
+            _opponent_log_row(obs, log, card_count, attack_count, catalog)
+            for log in logs
+        ]
+        result.append(
+            OpponentHistoryActionFeatures(
+                action_type=action_type,
+                event_categorical=np.stack([row[0] for row in rows]),
+                event_numeric=np.stack([row[1] for row in rows]),
+                pokemon_dynamic=np.stack([row[2] for row in rows]),
+                attack_dynamic=np.stack([row[3] for row in rows]),
+            )
+        )
+    return result
 
 
 def _history_structural_option(obs: Any, option: Any) -> list[int]:
