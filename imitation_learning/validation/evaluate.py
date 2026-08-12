@@ -21,6 +21,8 @@ from model.features import (
     ATTACK_DYNAMIC_DIM,
     HISTORY_STEPS,
     HISTORY_STRUCTURAL_DIM,
+    OPPONENT_EVENT_CATEGORICAL_DIM,
+    OPPONENT_EVENT_NUMERIC_DIM,
     OPTION_CATEGORICAL_DIM,
     OPTION_NUMERIC_DIM,
     POKEMON_DYNAMIC_DIM,
@@ -101,6 +103,9 @@ def feature_signature(config: ModelConfig) -> dict[str, Any]:
         "history_steps": HISTORY_STEPS,
         "history_structural_dim": HISTORY_STRUCTURAL_DIM,
         "history_layout": "selected-option-superset-v1",
+        "opponent_history_layout": "public-log-macro-actions-v1",
+        "opponent_event_categorical_dim": OPPONENT_EVENT_CATEGORICAL_DIM,
+        "opponent_event_numeric_dim": OPPONENT_EVENT_NUMERIC_DIM,
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
     }
