@@ -26,6 +26,20 @@ def test_power_weights_and_single_date_endpoint() -> None:
     assert date_weights([(7, 5)], curve) == {(7, 5): 1.5}
 
 
+def test_logarithmic_weights_use_normalized_log1p_curve() -> None:
+    curve = DateSamplingCurve(
+        "logarithmic", 0.5, 1.2, curvature=9.0
+    )
+    weights = date_weights([(7, 1), (7, 3), (7, 5)], curve)
+
+    assert weights[(7, 1)] == pytest.approx(0.5)
+    assert weights[(7, 3)] == pytest.approx(
+        0.5 + 0.7 * np.log1p(9.0 * 0.5) / np.log1p(9.0)
+    )
+    assert weights[(7, 5)] == pytest.approx(1.2)
+    assert date_weights([(7, 5)], curve) == {(7, 5): 1.2}
+
+
 def test_expansion_supports_zero_fractional_and_multiple_copies() -> None:
     indices = np.arange(12, dtype=np.uint32)
     dates = np.asarray(

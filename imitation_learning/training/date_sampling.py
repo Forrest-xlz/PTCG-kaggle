@@ -18,6 +18,7 @@ class DateSamplingCurve:
     start: float
     end: float
     exponent: float | None = None
+    curvature: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,8 +48,10 @@ def date_weights(
     unique = sorted({(int(month), int(day)) for month, day in dates}, key=_ordinal)
     if not unique:
         raise ValueError("date sampling requires at least one training date")
-    if curve.mode not in {"linear", "power"}:
-        raise ValueError("date sampling mode must be linear or power")
+    if curve.mode not in {"linear", "power", "logarithmic"}:
+        raise ValueError(
+            "date sampling mode must be linear, power, or logarithmic"
+        )
     start, end = float(curve.start), float(curve.end)
     if not math.isfinite(start) or not math.isfinite(end) or min(start, end) < 0:
         raise ValueError("date sampling weights must be finite and non-negative")
@@ -57,12 +60,26 @@ def date_weights(
         exponent = float(curve.exponent) if curve.exponent is not None else math.nan
         if not math.isfinite(exponent) or exponent <= 0:
             raise ValueError("date sampling exponent must be finite and positive")
+    curvature = 1.0
+    if curve.mode == "logarithmic":
+        curvature = (
+            float(curve.curvature) if curve.curvature is not None else math.nan
+        )
+        if not math.isfinite(curvature) or curvature <= 0:
+            raise ValueError("date sampling curvature must be finite and positive")
     if len(unique) == 1:
         return {unique[0]: end}
     ordinals = [_ordinal(value) for value in unique]
     span = ordinals[-1] - ordinals[0]
+
+    def transform(coordinate: float) -> float:
+        if curve.mode == "logarithmic":
+            return math.log1p(curvature * coordinate) / math.log1p(curvature)
+        return coordinate**exponent
+
     return {
-        value: start + (end - start) * (((ordinal - ordinals[0]) / span) ** exponent)
+        value: start
+        + (end - start) * transform((ordinal - ordinals[0]) / span)
         for value, ordinal in zip(unique, ordinals)
     }
 

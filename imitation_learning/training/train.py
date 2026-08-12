@@ -98,6 +98,7 @@ class DateCurveSettings:
     start: float
     end: float
     exponent: float | None = None
+    curvature: float | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,7 @@ class DateSamplingSettings:
     seed: int
     linear: DateCurveSettings
     power: DateCurveSettings
+    logarithmic: DateCurveSettings
 
 
 @dataclass(frozen=True)
@@ -312,12 +314,17 @@ def prepare_date_sampled_training_indices(
     unique_dates = [
         tuple(map(int, value)) for value in np.unique(dates, axis=0)
     ]
-    selected = settings.linear if settings.mode == "linear" else settings.power
+    selected = {
+        "linear": settings.linear,
+        "power": settings.power,
+        "logarithmic": settings.logarithmic,
+    }[settings.mode]
     curve = DateSamplingCurve(
         mode=settings.mode,
         start=selected.start,
         end=selected.end,
         exponent=selected.exponent,
+        curvature=selected.curvature,
     )
     return build_date_weighted_indices(
         train_indices,
@@ -365,8 +372,14 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError("train.date_sampling must be a mapping")
     linear_raw = date_sampling_raw.get("linear")
     power_raw = date_sampling_raw.get("power")
-    if not isinstance(linear_raw, dict) or not isinstance(power_raw, dict):
-        raise ValueError("train.date_sampling linear and power must be mappings")
+    logarithmic_raw = date_sampling_raw.get("logarithmic")
+    if not all(
+        isinstance(value, dict)
+        for value in (linear_raw, power_raw, logarithmic_raw)
+    ):
+        raise ValueError(
+            "train.date_sampling linear, power, and logarithmic must be mappings"
+        )
     try:
         date_sampling_settings = DateSamplingSettings(
             enabled=date_sampling_raw["enabled"],
@@ -374,6 +387,7 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
             seed=date_sampling_raw["seed"],
             linear=DateCurveSettings(**linear_raw),
             power=DateCurveSettings(**power_raw),
+            logarithmic=DateCurveSettings(**logarithmic_raw),
         )
     except (KeyError, TypeError) as exc:
         raise ValueError("train.date_sampling has invalid fields") from exc
@@ -485,11 +499,13 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
     date_sampling = train.date_sampling
     if type(date_sampling.enabled) is not bool:
         raise ValueError("train.date_sampling.enabled must be true or false")
-    if date_sampling.mode not in {"linear", "power"}:
-        raise ValueError("train.date_sampling.mode must be linear or power")
+    if date_sampling.mode not in {"linear", "power", "logarithmic"}:
+        raise ValueError(
+            "train.date_sampling.mode must be linear, power, or logarithmic"
+        )
     if type(date_sampling.seed) is not int:
         raise ValueError("train.date_sampling.seed must be an integer")
-    for curve_name in ("linear", "power"):
+    for curve_name in ("linear", "power", "logarithmic"):
         curve = getattr(date_sampling, curve_name)
         for endpoint in ("start", "end"):
             value = getattr(curve, endpoint)
@@ -512,6 +528,16 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
     ):
         raise ValueError(
             "train.date_sampling.power.exponent must be finite and positive"
+        )
+    curvature = date_sampling.logarithmic.curvature
+    if (
+        isinstance(curvature, bool)
+        or not isinstance(curvature, (int, float))
+        or not math.isfinite(curvature)
+        or curvature <= 0
+    ):
+        raise ValueError(
+            "train.date_sampling.logarithmic.curvature must be finite and positive"
         )
     isolation = train.isolation_validation
     if not isolation.deck_data:

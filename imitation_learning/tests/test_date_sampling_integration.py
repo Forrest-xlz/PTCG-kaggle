@@ -36,6 +36,7 @@ def test_date_sampling_settings_parse(tmp_path: Path) -> None:
         "seed": 17,
         "linear": {"start": 0.5, "end": 1.2},
         "power": {"start": 0.4, "end": 1.5, "exponent": 2.0},
+        "logarithmic": {"start": 0.3, "end": 1.6, "curvature": 9.0},
     }
 
     settings = load_settings(write_config(tmp_path, value)).train.date_sampling
@@ -44,6 +45,7 @@ def test_date_sampling_settings_parse(tmp_path: Path) -> None:
     assert settings.mode == "power"
     assert settings.seed == 17
     assert settings.power.exponent == 2.0
+    assert settings.logarithmic.curvature == 9.0
 
 
 @pytest.mark.parametrize(
@@ -54,6 +56,8 @@ def test_date_sampling_settings_parse(tmp_path: Path) -> None:
         (("linear", "start"), -0.1, "linear.start"),
         (("power", "end"), float("inf"), "power.end"),
         (("power", "exponent"), 0.0, "power.exponent"),
+        (("logarithmic", "curvature"), 0.0, "logarithmic.curvature"),
+        (("logarithmic", "curvature"), float("nan"), "logarithmic.curvature"),
     ],
 )
 def test_date_sampling_settings_reject_invalid_values(
@@ -85,6 +89,7 @@ def test_training_indices_are_weighted_after_receiving_final_split(
         "seed": 3,
         "linear": {"start": 1.0, "end": 2.0},
         "power": {"start": 1.0, "end": 2.0, "exponent": 2.0},
+        "logarithmic": {"start": 1.0, "end": 2.0, "curvature": 9.0},
     }
     settings = load_settings(write_config(tmp_path, raw)).train.date_sampling
     original = np.asarray([10, 11, 12, 13], dtype=np.uint32)
