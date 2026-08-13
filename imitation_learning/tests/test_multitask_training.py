@@ -2,7 +2,8 @@ import threading
 
 import torch
 
-from training.train import auxiliary_classification_metrics, prefetch_iterable
+from training.batch_prefetch import prefetch_iterable
+from training.train import auxiliary_classification_metrics
 
 
 def test_masked_auxiliary_ce_ignores_invalid_rows() -> None:

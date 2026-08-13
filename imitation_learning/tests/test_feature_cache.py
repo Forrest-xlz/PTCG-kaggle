@@ -29,6 +29,7 @@ from training.feature_cache import (
     PLAYER_RESULT_LOSS,
     PLAYER_RESULT_WIN,
     FeatureRecord,
+    IndexBatch,
     MmapFeatureDataset,
     PackedShard,
     PackedShardWriter,
@@ -37,6 +38,10 @@ from training.feature_cache import (
     stable_episode_key,
 )
 from training.expert_validation import load_expert_date_info
+from training.batch_prefetch import (
+    iter_collated_batches,
+    validate_prefetch_settings,
+)
 
 
 SIGNATURE = {
@@ -672,3 +677,62 @@ def test_collate_rebases_options_and_pads_action_offsets(tmp_path: Path) -> None
         assert batch.action_count.dtype == np.int64
     finally:
         dataset.close()
+
+
+@pytest.mark.parametrize("workers", [0, 1, 2])
+def test_prefetched_collation_preserves_index_batch_order(
+    tmp_path: Path,
+    workers: int,
+) -> None:
+    build_shard(tmp_path / "a.cache", [1, 2, 3])
+    dataset = MmapFeatureDataset(tmp_path, expected_signature=SIGNATURE)
+    index_batches = [
+        IndexBatch(np.asarray([2], dtype=np.uint32)),
+        IndexBatch(np.asarray([0, 1], dtype=np.uint32)),
+    ]
+    try:
+        batches = list(
+            iter_collated_batches(
+                dataset,
+                index_batches,
+                workers=workers,
+                buffer_size=2,
+                expected_signature=SIGNATURE,
+            )
+        )
+        assert [batch.own_summary[:, 0].tolist() for batch in batches] == [
+            [3.0],
+            [1.0, 2.0],
+        ]
+    finally:
+        dataset.close()
+
+
+def test_process_prefetch_propagates_collate_errors(tmp_path: Path) -> None:
+    build_shard(tmp_path / "a.cache", [1])
+    dataset = MmapFeatureDataset(tmp_path, expected_signature=SIGNATURE)
+    try:
+        with pytest.raises(IndexError):
+            list(
+                iter_collated_batches(
+                    dataset,
+                    [IndexBatch(np.asarray([99], dtype=np.uint32))],
+                    workers=2,
+                    buffer_size=1,
+                    expected_signature=SIGNATURE,
+                )
+            )
+    finally:
+        dataset.close()
+
+
+@pytest.mark.parametrize(
+    ("workers", "buffer_size"),
+    [(-1, 8), (4, -1)],
+)
+def test_prefetch_settings_reject_negative_values(
+    workers: int,
+    buffer_size: int,
+) -> None:
+    with pytest.raises(ValueError):
+        validate_prefetch_settings(workers, buffer_size)
