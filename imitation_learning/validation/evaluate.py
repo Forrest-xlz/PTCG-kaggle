@@ -103,6 +103,11 @@ def feature_signature(config: ModelConfig) -> dict[str, Any]:
         "history_layout": "selected-option-superset-v1",
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
+        "auxiliary_layout": "next-decision-opponent-deck-final-prize-v1",
+        "opponent_deck_class_count": config.opponent_deck_class_count,
+        "opponent_deck_class_fingerprint": (
+            config.opponent_deck_class_fingerprint
+        ),
     }
 
 

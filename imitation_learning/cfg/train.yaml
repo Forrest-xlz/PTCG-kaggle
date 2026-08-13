@@ -90,6 +90,18 @@ model:
   history_encoding: full          # off, basic, structural, or full.
   history_action_mlp_layers: 1   # Shared by the three historical actions.
   history_sequence_mlp_layers: 2 # [t-3,t-2,t-1] concatenation -> one token.
+  auxiliary:
+    state_representation: global  # cls or global for state-level tasks.
+    opponent_deck_classes: data/opponent_deck_classes.csv
+    next_decision:
+      enabled: true
+      weight: 0.1
+    opponent_deck:
+      enabled: true
+      weight: 0.1
+    final_own_prize:
+      enabled: true
+      weight: 0.1
 
 wandb:
   enabled: true

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import csv
 import json
 import os
 import re
@@ -14,7 +15,7 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 16
+CACHE_SCHEMA_VERSION = 17
 ENCODER_WORDS = 26
 POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
@@ -34,6 +35,34 @@ PLAYER_RESULT_DRAW = 3
 PLAYER_RESULTS = frozenset(
     {PLAYER_RESULT_WIN, PLAYER_RESULT_LOSS, PLAYER_RESULT_DRAW}
 )
+
+
+def load_opponent_deck_classes(path: Path) -> tuple[dict[str, int], str]:
+    """Load a stable Exact-Deck mapping and return it with a content hash."""
+    with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    if not rows or not {"class_id", "deck_id"}.issubset(rows[0]):
+        raise ValueError(
+            "opponent deck CSV must contain class_id and deck_id columns"
+        )
+    mapping: dict[str, int] = {}
+    for row in rows:
+        deck_id = str(row["deck_id"]).strip()
+        class_id = int(row["class_id"])
+        if not deck_id or deck_id in mapping:
+            raise ValueError("opponent deck IDs must be non-empty and unique")
+        if not 0 <= class_id <= 255:
+            raise ValueError("opponent deck class IDs must fit uint8")
+        mapping[deck_id] = class_id
+    classes = sorted(mapping.values())
+    if classes != list(range(len(classes))):
+        raise ValueError("opponent deck class IDs must be contiguous from 0")
+    canonical = "\n".join(
+        f"{class_id},{deck_id}"
+        for deck_id, class_id in sorted(mapping.items(), key=lambda item: item[1])
+    )
+    fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return mapping, fingerprint
 
 SECTION_DTYPES = {
     "encoder_index": np.dtype("<u2"),
@@ -66,6 +95,12 @@ SECTION_DTYPES = {
     "episode_key": np.dtype("<u4"),
     "deck_key": np.dtype("<u8"),
     "player_result": np.dtype("u1"),
+    "next_select_type": np.dtype("u1"),
+    "next_select_context": np.dtype("u1"),
+    "next_decision_valid": np.dtype("u1"),
+    "opponent_deck_class": np.dtype("u1"),
+    "opponent_deck_valid": np.dtype("u1"),
+    "final_own_prize_count": np.dtype("u1"),
 }
 
 
@@ -97,6 +132,12 @@ class FeatureRecord:
     history_attack_dynamic: list[float]
     history_option_offset: list[int]
     player_result: int = PLAYER_RESULT_WIN
+    next_select_type: int = 0
+    next_select_context: int = 0
+    next_decision_valid: int = 0
+    opponent_deck_class: int = 0
+    opponent_deck_valid: int = 0
+    final_own_prize_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +168,12 @@ class FeatureView:
     history_pokemon_dynamic: np.ndarray
     history_attack_dynamic: np.ndarray
     history_option_offset: np.ndarray
+    next_select_type: int
+    next_select_context: int
+    next_decision_valid: int
+    opponent_deck_class: int
+    opponent_deck_valid: int
+    final_own_prize_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +206,12 @@ class CachedBatch:
     history_pokemon_dynamic: np.ndarray
     history_attack_dynamic: np.ndarray
     history_option_offset: np.ndarray
+    next_select_type: np.ndarray | None = None
+    next_select_context: np.ndarray | None = None
+    next_decision_valid: np.ndarray | None = None
+    opponent_deck_class: np.ndarray | None = None
+    opponent_deck_valid: np.ndarray | None = None
+    final_own_prize_count: np.ndarray | None = None
 
     def __len__(self) -> int:
         return int(self.target.size)
@@ -417,6 +470,20 @@ class PackedShardWriter:
             raise ValueError("deck_key must fit uint64")
         if int(record.player_result) not in PLAYER_RESULTS:
             raise ValueError("player_result must be win, loss, or draw")
+        if int(record.next_decision_valid) not in (0, 1):
+            raise ValueError("next_decision_valid must be 0 or 1")
+        if int(record.opponent_deck_valid) not in (0, 1):
+            raise ValueError("opponent_deck_valid must be 0 or 1")
+        for name in (
+            "next_select_type",
+            "next_select_context",
+            "opponent_deck_class",
+            "final_own_prize_count",
+        ):
+            if not 0 <= int(getattr(record, name)) <= np.iinfo(np.uint8).max:
+                raise ValueError(f"{name} must fit uint8")
+        if int(record.final_own_prize_count) > 6:
+            raise ValueError("final_own_prize_count must be in [0, 6]")
 
         _validate_unsigned("encoder_index", record.encoder_index, np.iinfo(np.uint16).max)
         _validate_unsigned("encoder_offset", record.encoder_offset, np.iinfo(np.uint16).max)
@@ -549,6 +616,14 @@ class PackedShardWriter:
         self._append("episode_key", int(record.episode_key))
         self._append("deck_key", int(record.deck_key))
         self._append("player_result", int(record.player_result))
+        self._append("next_select_type", int(record.next_select_type))
+        self._append("next_select_context", int(record.next_select_context))
+        self._append("next_decision_valid", int(record.next_decision_valid))
+        self._append("opponent_deck_class", int(record.opponent_deck_class))
+        self._append("opponent_deck_valid", int(record.opponent_deck_valid))
+        self._append(
+            "final_own_prize_count", int(record.final_own_prize_count)
+        )
         self._samples += 1
         self._buffered_samples += 1
         if self._buffered_samples >= self.flush_samples:
@@ -747,6 +822,23 @@ class PackedShard:
             self.arrays["player_result"], tuple(PLAYER_RESULTS)
         ).all():
             raise ValueError("player_result contains an invalid value")
+        auxiliary_fields = (
+            "next_select_type",
+            "next_select_context",
+            "next_decision_valid",
+            "opponent_deck_class",
+            "opponent_deck_valid",
+            "final_own_prize_count",
+        )
+        for name in auxiliary_fields:
+            if self.arrays[name].size != self.samples:
+                raise ValueError(f"{name} length does not match sample count")
+        if np.any(self.arrays["next_decision_valid"] > 1):
+            raise ValueError("next_decision_valid contains an invalid value")
+        if np.any(self.arrays["opponent_deck_valid"] > 1):
+            raise ValueError("opponent_deck_valid contains an invalid value")
+        if np.any(self.arrays["final_own_prize_count"] > 6):
+            raise ValueError("final_own_prize_count contains an invalid value")
         option_count = int(self.arrays["option_ptr"][-1])
         if (
             self.arrays["option_categorical"].size
@@ -880,6 +972,22 @@ class PackedShard:
             episode_key=int(self.arrays["episode_key"][local_id]),
             deck_key=int(self.arrays["deck_key"][local_id]),
             player_result=int(self.arrays["player_result"][local_id]),
+            next_select_type=int(self.arrays["next_select_type"][local_id]),
+            next_select_context=int(
+                self.arrays["next_select_context"][local_id]
+            ),
+            next_decision_valid=int(
+                self.arrays["next_decision_valid"][local_id]
+            ),
+            opponent_deck_class=int(
+                self.arrays["opponent_deck_class"][local_id]
+            ),
+            opponent_deck_valid=int(
+                self.arrays["opponent_deck_valid"][local_id]
+            ),
+            final_own_prize_count=int(
+                self.arrays["final_own_prize_count"][local_id]
+            ),
             history_select_type=self.arrays["history_select_type"][
                 history_fixed_start:history_fixed_start + HISTORY_STEPS
             ],
@@ -1490,6 +1598,12 @@ class MmapFeatureDataset:
         )
         targets = np.empty(global_ids.size, dtype=np.int64)
         action_counts = np.empty(global_ids.size, dtype=np.int64)
+        next_select_types = np.empty(global_ids.size, dtype=np.int64)
+        next_select_contexts = np.empty(global_ids.size, dtype=np.int64)
+        next_decision_valid = np.empty(global_ids.size, dtype=np.bool_)
+        opponent_deck_classes = np.empty(global_ids.size, dtype=np.int64)
+        opponent_deck_valid = np.empty(global_ids.size, dtype=np.bool_)
+        final_own_prize_counts = np.empty(global_ids.size, dtype=np.int64)
         encoder_base = 0
         option_base = 0
         action_option_base = 0
@@ -1546,6 +1660,12 @@ class MmapFeatureDataset:
             )
             targets[row] = sample.target
             action_counts[row] = sample.action_count
+            next_select_types[row] = sample.next_select_type
+            next_select_contexts[row] = sample.next_select_context
+            next_decision_valid[row] = bool(sample.next_decision_valid)
+            opponent_deck_classes[row] = sample.opponent_deck_class
+            opponent_deck_valid[row] = bool(sample.opponent_deck_valid)
+            final_own_prize_counts[row] = sample.final_own_prize_count
             encoder_base += int(sample.encoder_index.size)
             option_base += int(sample.option_categorical.shape[0])
             action_option_base += int(sample.action_option_index.size)
@@ -1595,6 +1715,12 @@ class MmapFeatureDataset:
                 history_attack_dynamic
             ).astype(np.float16, copy=False),
             history_option_offset=history_option_offsets,
+            next_select_type=next_select_types,
+            next_select_context=next_select_contexts,
+            next_decision_valid=next_decision_valid,
+            opponent_deck_class=opponent_deck_classes,
+            opponent_deck_valid=opponent_deck_valid,
+            final_own_prize_count=final_own_prize_counts,
         )
 
     def iter_batches(

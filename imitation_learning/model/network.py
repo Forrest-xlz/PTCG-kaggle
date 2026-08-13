@@ -135,6 +135,12 @@ class ModelConfig:
     history_encoding: str = "off"
     history_action_mlp_layers: int = 1
     history_sequence_mlp_layers: int = 2
+    auxiliary_state_representation: str = "global"
+    next_decision_auxiliary: bool = False
+    opponent_deck_auxiliary: bool = False
+    opponent_deck_class_count: int = 0
+    opponent_deck_class_fingerprint: str = ""
+    final_own_prize_auxiliary: bool = False
 
     def __post_init__(self) -> None:
         if self.norm_mode not in {"prenorm", "postnorm"}:
@@ -210,9 +216,30 @@ class ModelConfig:
                 "history_sequence_mlp_layers must be an integer >= 1 "
                 "when history_encoding is enabled"
             )
+        if self.auxiliary_state_representation not in {"cls", "global"}:
+            raise ValueError(
+                "auxiliary_state_representation must be cls or global"
+            )
+        for name in (
+            "next_decision_auxiliary",
+            "opponent_deck_auxiliary",
+            "final_own_prize_auxiliary",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
+        if self.opponent_deck_auxiliary and self.opponent_deck_class_count < 1:
+            raise ValueError(
+                "opponent_deck_class_count must be >= 1 when enabled"
+            )
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ModelOutput:
+    policy_logits: torch.Tensor
+    auxiliary_logits: dict[str, torch.Tensor]
 
 
 def _projection_mlp(
@@ -528,8 +555,23 @@ class PTCGTransformer(torch.nn.Module):
     ):
         super().__init__()
         self.config = config
-        self.encoder_token_count = ENCODER_TOKENS + int(
-            config.history_encoding != "off"
+        self._state_auxiliary_enabled = (
+            config.opponent_deck_auxiliary
+            or config.final_own_prize_auxiliary
+        )
+        self._use_cls = (
+            self._state_auxiliary_enabled
+            and config.auxiliary_state_representation == "cls"
+        )
+        self.encoder_token_count = (
+            ENCODER_TOKENS
+            + int(config.history_encoding != "off")
+            + int(self._use_cls)
+        )
+        self.cls_token = (
+            torch.nn.Parameter(torch.zeros(1, 1, config.d_model))
+            if self._use_cls
+            else None
         )
         card_feature_table = torch.as_tensor(
             card_feature_table,
@@ -873,6 +915,26 @@ class PTCGTransformer(torch.nn.Module):
             for _ in range(config.decoder_layers)
         )
         self.decoder_fc = torch.nn.Linear(config.d_model, 1)
+        self.next_select_type_head = (
+            torch.nn.Linear(config.d_model, SELECT_TYPE_COUNT)
+            if config.next_decision_auxiliary
+            else None
+        )
+        self.next_select_context_head = (
+            torch.nn.Linear(config.d_model, OPTION_CONTEXT_COUNT)
+            if config.next_decision_auxiliary
+            else None
+        )
+        self.opponent_deck_head = (
+            torch.nn.Linear(config.d_model, config.opponent_deck_class_count)
+            if config.opponent_deck_auxiliary
+            else None
+        )
+        self.final_own_prize_head = (
+            torch.nn.Linear(config.d_model, 7)
+            if config.final_own_prize_auxiliary
+            else None
+        )
 
     def _make_token_mlp(self, layers: int) -> torch.nn.Module | None:
         if layers == 0:
@@ -1309,6 +1371,40 @@ class PTCGTransformer(torch.nn.Module):
             )
         return result
 
+    @staticmethod
+    def _prepend_cls_mask(mask: torch.Tensor) -> torch.Tensor:
+        return torch.cat(
+            (
+                torch.zeros(
+                    (mask.size(0), 1), dtype=torch.bool, device=mask.device
+                ),
+                mask,
+            ),
+            dim=1,
+        )
+
+    def auxiliary_logits(
+        self,
+        decoded_actions: torch.Tensor,
+        state_token: torch.Tensor,
+        selected_actions: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        outputs: dict[str, torch.Tensor] = {}
+        if self.next_select_type_head is not None:
+            batch = torch.arange(
+                decoded_actions.size(0), device=decoded_actions.device
+            )
+            selected = decoded_actions[batch, selected_actions]
+            outputs["next_select_type"] = self.next_select_type_head(selected)
+            outputs["next_select_context"] = (
+                self.next_select_context_head(selected)
+            )
+        if self.opponent_deck_head is not None:
+            outputs["opponent_deck"] = self.opponent_deck_head(state_token)
+        if self.final_own_prize_head is not None:
+            outputs["final_own_prize"] = self.final_own_prize_head(state_token)
+        return outputs
+
     def forward(
         self,
         index_encoder,
@@ -1332,6 +1428,8 @@ class PTCGTransformer(torch.nn.Module):
         attack_dynamic,
         action_option_index,
         action_option_offset,
+        selected_actions=None,
+        return_auxiliary=False,
     ):
         cfg = self.config
         projected_card_features = self.project_card_features()
@@ -1386,6 +1484,10 @@ class PTCGTransformer(torch.nn.Module):
                 history_option_offset,
             )
             encoded = torch.cat((encoded, history_token.unsqueeze(1)), dim=1)
+        if self.cls_token is not None:
+            encoded = torch.cat(
+                (self.cls_token.expand(batch_size, -1, -1), encoded), dim=1
+            )
         if self.encoder_input_norm is not None:
             encoded = self.embedding_dropout(
                 self.encoder_input_norm(encoded)
@@ -1396,6 +1498,10 @@ class PTCGTransformer(torch.nn.Module):
             opponent_summary,
             history_valid if cfg.history_encoding != "off" else None,
         )
+        if self.cls_token is not None:
+            encoder_padding_mask = self._prepend_cls_mask(
+                encoder_padding_mask
+            )
         encoder_out = self.encoder(
             encoded,
             src_key_padding_mask=encoder_padding_mask,
@@ -1424,4 +1530,24 @@ class PTCGTransformer(torch.nn.Module):
             policy = layer(policy, encoder_out, encoder_padding_mask)
         # Return raw logits. Cross entropy applies log-softmax internally, and
         # argmax(logits) is identical to argmax(softmax(logits)) at inference.
-        return self.decoder_fc(policy).transpose(0, 1).reshape(batch_size, -1)
+        decoded_actions = policy.transpose(0, 1)
+        policy_logits = self.decoder_fc(policy).transpose(0, 1).reshape(
+            batch_size, -1
+        )
+        if not return_auxiliary:
+            return policy_logits
+        if selected_actions is None:
+            raise ValueError(
+                "selected_actions is required when return_auxiliary is true"
+            )
+        if self.cls_token is not None:
+            state_token = encoder_out[0]
+        else:
+            # Global summary is token 25 before an optional history token.
+            state_token = encoder_out[25]
+        return ModelOutput(
+            policy_logits=policy_logits,
+            auxiliary_logits=self.auxiliary_logits(
+                decoded_actions, state_token, selected_actions
+            ),
+        )

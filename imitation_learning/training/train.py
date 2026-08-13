@@ -41,7 +41,7 @@ if str(_cg_path) not in sys.path:
 from cg.api import all_attack, all_card_data
 from model.attack_features import build_attack_feature_table
 from model.card_features import build_card_feature_table
-from model.network import ModelConfig, PTCGTransformer
+from model.network import ModelConfig, ModelOutput, PTCGTransformer
 from training.expert_validation import (
     ExpertLoserDateInfo,
     load_expert_date_info,
@@ -62,6 +62,7 @@ from training.feature_cache import (
     MmapFeatureDataset,
     LoserAugmentationCounts,
     stable_deck_key,
+    load_opponent_deck_classes,
 )
 from training.isolation_validation import load_isolation_replay_sets
 from training.precision import PrecisionContext
@@ -123,6 +124,21 @@ class TrainSettings:
 
 
 @dataclass(frozen=True)
+class AuxiliaryTaskSettings:
+    enabled: bool
+    weight: float
+
+
+@dataclass(frozen=True)
+class AuxiliarySettings:
+    state_representation: str
+    opponent_deck_classes: str
+    next_decision: AuxiliaryTaskSettings
+    opponent_deck: AuxiliaryTaskSettings
+    final_own_prize: AuxiliaryTaskSettings
+
+
+@dataclass(frozen=True)
 class ModelSettings:
     d_model: int
     ffn_multiplier: int
@@ -151,6 +167,7 @@ class ModelSettings:
     history_encoding: str = "off"
     history_action_mlp_layers: int = 1
     history_sequence_mlp_layers: int = 2
+    auxiliary: AuxiliarySettings | None = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +208,7 @@ class PolicyMetrics:
 @dataclass(frozen=True, slots=True)
 class BatchResult:
     metrics: PolicyMetrics
+    auxiliary_metrics: dict[str, "AuxiliaryMetrics"]
     grad_norm: float
     learning_rate: float
     optimizer_stepped: bool
@@ -201,7 +219,22 @@ class BatchResult:
 class ValidationResult:
     overall: PolicyMetrics
     subgroups: dict[str, PolicyMetrics]
+    auxiliary_overall: dict[str, "AuxiliaryMetrics"]
+    auxiliary_subgroups: dict[str, dict[str, "AuxiliaryMetrics"]]
     seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class AuxiliaryMetrics:
+    loss: float
+    correct: int
+    samples: int
+
+    def averages(self) -> dict[str, float]:
+        return {
+            "loss": self.loss,
+            "accuracy": self.correct / max(self.samples, 1),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,6 +372,31 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
             for name, path in selections.items()
         },
     )
+    model_raw = dict(raw["model"])
+    auxiliary_raw = model_raw.pop("auxiliary", None)
+    if not isinstance(auxiliary_raw, dict):
+        raise ValueError("model.auxiliary must be a mapping")
+    try:
+        auxiliary_settings = AuxiliarySettings(
+            state_representation=str(auxiliary_raw["state_representation"]),
+            opponent_deck_classes=str(
+                auxiliary_raw["opponent_deck_classes"]
+            ),
+            next_decision=AuxiliaryTaskSettings(
+                **auxiliary_raw["next_decision"]
+            ),
+            opponent_deck=AuxiliaryTaskSettings(
+                **auxiliary_raw["opponent_deck"]
+            ),
+            final_own_prize=AuxiliaryTaskSettings(
+                **auxiliary_raw["final_own_prize"]
+            ),
+        )
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            "model.auxiliary requires state_representation, "
+            "opponent_deck_classes, and three enabled/weight task mappings"
+        ) from exc
     settings = ExperimentSettings(
         version_name=version_name,
         train=TrainSettings(
@@ -346,7 +404,7 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
             loser_augmentation=loser_settings,
             **train_raw,
         ),
-        model=ModelSettings(**raw["model"]),
+        model=ModelSettings(auxiliary=auxiliary_settings, **model_raw),
         wandb=WandbSettings(**raw["wandb"]),
     )
     train, model = settings.train, settings.model
@@ -448,6 +506,26 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError("encoder_layers and decoder_layers must be >= 1")
     if model.norm_mode not in {"prenorm", "postnorm"}:
         raise ValueError("model.norm_mode must be prenorm or postnorm")
+    auxiliary = model.auxiliary
+    if auxiliary is None:
+        raise ValueError("model.auxiliary is required")
+    if auxiliary.state_representation not in {"cls", "global"}:
+        raise ValueError(
+            "model.auxiliary.state_representation must be cls or global"
+        )
+    if not auxiliary.opponent_deck_classes.strip():
+        raise ValueError("model.auxiliary.opponent_deck_classes is required")
+    for name in ("next_decision", "opponent_deck", "final_own_prize"):
+        task = getattr(auxiliary, name)
+        if (
+            type(task.enabled) is not bool
+            or isinstance(task.weight, bool)
+            or not isinstance(task.weight, (int, float))
+            or task.weight < 0
+        ):
+            raise ValueError(
+                f"model.auxiliary.{name} needs boolean enabled and weight >= 0"
+            )
     if type(model.summary_mlp_layers) is not int or model.summary_mlp_layers < 1:
         raise ValueError(
             "model.summary_mlp_layers must be an integer >= 1"
@@ -654,6 +732,11 @@ def feature_signature(config: ModelConfig) -> dict:
         "history_layout": "selected-option-superset-v1",
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
+        "auxiliary_layout": "next-decision-opponent-deck-final-prize-v1",
+        "opponent_deck_class_count": config.opponent_deck_class_count,
+        "opponent_deck_class_fingerprint": (
+            config.opponent_deck_class_fingerprint
+        ),
     }
 
 
@@ -695,8 +778,23 @@ def _forward_batch(
     batch: CachedBatch,
     model: torch.nn.Module,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    logits = model(
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    dict[str, torch.Tensor],
+    dict[str, torch.Tensor],
+]:
+    targets = _to_device(batch.target, device, dtype=torch.long)
+    model_config = getattr(model, "config", None)
+    wants_auxiliary = model_config is not None and any(
+        (
+            model_config.next_decision_auxiliary,
+            model_config.opponent_deck_auxiliary,
+            model_config.final_own_prize_auxiliary,
+        )
+    )
+    model_args = (
         _to_device(batch.encoder_index, device),
         _to_device(batch.encoder_value, device, dtype=torch.float32),
         _to_device(batch.encoder_offset, device),
@@ -729,9 +827,136 @@ def _forward_batch(
         _to_device(batch.action_option_index, device, dtype=torch.long),
         _to_device(batch.action_option_offset, device, dtype=torch.long),
     )
-    targets = _to_device(batch.target, device, dtype=torch.long)
+    output = (
+        model(
+            *model_args,
+            selected_actions=targets,
+            return_auxiliary=True,
+        )
+        if wants_auxiliary
+        else model(*model_args)
+    )
     action_counts = _to_device(batch.action_count, device, dtype=torch.long)
-    return logits, targets, action_counts
+    batch_size = int(targets.numel())
+    zeros = np.zeros(batch_size, dtype=np.uint8)
+    auxiliary_targets = {
+        "next_select_type": _to_device(
+            batch.next_select_type
+            if batch.next_select_type is not None
+            else zeros,
+            device,
+            dtype=torch.long,
+        ),
+        "next_select_context": _to_device(
+            batch.next_select_context
+            if batch.next_select_context is not None
+            else zeros,
+            device,
+            dtype=torch.long,
+        ),
+        "next_decision_valid": _to_device(
+            batch.next_decision_valid
+            if batch.next_decision_valid is not None
+            else zeros,
+            device,
+            dtype=torch.bool,
+        ),
+        "opponent_deck": _to_device(
+            batch.opponent_deck_class
+            if batch.opponent_deck_class is not None
+            else zeros,
+            device,
+            dtype=torch.long,
+        ),
+        "opponent_deck_valid": _to_device(
+            batch.opponent_deck_valid
+            if batch.opponent_deck_valid is not None
+            else zeros,
+            device,
+            dtype=torch.bool,
+        ),
+        "final_own_prize": _to_device(
+            batch.final_own_prize_count
+            if batch.final_own_prize_count is not None
+            else zeros,
+            device,
+            dtype=torch.long,
+        ),
+    }
+    if isinstance(output, ModelOutput):
+        return (
+            output.policy_logits,
+            targets,
+            action_counts,
+            output.auxiliary_logits,
+            auxiliary_targets,
+        )
+    return output, targets, action_counts, {}, auxiliary_targets
+
+
+def auxiliary_classification_metrics(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    valid: torch.Tensor,
+) -> tuple[torch.Tensor, int, int]:
+    valid = valid.to(torch.bool)
+    samples = int(valid.sum().item())
+    if samples == 0:
+        return logits.sum() * 0.0, 0, 0
+    selected_logits = logits[valid]
+    selected_targets = targets[valid]
+    loss = torch.nn.functional.cross_entropy(
+        selected_logits, selected_targets
+    )
+    correct = int(
+        (selected_logits.argmax(dim=1) == selected_targets).sum().item()
+    )
+    return loss, correct, samples
+
+
+def auxiliary_losses_and_metrics(
+    logits: dict[str, torch.Tensor],
+    targets: dict[str, torch.Tensor],
+    settings: AuxiliarySettings,
+) -> tuple[torch.Tensor, dict[str, AuxiliaryMetrics]]:
+    reference = next(iter(logits.values()), None)
+    total = (
+        reference.sum() * 0.0
+        if reference is not None
+        else targets["final_own_prize"].sum() * 0.0
+    )
+    metrics: dict[str, AuxiliaryMetrics] = {}
+
+    def add(name: str, target_name: str, valid: torch.Tensor, weight: float):
+        nonlocal total
+        loss, correct, samples = auxiliary_classification_metrics(
+            logits[name], targets[target_name], valid
+        )
+        total = total + float(weight) * loss
+        metrics[name] = AuxiliaryMetrics(float(loss.item()), correct, samples)
+
+    if settings.next_decision.enabled:
+        valid = targets["next_decision_valid"]
+        add(
+            "next_select_type", "next_select_type", valid,
+            settings.next_decision.weight,
+        )
+        add(
+            "next_select_context", "next_select_context", valid,
+            settings.next_decision.weight,
+        )
+    if settings.opponent_deck.enabled:
+        add(
+            "opponent_deck", "opponent_deck",
+            targets["opponent_deck_valid"], settings.opponent_deck.weight,
+        )
+    if settings.final_own_prize.enabled:
+        add(
+            "final_own_prize", "final_own_prize",
+            torch.ones_like(targets["final_own_prize"], dtype=torch.bool),
+            settings.final_own_prize.weight,
+        )
+    return total, metrics
 
 
 def policy_metrics(
@@ -778,14 +1003,21 @@ def train_batch(
     device: torch.device,
     precision: PrecisionContext,
     grad_clip_norm: float,
+    auxiliary_settings: AuxiliarySettings,
 ) -> BatchResult:
     optimizer.zero_grad(set_to_none=True)
     learning_rate = float(optimizer.param_groups[0]["lr"])
     with precision.autocast():
-        logits, targets, action_counts = _forward_batch(batch, model, device)
+        logits, targets, action_counts, auxiliary_logits, auxiliary_targets = (
+            _forward_batch(batch, model, device)
+        )
         loss, metrics = policy_metrics(logits, targets, action_counts)
+        auxiliary_loss, auxiliary_metrics = auxiliary_losses_and_metrics(
+            auxiliary_logits, auxiliary_targets, auxiliary_settings
+        )
+        total_loss = loss + auxiliary_loss
     step = precision.backward_step(
-        loss=loss,
+        loss=total_loss,
         model=model,
         optimizer=optimizer,
         scheduler=scheduler,
@@ -793,6 +1025,7 @@ def train_batch(
     )
     return BatchResult(
         metrics=metrics,
+        auxiliary_metrics=auxiliary_metrics,
         grad_norm=step.grad_norm,
         learning_rate=learning_rate,
         optimizer_stepped=step.optimizer_stepped,
@@ -808,6 +1041,7 @@ def evaluate_dataset(
     device: torch.device,
     precision: PrecisionContext,
     subgroup_masks: dict[str, np.ndarray],
+    auxiliary_settings: AuxiliarySettings | None = None,
 ) -> ValidationResult:
     indices = np.asarray(indices)
     if indices.ndim != 1:
@@ -826,6 +1060,9 @@ def evaluate_dataset(
 
     totals = {"overall": [0.0, 0, 0, 0, 0]}
     totals.update({name: [0.0, 0, 0, 0, 0] for name in masks})
+    auxiliary_totals: dict[str, dict[str, list[float | int]]] = {
+        name: {} for name in totals
+    }
 
     def accumulate(name: str, metrics: PolicyMetrics) -> None:
         total = totals[name]
@@ -847,6 +1084,31 @@ def evaluate_dataset(
             samples=samples,
         )
 
+    def accumulate_auxiliary(
+        namespace: str, values: dict[str, AuxiliaryMetrics]
+    ) -> None:
+        for task, metrics in values.items():
+            total = auxiliary_totals[namespace].setdefault(
+                task, [0.0, 0, 0]
+            )
+            total[0] += metrics.loss * metrics.samples
+            total[1] += metrics.correct
+            total[2] += metrics.samples
+
+    def finalize_auxiliary(
+        namespace: str,
+    ) -> dict[str, AuxiliaryMetrics]:
+        result = {}
+        for task, (loss_sum, correct, samples) in auxiliary_totals[
+            namespace
+        ].items():
+            result[task] = AuxiliaryMetrics(
+                loss=float(loss_sum) / max(int(samples), 1),
+                correct=int(correct),
+                samples=int(samples),
+            )
+        return result
+
     was_training = model.training
     model.eval()
     started = time.perf_counter()
@@ -856,13 +1118,26 @@ def evaluate_dataset(
                 end = min(start + batch_size, len(indices))
                 batch = dataset.collate(IndexBatch(indices[start:end]))
                 with precision.autocast():
-                    logits, targets, action_counts = _forward_batch(
+                    (
+                        logits,
+                        targets,
+                        action_counts,
+                        auxiliary_logits,
+                        auxiliary_targets,
+                    ) = _forward_batch(
                         batch, model, device
                     )
                     _, metrics = policy_metrics(
                         logits, targets, action_counts
                     )
                     accumulate("overall", metrics)
+                    if auxiliary_settings is not None:
+                        _, aux_metrics = auxiliary_losses_and_metrics(
+                            auxiliary_logits,
+                            auxiliary_targets,
+                            auxiliary_settings,
+                        )
+                        accumulate_auxiliary("overall", aux_metrics)
                     for name, mask in masks.items():
                         selected = torch.from_numpy(mask[start:end]).to(
                             device=device
@@ -874,11 +1149,30 @@ def evaluate_dataset(
                                 action_counts[selected],
                             )
                             accumulate(name, subgroup_metrics)
+                            if auxiliary_settings is not None:
+                                selected_logits = {
+                                    task: value[selected]
+                                    for task, value in auxiliary_logits.items()
+                                }
+                                selected_targets = {
+                                    task: value[selected]
+                                    for task, value in auxiliary_targets.items()
+                                }
+                                _, subgroup_aux = auxiliary_losses_and_metrics(
+                                    selected_logits,
+                                    selected_targets,
+                                    auxiliary_settings,
+                                )
+                                accumulate_auxiliary(name, subgroup_aux)
     finally:
         model.train(was_training)
     return ValidationResult(
         overall=finalize("overall"),
         subgroups={name: finalize(name) for name in masks},
+        auxiliary_overall=finalize_auxiliary("overall"),
+        auxiliary_subgroups={
+            name: finalize_auxiliary(name) for name in masks
+        },
         seconds=time.perf_counter() - started,
     )
 
@@ -943,6 +1237,32 @@ def _log_validation(
         wandb_run.log(payload)
 
 
+def _log_auxiliary_validation(
+    namespace: str,
+    metrics: dict[str, AuxiliaryMetrics],
+    global_step: int,
+    wandb_run,
+) -> None:
+    for task, task_metrics in metrics.items():
+        averages = task_metrics.averages()
+        task_namespace = f"{namespace}_{task}"
+        payload = {
+            f"{task_namespace}/loss": averages["loss"],
+            f"{task_namespace}/accuracy": averages["accuracy"],
+            f"{task_namespace}/samples": task_metrics.samples,
+            "optimizer_step": global_step,
+        }
+        print(
+            f"{task_namespace} step={global_step:,} "
+            f"samples={task_metrics.samples:,} "
+            f"loss={averages['loss']:.4f} "
+            f"accuracy={averages['accuracy']:.3f}",
+            flush=True,
+        )
+        if wandb_run is not None:
+            wandb_run.log(payload)
+
+
 def top_deck_subgroup_masks(
     scope: str,
     deck_masks: tuple[np.ndarray, ...],
@@ -977,6 +1297,11 @@ def main() -> None:
 
     cards = all_card_data()
     attacks = all_attack()
+    opponent_deck_classes, opponent_class_fingerprint = (
+        load_opponent_deck_classes(
+            project_path(model_cfg.auxiliary.opponent_deck_classes)
+        )
+    )
     config = ModelConfig(
         card_count=max(card.cardId for card in cards) + 1,
         attack_count=max(attack.attackId for attack in attacks) + 1,
@@ -1007,6 +1332,16 @@ def main() -> None:
         history_encoding=model_cfg.history_encoding,
         history_action_mlp_layers=model_cfg.history_action_mlp_layers,
         history_sequence_mlp_layers=model_cfg.history_sequence_mlp_layers,
+        auxiliary_state_representation=(
+            model_cfg.auxiliary.state_representation
+        ),
+        next_decision_auxiliary=model_cfg.auxiliary.next_decision.enabled,
+        opponent_deck_auxiliary=model_cfg.auxiliary.opponent_deck.enabled,
+        opponent_deck_class_count=len(opponent_deck_classes),
+        opponent_deck_class_fingerprint=opponent_class_fingerprint,
+        final_own_prize_auxiliary=(
+            model_cfg.auxiliary.final_own_prize.enabled
+        ),
     )
     invalid_card_ids = sorted(
         {
@@ -1436,6 +1771,7 @@ def main() -> None:
             device=device,
             precision=precision,
             subgroup_masks=splits.isolation_masks,
+            auxiliary_settings=model_cfg.auxiliary,
         )
         print(
             f"isolation_union step={global_step:,} "
@@ -1450,6 +1786,12 @@ def main() -> None:
                 namespace,
                 metrics,
                 None,
+                global_step,
+                wandb_run,
+            )
+            _log_auxiliary_validation(
+                namespace,
+                isolation_result.auxiliary_subgroups[namespace],
                 global_step,
                 wandb_run,
             )
@@ -1488,6 +1830,7 @@ def main() -> None:
                 device=device,
                 precision=precision,
                 subgroup_masks=subgroup_masks,
+                auxiliary_settings=model_cfg.auxiliary,
             )
             _log_validation(
                 namespace,
@@ -1496,11 +1839,23 @@ def main() -> None:
                 global_step,
                 wandb_run,
             )
+            _log_auxiliary_validation(
+                namespace,
+                result.auxiliary_overall,
+                global_step,
+                wandb_run,
+            )
             for subgroup_namespace, metrics in result.subgroups.items():
                 _log_validation(
                     subgroup_namespace,
                     metrics,
                     None,
+                    global_step,
+                    wandb_run,
+                )
+                _log_auxiliary_validation(
+                    subgroup_namespace,
+                    result.auxiliary_subgroups[subgroup_namespace],
                     global_step,
                     wandb_run,
                 )
@@ -1529,6 +1884,7 @@ def main() -> None:
                     device=device,
                     precision=precision,
                     grad_clip_norm=train_cfg.grad_clip_norm,
+                    auxiliary_settings=model_cfg.auxiliary,
                 )
                 train_compute_seconds += time.perf_counter() - batch_started
                 metrics = result.metrics
@@ -1569,6 +1925,17 @@ def main() -> None:
                         "train/skipped_optimizer_steps": skipped_updates,
                         "optimizer_step": global_step,
                     }
+                    for task, task_metrics in result.auxiliary_metrics.items():
+                        task_average = task_metrics.averages()
+                        payload.update(
+                            {
+                                f"train_{task}/loss": task_average["loss"],
+                                f"train_{task}/accuracy": task_average[
+                                    "accuracy"
+                                ],
+                                f"train_{task}/samples": task_metrics.samples,
+                            }
+                        )
                     print(
                         f"epoch={epoch} step={global_step:,} "
                         f"samples={train_samples_seen:,} "

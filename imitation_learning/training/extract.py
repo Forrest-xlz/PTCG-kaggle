@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -23,7 +24,7 @@ from deck.extract import extract_decks
 
 
 CONFIG_PATH = PROJECT_ROOT / "cfg" / "extract.yaml"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,56 @@ def _player_results(
     )
 
 
+def _exact_deck_id(deck: list[int]) -> str:
+    canonical = ",".join(map(str, sorted(map(int, deck))))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest().upper()
+    return f"D-{digest[:12]}"
+
+
+def _annotate_auxiliary_labels(
+    records_by_player: dict[int, list[dict]],
+    decks: list[list[int]],
+    final_own_prize_counts: list[int],
+) -> None:
+    deck_ids = [_exact_deck_id(deck) for deck in decks]
+    for player, records in records_by_player.items():
+        if not records:
+            continue
+        opponent = 1 - player
+        for index, record in enumerate(records):
+            has_next = index + 1 < len(records)
+            next_select = (
+                records[index + 1]["observation"].get("select") or {}
+                if has_next
+                else {}
+            )
+            record["next_decision_valid"] = has_next
+            record["next_select_type"] = int(next_select.get("type") or 0)
+            record["next_select_context"] = int(next_select.get("context") or 0)
+            record["opponent_deck_id"] = deck_ids[opponent]
+            record["final_own_prize_count"] = final_own_prize_counts[player]
+
+
+def _final_own_prize_counts(steps: list, player_count: int) -> list[int]:
+    counts: list[int] = []
+    for player in range(player_count):
+        for step in reversed(steps):
+            if player >= len(step):
+                continue
+            observation = step[player].get("observation") or {}
+            current = observation.get("current") or {}
+            players = current.get("players") or []
+            try:
+                yours = int(current["yourIndex"])
+                counts.append(len(players[yours].get("prize") or []))
+                break
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+        else:
+            raise ValueError(f"player {player} has no valid prize observation")
+    return counts
+
+
 def process_archive(job):
     archive = Path(job[0])
     output = Path(job[1])
@@ -129,6 +180,8 @@ def process_archive(job):
             if (
                 cached.get("schema_version") == SCHEMA_VERSION
                 and cached.get("player_results") == "win-loss-draw"
+                and cached.get("auxiliary_labels")
+                == "next-decision-opponent-deck-final-prize-v1"
             ):
                 return {"archive": archive.name, "status": "skipped"}
         except (OSError, json.JSONDecodeError):
@@ -167,17 +220,26 @@ def process_archive(job):
                         "EpisodeId", Path(member.filename).stem
                     )
                     steps = replay.get("steps", [])
+                    final_own_prizes = _final_own_prize_counts(
+                        steps, len(decks)
+                    )
+                    records_by_player = {}
                     for player in range(len(decks)):
                         if player >= len(decks):
                             continue
-                        for record in _iter_player_records(
+                        records_by_player[player] = list(_iter_player_records(
                             steps,
                             player,
                             episode,
                             archive.stem,
                             decks[player],
                             player_results[player],
-                        ):
+                        ))
+                    _annotate_auxiliary_labels(
+                        records_by_player, decks, final_own_prizes
+                    )
+                    for player in range(len(decks)):
+                        for record in records_by_player.get(player, []):
                             destination.write(
                                 json.dumps(record, separators=(",", ":")) + "\n"
                             )
@@ -197,6 +259,7 @@ def process_archive(job):
     summary = {
         "schema_version": SCHEMA_VERSION,
         "player_results": "win-loss-draw",
+        "auxiliary_labels": "next-decision-opponent-deck-final-prize-v1",
         "archive": archive.name,
         "status": "written",
         "episodes": episodes,

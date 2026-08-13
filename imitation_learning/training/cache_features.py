@@ -65,6 +65,7 @@ from training.feature_cache import (
     PackedShardWriter,
     stable_deck_key,
     stable_episode_key,
+    load_opponent_deck_classes,
 )
 
 
@@ -128,6 +129,7 @@ class CacheSettings:
     workers: int
     samples_per_shard: int
     force: bool
+    opponent_deck_classes: str
 
 
 def project_path(value: str) -> Path:
@@ -149,7 +151,11 @@ def load_settings(path: Path = CONFIG_PATH) -> CacheSettings:
     return settings
 
 
-def feature_signature(config: ModelConfig) -> dict:
+def feature_signature(
+    config: ModelConfig,
+    opponent_deck_class_count: int = 0,
+    opponent_deck_class_fingerprint: str = "",
+) -> dict:
     return {
         "card_count": config.card_count,
         "attack_count": config.attack_count,
@@ -167,6 +173,9 @@ def feature_signature(config: ModelConfig) -> dict:
         "history_layout": "selected-option-superset-v1",
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
+        "auxiliary_layout": "next-decision-opponent-deck-final-prize-v1",
+        "opponent_deck_class_count": int(opponent_deck_class_count),
+        "opponent_deck_class_fingerprint": opponent_deck_class_fingerprint,
     }
 
 
@@ -174,6 +183,7 @@ def _prepare_record(
     record: dict,
     config: ModelConfig,
     history: list[HistoryActionFeatures] | None = None,
+    opponent_deck_classes: dict[str, int] | None = None,
 ) -> tuple[
     FeatureRecord | None,
     str | None,
@@ -216,6 +226,9 @@ def _prepare_record(
         encoded_options=decoder,
     )
     packed_history = _pack_history(list(history or []))
+    opponent_class = (opponent_deck_classes or {}).get(
+        str(record.get("opponent_deck_id", ""))
+    )
     return (
         FeatureRecord(
             encoder_index=encoder.sparse.index,
@@ -236,6 +249,12 @@ def _prepare_record(
             episode_key=stable_episode_key(record["episode_id"]),
             deck_key=stable_deck_key(record["deck"]),
             player_result=PLAYER_RESULT_CODES[record["player_result"]],
+            next_select_type=int(record.get("next_select_type", 0)),
+            next_select_context=int(record.get("next_select_context", 0)),
+            next_decision_valid=int(bool(record.get("next_decision_valid", False))),
+            opponent_deck_class=int(opponent_class or 0),
+            opponent_deck_valid=int(opponent_class is not None),
+            final_own_prize_count=int(record["final_own_prize_count"]),
             **packed_history,
         ),
         None,
@@ -263,9 +282,13 @@ def _source_meta(path: Path) -> dict:
             f"{path.name} does not contain win/loss/draw player results; "
             "rerun training.extract"
         )
-    if int(payload.get("schema_version", 0)) < 4:
+    if (
+        int(payload.get("schema_version", 0)) != 5
+        or payload.get("auxiliary_labels")
+        != "next-decision-opponent-deck-final-prize-v1"
+    ):
         raise ValueError(
-            f"{path.name} uses the old action alignment; rerun training.extract"
+            f"{path.name} does not contain multitask labels; rerun training.extract"
         )
     return payload
 
@@ -354,6 +377,7 @@ def process_source(job) -> dict:
     signature = job[3]
     samples_per_shard = int(job[4])
     force = bool(job[5])
+    opponent_deck_classes = job[6]
     stem = _source_stem(source)
     _source_meta(source)
 
@@ -394,6 +418,7 @@ def process_source(job) -> dict:
                         raw_record,
                         config,
                         list(player_history),
+                        opponent_deck_classes,
                     )
                     if current_action is not None:
                         player_history.append(current_action)
@@ -469,7 +494,12 @@ def main() -> None:
         card_count=max(card.cardId for card in cards) + 1,
         attack_count=max(attack.attackId for attack in all_attack()) + 1,
     )
-    signature = feature_signature(config)
+    opponent_deck_classes, class_fingerprint = load_opponent_deck_classes(
+        project_path(settings.opponent_deck_classes)
+    )
+    signature = feature_signature(
+        config, len(opponent_deck_classes), class_fingerprint
+    )
     jobs = [
         (
             str(source),
@@ -478,6 +508,7 @@ def main() -> None:
             signature,
             settings.samples_per_shard,
             settings.force,
+            opponent_deck_classes,
         )
         for source in sources
     ]
