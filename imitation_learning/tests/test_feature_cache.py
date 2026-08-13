@@ -282,6 +282,54 @@ def test_splits_keep_validation_winner_only_and_add_qualified_losses(
         dataset.close()
 
 
+def test_full_training_selection_uses_every_date_and_qualified_losses(
+    tmp_path: Path,
+) -> None:
+    old_path = tmp_path / "7.23-part.cache"
+    writer = PackedShardWriter(
+        old_path, SIGNATURE, {"name": "7.23.jsonl.gz"}
+    )
+    writer.add(record(1, episode_id="old", player_result=PLAYER_RESULT_WIN))
+    writer.add(record(2, episode_id="old", player_result=PLAYER_RESULT_LOSS))
+    writer.finalize()
+
+    latest_path = tmp_path / "7.24-part.cache"
+    writer = PackedShardWriter(
+        latest_path, SIGNATURE, {"name": "7.24.jsonl.gz"}
+    )
+    writer.add(
+        record(3, episode_id="latest", player_result=PLAYER_RESULT_WIN)
+    )
+    writer.add(
+        record(4, episode_id="latest", player_result=PLAYER_RESULT_LOSS)
+    )
+    writer.add(
+        record(5, episode_id="draw", player_result=PLAYER_RESULT_DRAW)
+    )
+    writer.finalize()
+
+    dataset = MmapFeatureDataset(tmp_path, SIGNATURE)
+    try:
+        selection = dataset.build_training_indices(
+            loser_episode_keys={
+                (7, 24): {stable_episode_key("latest")},
+            },
+        )
+
+        np.testing.assert_array_equal(selection.train, [0, 2, 3])
+        assert selection.eligible_train_samples == 3
+        assert selection.eligible_train_replays == 2
+        assert selection.selected_train_replays == 2
+        assert selection.loser_augmentation_samples == 1
+        assert selection.loser_augmentation_replays == 1
+        counts = selection.loser_augmentation_counts[(7, 24)]
+        assert counts.score_eligible_episodes == 1
+        assert counts.selected_train_episodes == 1
+        assert counts.loser_samples == 1
+    finally:
+        dataset.close()
+
+
 def test_writer_rejects_encoder_index_outside_uint16(tmp_path: Path) -> None:
     writer = PackedShardWriter(tmp_path / "bad.cache", SIGNATURE, {})
     bad = record(7)

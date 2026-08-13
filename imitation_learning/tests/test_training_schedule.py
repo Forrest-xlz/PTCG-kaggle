@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,23 @@ def test_step_trigger_uses_positive_optimizer_steps() -> None:
     assert should_trigger(100, 100)
     assert not should_trigger(100, 99)
     assert not should_trigger(100, 0)
+
+
+def test_train_yaml_has_no_training_time_validation_settings() -> None:
+    config = yaml.safe_load(
+        (PROJECT_ROOT / "cfg" / "train.yaml").read_text(encoding="utf-8")
+    )
+    train = config["train"]
+    validation_only = {
+        "eval_every_steps",
+        "validation_ratio",
+        "validation_seed",
+        "expert_validation_ratio",
+        "isolation_validation",
+        "top_decks",
+    }
+
+    assert validation_only.isdisjoint(train)
 
 
 def test_epoch_checkpoint_restores_state_and_returns_next_epoch(tmp_path: Path) -> None:

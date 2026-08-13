@@ -169,38 +169,44 @@ def load_settings(path: Path = CONFIG_PATH) -> ValidationSettings:
             "disabled validation ensemble requires exactly one checkpoint"
         )
 
-    validation_seed = _required(train, "validation_seed", "train")
+    validation_seed = _required(
+        validation, "validation_seed", "validation"
+    )
     if isinstance(validation_seed, bool) or not isinstance(validation_seed, int):
-        raise ValueError("train.validation_seed must be an integer")
+        raise ValueError("validation.validation_seed must be an integer")
 
     isolation = _mapping(
-        _required(train, "isolation_validation", "train"),
-        "train.isolation_validation",
+        _required(validation, "isolation_validation", "validation"),
+        "validation.isolation_validation",
     )
     raw_selections = _mapping(
-        _required(isolation, "selections", "train.isolation_validation"),
-        "train.isolation_validation.selections",
+        _required(
+            isolation, "selections", "validation.isolation_validation"
+        ),
+        "validation.isolation_validation.selections",
     )
     if set(raw_selections) != set(ISOLATION_SELECTION_NAMES):
         raise ValueError(
-            "train.isolation_validation.selections must contain exactly "
+            "validation.isolation_validation.selections must contain exactly "
             f"{list(ISOLATION_SELECTION_NAMES)}"
         )
     selections = {
         name: _project_path(
             raw_selections[name],
-            f"train.isolation_validation.selections.{name}",
+            f"validation.isolation_validation.selections.{name}",
         )
         for name in ISOLATION_SELECTION_NAMES
     }
 
-    raw_top_decks = _required(train, "top_decks", "train")
+    raw_top_decks = _required(validation, "top_decks", "validation")
     if not isinstance(raw_top_decks, list) or not raw_top_decks:
-        raise ValueError("train.top_decks must be a non-empty list")
+        raise ValueError("validation.top_decks must be a non-empty list")
     top_decks: list[tuple[int, ...]] = []
     for index, raw_deck in enumerate(raw_top_decks, start=1):
         if not isinstance(raw_deck, list) or len(raw_deck) != 60:
-            raise ValueError(f"train.top_decks[{index}] must contain 60 cards")
+            raise ValueError(
+                f"validation.top_decks[{index}] must contain 60 cards"
+            )
         if any(
             isinstance(card_id, bool)
             or not isinstance(card_id, int)
@@ -208,7 +214,7 @@ def load_settings(path: Path = CONFIG_PATH) -> ValidationSettings:
             for card_id in raw_deck
         ):
             raise ValueError(
-                f"train.top_decks[{index}] must contain non-negative card IDs"
+                f"validation.top_decks[{index}] must contain non-negative card IDs"
             )
         top_decks.append(tuple(raw_deck))
 
@@ -229,19 +235,23 @@ def load_settings(path: Path = CONFIG_PATH) -> ValidationSettings:
         device=device,
         precision=precision,
         validation_ratio=_ratio(
-            _required(train, "validation_ratio", "train"),
-            "train.validation_ratio",
+            _required(validation, "validation_ratio", "validation"),
+            "validation.validation_ratio",
             allow_one=False,
         ),
         validation_seed=validation_seed,
         expert_validation_ratio=_ratio(
-            _required(train, "expert_validation_ratio", "train"),
-            "train.expert_validation_ratio",
+            _required(
+                validation, "expert_validation_ratio", "validation"
+            ),
+            "validation.expert_validation_ratio",
             allow_one=True,
         ),
         isolation_deck_data=_project_path(
-            _required(isolation, "deck_data", "train.isolation_validation"),
-            "train.isolation_validation.deck_data",
+            _required(
+                isolation, "deck_data", "validation.isolation_validation"
+            ),
+            "validation.isolation_validation.deck_data",
         ),
         isolation_selections=selections,
         top_decks=tuple(top_decks),
