@@ -1,6 +1,8 @@
+import threading
+
 import torch
 
-from training.train import auxiliary_classification_metrics
+from training.train import auxiliary_classification_metrics, prefetch_iterable
 
 
 def test_masked_auxiliary_ce_ignores_invalid_rows() -> None:
@@ -42,3 +44,20 @@ def test_masked_auxiliary_ce_does_not_backpropagate_invalid_rows() -> None:
     loss.backward()
 
     assert torch.count_nonzero(logits.grad[1]).item() == 0
+
+
+def test_prefetch_iterable_requests_next_item_in_background() -> None:
+    requested_second = threading.Event()
+    release_second = threading.Event()
+
+    def source():
+        yield 1
+        requested_second.set()
+        release_second.wait(timeout=2)
+        yield 2
+
+    values = prefetch_iterable(source(), buffer_size=1)
+    assert next(values) == 1
+    assert requested_second.wait(timeout=1)
+    release_second.set()
+    assert next(values) == 2

@@ -6,6 +6,8 @@ import math
 import random
 import re
 import sys
+import queue
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -121,6 +123,7 @@ class TrainSettings:
     train_replay_ratio: float
     train_replay_seed: int
     grad_clip_norm: float
+    prefetch_batches: int
 
 
 @dataclass(frozen=True)
@@ -460,6 +463,8 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError("learning rate must be positive and weight decay non-negative")
     if train.grad_clip_norm <= 0:
         raise ValueError("train.grad_clip_norm must be positive")
+    if type(train.prefetch_batches) is not int or train.prefetch_batches < 0:
+        raise ValueError("train.prefetch_batches must be an integer >= 0")
     if not 0 <= train.beta1 < 1 or not 0 <= train.beta2 < 1:
         raise ValueError("train.beta1 and train.beta2 must be in [0, 1)")
     if not 0 <= train.ema_alpha < 1:
@@ -782,6 +787,34 @@ def resolve_output_root(
 
 def should_trigger(interval: int, global_step: int) -> bool:
     return global_step > 0 and global_step % interval == 0
+
+
+def prefetch_iterable(iterable, buffer_size: int):
+    """Prepare upcoming CPU batches on one bounded background thread."""
+    if buffer_size < 1:
+        yield from iterable
+        return
+    buffer: queue.Queue = queue.Queue(maxsize=buffer_size)
+    sentinel = object()
+
+    def produce() -> None:
+        try:
+            for item in iterable:
+                buffer.put((item, None))
+        except BaseException as exc:
+            buffer.put((sentinel, exc))
+        else:
+            buffer.put((sentinel, None))
+
+    worker = threading.Thread(target=produce, daemon=True)
+    worker.start()
+    while True:
+        item, error = buffer.get()
+        if item is sentinel:
+            if error is not None:
+                raise error
+            return
+        yield item
 
 
 def _to_device(
@@ -1763,6 +1796,7 @@ def main() -> None:
     skipped_updates = 0
     train_samples_seen = 0
     train_compute_seconds = 0.0
+    train_data_wait_seconds = 0.0
     last_eval_step = -1
     total_training_start = time.perf_counter()
 
@@ -1890,13 +1924,26 @@ def main() -> None:
             model.train()
             epoch_loss_sum = 0.0
             epoch_top1 = epoch_top3 = epoch_top5 = epoch_samples = 0
-            for batch in dataset.iter_batches(
-                indices=splits.train,
-                batch_size=train_cfg.batch_size,
-                seed=train_cfg.seed + epoch_index,
-                shuffle=True,
-                max_samples=train_cfg.max_samples,
-            ):
+            batches = prefetch_iterable(
+                dataset.iter_batches(
+                    indices=splits.train,
+                    batch_size=train_cfg.batch_size,
+                    seed=train_cfg.seed + epoch_index,
+                    shuffle=True,
+                    max_samples=train_cfg.max_samples,
+                ),
+                buffer_size=train_cfg.prefetch_batches,
+            )
+            batch_iterator = iter(batches)
+            while True:
+                data_wait_started = time.perf_counter()
+                try:
+                    batch = next(batch_iterator)
+                except StopIteration:
+                    break
+                train_data_wait_seconds += (
+                    time.perf_counter() - data_wait_started
+                )
                 batch_started = time.perf_counter()
                 result = train_batch(
                     batch=batch,
@@ -1931,7 +1978,12 @@ def main() -> None:
 
                 if should_trigger(train_cfg.log_every_steps, global_step):
                     samples_per_second = train_samples_seen / max(
-                        train_compute_seconds, 1e-9
+                        train_compute_seconds + train_data_wait_seconds,
+                        1e-9,
+                    )
+                    data_wait_ratio = train_data_wait_seconds / max(
+                        train_compute_seconds + train_data_wait_seconds,
+                        1e-9,
                     )
                     payload = {
                         "train/ema_loss": ema_values["loss"],
@@ -1943,6 +1995,8 @@ def main() -> None:
                         "train/learning_rate": result.learning_rate,
                         "train/samples": train_samples_seen,
                         "train/samples_per_second": samples_per_second,
+                        "train/data_wait_seconds": train_data_wait_seconds,
+                        "train/data_wait_ratio": data_wait_ratio,
                         "train/epoch": epoch,
                         "train/skipped_optimizer_steps": skipped_updates,
                         "optimizer_step": global_step,
@@ -1967,6 +2021,7 @@ def main() -> None:
                         f"top3_ema={ema_values['top3']:.3f} "
                         f"top5_ema={ema_values['top5']:.3f} "
                         f"lr={result.learning_rate:.3e} "
+                        f"data_wait={data_wait_ratio:.1%} "
                         f"samples/s={samples_per_second:.1f}",
                         flush=True,
                     )

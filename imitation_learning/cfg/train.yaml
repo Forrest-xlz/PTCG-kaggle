@@ -61,6 +61,7 @@ train:
   train_replay_ratio: 1.0
   train_replay_seed: 42
   grad_clip_norm: 1.0
+  prefetch_batches: 2  # CPU batches prepared ahead while the GPU trains.
 
 model:
   d_model: 512
