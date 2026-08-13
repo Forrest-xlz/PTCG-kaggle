@@ -38,6 +38,7 @@ from training.train import (
     format_loser_augmentation_line,
     load_settings,
     select_loser_augmentation_dates,
+    training_throughput_metrics,
 )
 
 
@@ -46,6 +47,33 @@ def test_ema_initializes_from_first_value_and_persists() -> None:
     assert ema.update(2.0) == pytest.approx(2.0)
     assert ema.update(1.0) == pytest.approx(1.99)
     assert ema.update(0.0) == pytest.approx(1.9701)
+
+
+def test_training_throughput_separates_data_compute_and_end_to_end() -> None:
+    metrics = training_throughput_metrics(
+        samples=1_000,
+        data_seconds=0.25,
+        compute_seconds=0.75,
+    )
+
+    assert metrics["data_samples_per_second"] == pytest.approx(4_000)
+    assert metrics["compute_samples_per_second"] == pytest.approx(4_000 / 3)
+    assert metrics["end_to_end_samples_per_second"] == pytest.approx(1_000)
+    assert metrics["samples_per_second"] == pytest.approx(1_000)
+    assert metrics["data_wait_ratio"] == pytest.approx(0.25)
+
+
+def test_training_throughput_handles_zero_data_time() -> None:
+    metrics = training_throughput_metrics(
+        samples=1_000,
+        data_seconds=0.0,
+        compute_seconds=0.5,
+    )
+
+    assert metrics["data_samples_per_second"] == 0.0
+    assert metrics["compute_samples_per_second"] == pytest.approx(2_000)
+    assert metrics["end_to_end_samples_per_second"] == pytest.approx(2_000)
+    assert metrics["data_wait_ratio"] == 0.0
 
 
 def test_loser_augmentation_dates_exclude_latest_validation_date() -> None:

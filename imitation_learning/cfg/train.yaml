@@ -61,8 +61,8 @@ train:
   train_replay_ratio: 1.0
   train_replay_seed: 42
   grad_clip_norm: 1.0
-  prefetch_workers: 4  # 0=sync, 1=thread, >=2=spawned collate processes.
-  prefetch_batches: 8  # Max CPU batches running or waiting for the GPU.
+  prefetch_workers: 0  # Default sync; 1=thread, >=2=spawned processes.
+  prefetch_batches: 0  # Zero disables background batch preparation.
 
 model:
   d_model: 512

@@ -794,6 +794,24 @@ def should_trigger(interval: int, global_step: int) -> bool:
     return global_step > 0 and global_step % interval == 0
 
 
+def training_throughput_metrics(
+    samples: int,
+    data_seconds: float,
+    compute_seconds: float,
+) -> dict[str, float]:
+    total_seconds = data_seconds + compute_seconds
+    end_to_end = samples / max(total_seconds, 1e-9)
+    return {
+        "data_samples_per_second": (
+            samples / data_seconds if data_seconds > 0 else 0.0
+        ),
+        "compute_samples_per_second": samples / max(compute_seconds, 1e-9),
+        "end_to_end_samples_per_second": end_to_end,
+        "samples_per_second": end_to_end,
+        "data_wait_ratio": data_seconds / max(total_seconds, 1e-9),
+    }
+
+
 def _to_device(
     array: np.ndarray,
     device: torch.device,
@@ -1958,13 +1976,10 @@ def main() -> None:
                 global_step += 1
 
                 if should_trigger(train_cfg.log_every_steps, global_step):
-                    samples_per_second = train_samples_seen / max(
-                        train_compute_seconds + train_data_wait_seconds,
-                        1e-9,
-                    )
-                    data_wait_ratio = train_data_wait_seconds / max(
-                        train_compute_seconds + train_data_wait_seconds,
-                        1e-9,
+                    throughput = training_throughput_metrics(
+                        samples=train_samples_seen,
+                        data_seconds=train_data_wait_seconds,
+                        compute_seconds=train_compute_seconds,
                     )
                     payload = {
                         "train/ema_loss": ema_values["loss"],
@@ -1975,9 +1990,22 @@ def main() -> None:
                         "train/grad_scale": result.grad_scale,
                         "train/learning_rate": result.learning_rate,
                         "train/samples": train_samples_seen,
-                        "train/samples_per_second": samples_per_second,
+                        "train/data_samples_per_second": throughput[
+                            "data_samples_per_second"
+                        ],
+                        "train/compute_samples_per_second": throughput[
+                            "compute_samples_per_second"
+                        ],
+                        "train/end_to_end_samples_per_second": throughput[
+                            "end_to_end_samples_per_second"
+                        ],
+                        "train/samples_per_second": throughput[
+                            "samples_per_second"
+                        ],
                         "train/data_wait_seconds": train_data_wait_seconds,
-                        "train/data_wait_ratio": data_wait_ratio,
+                        "train/data_wait_ratio": throughput[
+                            "data_wait_ratio"
+                        ],
                         "train/epoch": epoch,
                         "train/skipped_optimizer_steps": skipped_updates,
                         "optimizer_step": global_step,
@@ -2002,8 +2030,12 @@ def main() -> None:
                         f"top3_ema={ema_values['top3']:.3f} "
                         f"top5_ema={ema_values['top5']:.3f} "
                         f"lr={result.learning_rate:.3e} "
-                        f"data_wait={data_wait_ratio:.1%} "
-                        f"samples/s={samples_per_second:.1f}",
+                        f"data_wait={throughput['data_wait_ratio']:.1%} "
+                        "data_samples/s="
+                        f"{throughput['data_samples_per_second']:.1f} "
+                        "compute_samples/s="
+                        f"{throughput['compute_samples_per_second']:.1f} "
+                        f"samples/s={throughput['samples_per_second']:.1f}",
                         flush=True,
                     )
                     if wandb_run is not None:
