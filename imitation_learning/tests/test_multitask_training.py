@@ -13,8 +13,12 @@ def test_masked_auxiliary_ce_ignores_invalid_rows() -> None:
     )
 
     assert loss.item() < 0.1
-    assert correct == 2
-    assert samples == 2
+    assert isinstance(correct, torch.Tensor)
+    assert isinstance(samples, torch.Tensor)
+    assert correct.dtype == torch.int64
+    assert samples.dtype == torch.int64
+    assert correct.item() == 2
+    assert samples.item() == 2
 
 
 def test_empty_auxiliary_mask_returns_differentiable_zero() -> None:
@@ -24,6 +28,17 @@ def test_empty_auxiliary_mask_returns_differentiable_zero() -> None:
     )
     loss.backward()
     assert loss.item() == 0.0
-    assert correct == 0
-    assert samples == 0
+    assert correct.item() == 0
+    assert samples.item() == 0
     assert logits.grad is not None
+
+
+def test_masked_auxiliary_ce_does_not_backpropagate_invalid_rows() -> None:
+    logits = torch.randn(3, 4, requires_grad=True)
+    targets = torch.tensor([0, 1, 2])
+    valid = torch.tensor([True, False, True])
+
+    loss, _, _ = auxiliary_classification_metrics(logits, targets, valid)
+    loss.backward()
+
+    assert torch.count_nonzero(logits.grad[1]).item() == 0

@@ -208,7 +208,7 @@ class PolicyMetrics:
 @dataclass(frozen=True, slots=True)
 class BatchResult:
     metrics: PolicyMetrics
-    auxiliary_metrics: dict[str, "AuxiliaryMetrics"]
+    auxiliary_metrics: dict[str, "AuxiliaryTensorMetrics"]
     grad_norm: float
     learning_rate: float
     optimizer_stepped: bool
@@ -235,6 +235,28 @@ class AuxiliaryMetrics:
             "loss": self.loss,
             "accuracy": self.correct / max(self.samples, 1),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class AuxiliaryTensorMetrics:
+    loss_sum: torch.Tensor
+    correct: torch.Tensor
+    samples: torch.Tensor
+
+    def to_metrics(self) -> AuxiliaryMetrics:
+        values = torch.stack(
+            (
+                self.loss_sum.float(),
+                self.correct.float(),
+                self.samples.float(),
+            )
+        ).detach().cpu().tolist()
+        loss_sum, correct, samples = values
+        return AuxiliaryMetrics(
+            loss=loss_sum / max(samples, 1.0),
+            correct=int(correct),
+            samples=int(samples),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -898,19 +920,16 @@ def auxiliary_classification_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
     valid: torch.Tensor,
-) -> tuple[torch.Tensor, int, int]:
-    valid = valid.to(torch.bool)
-    samples = int(valid.sum().item())
-    if samples == 0:
-        return logits.sum() * 0.0, 0, 0
-    selected_logits = logits[valid]
-    selected_targets = targets[valid]
-    loss = torch.nn.functional.cross_entropy(
-        selected_logits, selected_targets
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    bool_mask = valid.to(torch.bool)
+    mask = bool_mask.to(dtype=logits.dtype)
+    samples = mask.sum()
+    per_sample_loss = torch.nn.functional.cross_entropy(
+        logits, targets, reduction="none"
     )
-    correct = int(
-        (selected_logits.argmax(dim=1) == selected_targets).sum().item()
-    )
+    loss = (per_sample_loss * mask).sum() / samples.clamp_min(1.0)
+    correct = ((logits.argmax(dim=1) == targets) & bool_mask).sum()
+    samples = bool_mask.sum()
     return loss, correct, samples
 
 
@@ -918,14 +937,14 @@ def auxiliary_losses_and_metrics(
     logits: dict[str, torch.Tensor],
     targets: dict[str, torch.Tensor],
     settings: AuxiliarySettings,
-) -> tuple[torch.Tensor, dict[str, AuxiliaryMetrics]]:
+) -> tuple[torch.Tensor, dict[str, AuxiliaryTensorMetrics]]:
     reference = next(iter(logits.values()), None)
     total = (
         reference.sum() * 0.0
         if reference is not None
         else targets["final_own_prize"].sum() * 0.0
     )
-    metrics: dict[str, AuxiliaryMetrics] = {}
+    metrics: dict[str, AuxiliaryTensorMetrics] = {}
 
     def add(name: str, target_name: str, valid: torch.Tensor, weight: float):
         nonlocal total
@@ -933,7 +952,11 @@ def auxiliary_losses_and_metrics(
             logits[name], targets[target_name], valid
         )
         total = total + float(weight) * loss
-        metrics[name] = AuxiliaryMetrics(float(loss.item()), correct, samples)
+        metrics[name] = AuxiliaryTensorMetrics(
+            loss_sum=loss.detach() * samples.detach(),
+            correct=correct.detach(),
+            samples=samples.detach(),
+        )
 
     if settings.next_decision.enabled:
         valid = targets["next_decision_valid"]
@@ -1060,7 +1083,9 @@ def evaluate_dataset(
 
     totals = {"overall": [0.0, 0, 0, 0, 0]}
     totals.update({name: [0.0, 0, 0, 0, 0] for name in masks})
-    auxiliary_totals: dict[str, dict[str, list[float | int]]] = {
+    auxiliary_totals: dict[
+        str, dict[str, AuxiliaryTensorMetrics]
+    ] = {
         name: {} for name in totals
     }
 
@@ -1085,28 +1110,25 @@ def evaluate_dataset(
         )
 
     def accumulate_auxiliary(
-        namespace: str, values: dict[str, AuxiliaryMetrics]
+        namespace: str, values: dict[str, AuxiliaryTensorMetrics]
     ) -> None:
         for task, metrics in values.items():
-            total = auxiliary_totals[namespace].setdefault(
-                task, [0.0, 0, 0]
-            )
-            total[0] += metrics.loss * metrics.samples
-            total[1] += metrics.correct
-            total[2] += metrics.samples
+            total = auxiliary_totals[namespace].get(task)
+            if total is None:
+                auxiliary_totals[namespace][task] = metrics
+            else:
+                auxiliary_totals[namespace][task] = AuxiliaryTensorMetrics(
+                    loss_sum=total.loss_sum + metrics.loss_sum,
+                    correct=total.correct + metrics.correct,
+                    samples=total.samples + metrics.samples,
+                )
 
     def finalize_auxiliary(
         namespace: str,
     ) -> dict[str, AuxiliaryMetrics]:
         result = {}
-        for task, (loss_sum, correct, samples) in auxiliary_totals[
-            namespace
-        ].items():
-            result[task] = AuxiliaryMetrics(
-                loss=float(loss_sum) / max(int(samples), 1),
-                correct=int(correct),
-                samples=int(samples),
-            )
+        for task, metrics in auxiliary_totals[namespace].items():
+            result[task] = metrics.to_metrics()
         return result
 
     was_training = model.training
@@ -1926,14 +1948,15 @@ def main() -> None:
                         "optimizer_step": global_step,
                     }
                     for task, task_metrics in result.auxiliary_metrics.items():
-                        task_average = task_metrics.averages()
+                        host_metrics = task_metrics.to_metrics()
+                        task_average = host_metrics.averages()
                         payload.update(
                             {
                                 f"train_{task}/loss": task_average["loss"],
                                 f"train_{task}/accuracy": task_average[
                                     "accuracy"
                                 ],
-                                f"train_{task}/samples": task_metrics.samples,
+                                f"train_{task}/samples": host_metrics.samples,
                             }
                         )
                     print(
