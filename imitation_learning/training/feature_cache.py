@@ -165,6 +165,29 @@ class CachedBatch:
 
 
 @dataclass(frozen=True, slots=True)
+class EncoderBatch:
+    encoder_index: np.ndarray
+    encoder_value: np.ndarray
+    encoder_offset: np.ndarray
+    encoder_pokemon_appear: np.ndarray
+    own_summary: np.ndarray
+    opponent_summary: np.ndarray
+    global_summary: np.ndarray
+    history_select_type: np.ndarray
+    history_select_context: np.ndarray
+    history_valid: np.ndarray
+    history_option_categorical: np.ndarray
+    history_structural: np.ndarray
+    history_pokemon_dynamic: np.ndarray
+    history_attack_dynamic: np.ndarray
+    history_option_offset: np.ndarray
+    player_result: np.ndarray
+
+    def __len__(self) -> int:
+        return int(self.player_result.size)
+
+
+@dataclass(frozen=True, slots=True)
 class DatasetSplits:
     train: np.ndarray
     isolation: np.ndarray
@@ -1442,6 +1465,113 @@ class MmapFeatureDataset:
                 if len(train)
                 else 0.0
             ),
+        )
+
+    def collate_encoder(self, index_batch: IndexBatch) -> EncoderBatch:
+        global_ids = np.asarray(index_batch.global_ids, dtype=np.int64)
+        shard_ids = np.searchsorted(self.ends, global_ids, side="right")
+        encoder_indices = []
+        encoder_values = []
+        history_option_categorical = []
+        history_structural = []
+        history_pokemon_dynamic = []
+        history_attack_dynamic = []
+        encoder_offsets = np.empty(
+            global_ids.size * ENCODER_WORDS, dtype=np.int32
+        )
+        encoder_pokemon_appear = np.empty(
+            (global_ids.size, POKEMON_ENCODER_TOKENS), dtype=np.uint8
+        )
+        own_summaries = np.empty(
+            (global_ids.size, OWN_SUMMARY_DIM), dtype=np.float16
+        )
+        opponent_summaries = np.empty(
+            (global_ids.size, OPPONENT_SUMMARY_DIM), dtype=np.float16
+        )
+        global_summaries = np.empty(
+            (global_ids.size, GLOBAL_SUMMARY_DIM), dtype=np.float16
+        )
+        history_select_type = np.empty(
+            (global_ids.size, HISTORY_STEPS), dtype=np.uint8
+        )
+        history_select_context = np.empty(
+            (global_ids.size, HISTORY_STEPS), dtype=np.uint8
+        )
+        history_valid = np.empty(
+            (global_ids.size, HISTORY_STEPS), dtype=np.uint8
+        )
+        history_option_offsets = np.empty(
+            global_ids.size * HISTORY_STEPS + 1, dtype=np.int32
+        )
+        history_option_offsets[0] = 0
+        player_results = np.empty(global_ids.size, dtype=np.uint8)
+        encoder_base = 0
+        history_option_base = 0
+
+        for row, (global_id, shard_id) in enumerate(zip(global_ids, shard_ids)):
+            local_id = int(global_id - self.starts[int(shard_id)])
+            sample = self.shards[int(shard_id)].sample(local_id)
+            encoder_indices.append(sample.encoder_index)
+            encoder_values.append(sample.encoder_value)
+            encoder_pokemon_appear[row] = sample.encoder_pokemon_appear
+            own_summaries[row] = sample.own_summary
+            opponent_summaries[row] = sample.opponent_summary
+            global_summaries[row] = sample.global_summary
+            history_select_type[row] = sample.history_select_type
+            history_select_context[row] = sample.history_select_context
+            history_valid[row] = sample.history_valid
+            history_option_categorical.append(sample.history_option_categorical)
+            history_structural.append(sample.history_structural)
+            history_pokemon_dynamic.append(sample.history_pokemon_dynamic)
+            history_attack_dynamic.append(sample.history_attack_dynamic)
+            encoder_slice = slice(
+                row * ENCODER_WORDS, (row + 1) * ENCODER_WORDS
+            )
+            encoder_offsets[encoder_slice] = (
+                sample.encoder_offset.astype(np.int32) + encoder_base
+            )
+            history_start = row * HISTORY_STEPS
+            history_option_offsets[
+                history_start + 1 : history_start + HISTORY_STEPS + 1
+            ] = (
+                sample.history_option_offset[1:].astype(np.int32)
+                + history_option_base
+            )
+            player_results[row] = sample.player_result
+            encoder_base += int(sample.encoder_index.size)
+            history_option_base += int(
+                sample.history_option_categorical.shape[0]
+            )
+
+        return EncoderBatch(
+            encoder_index=np.concatenate(encoder_indices).astype(
+                np.int32, copy=False
+            ),
+            encoder_value=np.concatenate(encoder_values).astype(
+                np.float16, copy=False
+            ),
+            encoder_offset=encoder_offsets,
+            encoder_pokemon_appear=encoder_pokemon_appear,
+            own_summary=own_summaries,
+            opponent_summary=opponent_summaries,
+            global_summary=global_summaries,
+            history_select_type=history_select_type,
+            history_select_context=history_select_context,
+            history_valid=history_valid,
+            history_option_categorical=np.concatenate(
+                history_option_categorical
+            ).astype(np.int64, copy=False),
+            history_structural=np.concatenate(history_structural).astype(
+                np.int64, copy=False
+            ),
+            history_pokemon_dynamic=np.concatenate(
+                history_pokemon_dynamic
+            ).astype(np.float16, copy=False),
+            history_attack_dynamic=np.concatenate(
+                history_attack_dynamic
+            ).astype(np.float16, copy=False),
+            history_option_offset=history_option_offsets,
+            player_result=player_results,
         )
 
     def collate(self, index_batch: IndexBatch) -> CachedBatch:
