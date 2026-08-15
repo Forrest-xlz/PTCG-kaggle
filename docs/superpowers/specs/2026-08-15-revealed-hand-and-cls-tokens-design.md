@@ -100,9 +100,10 @@ learnable_cls_token: true
 ```
 
 Both values are stored in checkpoint architecture metadata and restored by all
-automatic model constructors. Old checkpoints remain loadable because both
-fields have defaults; their default behavior is `0` MLP layers and CLS disabled
-unless explicitly present in the saved architecture.
+automatic model constructors. The two additional independent Card ID ranges
+raise `encoder_size` from 22,000 to 25,000. Consequently, checkpoints trained
+before this feature remain usable with their original branch/notebook but are
+not shape-compatible with the revised architecture.
 
 The submission notebook exposes the same fields and maintains the revealed-hand
 tracker between calls to `agent`. Ensemble checkpoints must still agree on all
@@ -133,7 +134,6 @@ Tests will cover:
 - perspective-relative own/opponent token construction;
 - empty revealed-hand padding masks;
 - sequence lengths with history and CLS independently enabled or disabled;
-- configuration validation and checkpoint default compatibility;
+- configuration validation and explicit rejection of incompatible old caches;
 - training and Kaggle inference feature parity on a synthetic log sequence;
 - cache schema rejection of old feature caches.
-

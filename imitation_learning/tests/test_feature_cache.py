@@ -42,7 +42,7 @@ from training.expert_validation import load_expert_date_info
 SIGNATURE = {
     "card_count": 1267,
     "attack_count": 512,
-    "encoder_size": 22000,
+    "encoder_size": 25000,
     "decoder_layout": "option-components-original16-plus-one-hot-v5",
     "max_actions": 64,
 }
@@ -73,6 +73,7 @@ def record(
         encoder_pokemon_appear=(
             [2, 1] + [0] * (POKEMON_ENCODER_TOKENS - 2)
         ),
+        revealed_hand_present=[1, 0],
         own_summary=[float(marker)] * OWN_SUMMARY_DIM,
         opponent_summary=[float(marker + 1)] * OPPONENT_SUMMARY_DIM,
         global_summary=[float(marker + 2)] * GLOBAL_SUMMARY_DIM,
@@ -156,6 +157,7 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
             sample.encoder_pokemon_appear,
             [2, 1] + [0] * (POKEMON_ENCODER_TOKENS - 2),
         )
+        np.testing.assert_array_equal(sample.revealed_hand_present, [1, 0])
         assert sample.own_summary.shape == (OWN_SUMMARY_DIM,)
         assert sample.opponent_summary.shape == (OPPONENT_SUMMARY_DIM,)
         assert sample.global_summary.shape == (GLOBAL_SUMMARY_DIM,)
@@ -658,6 +660,7 @@ def test_collate_rebases_options_and_pads_action_offsets(tmp_path: Path) -> None
             2,
             POKEMON_ENCODER_TOKENS,
         )
+        assert batch.revealed_hand_present.shape == (2, 2)
         assert batch.own_summary.shape == (2, OWN_SUMMARY_DIM)
         assert batch.opponent_summary.shape == (2, OPPONENT_SUMMARY_DIM)
         assert batch.global_summary.shape == (2, GLOBAL_SUMMARY_DIM)

@@ -36,6 +36,7 @@ def _record() -> FeatureRecord:
         encoder_value=[1.0],
         encoder_offset=[0] * ENCODER_WORDS,
         encoder_pokemon_appear=[0] * POKEMON_ENCODER_TOKENS,
+        revealed_hand_present=[0, 0],
         own_summary=[0.0] * OWN_SUMMARY_DIM,
         opponent_summary=[0.0] * OPPONENT_SUMMARY_DIM,
         global_summary=[0.0] * GLOBAL_SUMMARY_DIM,

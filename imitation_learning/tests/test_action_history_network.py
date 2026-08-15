@@ -44,7 +44,7 @@ def _model(mode: str) -> PTCGTransformer:
 
 @pytest.mark.parametrize(
     ("mode", "tokens"),
-    [("off", 26), ("basic", 27), ("structural", 27), ("full", 27)],
+    [("off", 28), ("basic", 29), ("structural", 29), ("full", 29)],
 )
 def test_history_mode_controls_encoder_token_count(mode: str, tokens: int) -> None:
     assert _model(mode).encoder_token_count == tokens

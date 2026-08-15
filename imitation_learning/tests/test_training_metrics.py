@@ -151,6 +151,7 @@ class DummyDataset:
             encoder_pokemon_appear=np.zeros(
                 (size, 18), dtype=np.uint8
             ),
+            revealed_hand_present=np.zeros((size, 2), dtype=np.uint8),
             own_summary=np.zeros((size, OWN_SUMMARY_DIM), dtype=np.float16),
             opponent_summary=np.zeros(
                 (size, OPPONENT_SUMMARY_DIM), dtype=np.float16

@@ -54,8 +54,8 @@ ordinary CPU memory. Candidate selections cover every legal size from
 treat replay selection order as irrelevant. Each sample also stores a stable
 32-bit replay key used for validation splitting, a stable 64-bit key for
 its complete deck, the player's result, and the acting player's previous three
-actions. Cache schema 16 is required. Winner-only JSONL and older caches must
-both be rebuilt once with `training.extract` followed by
+actions. Cache schema 17 is required. Winner-only JSONL must be re-extracted;
+schema-16 and older feature caches only need to be rebuilt with
 `training.cache_features`.
 
 Training has no command-line parameters. It reads `cfg/train.yaml`, whose
@@ -119,7 +119,7 @@ both sides. Draws and every replay assigned to any validation split remain
 excluded. Startup logs show each date's cutoff and the replay/sample counts
 after every filter stage. This ratio is independent of
 `expert_validation_ratio`. After the one-time two-player extraction and
-schema-16 cache rebuild, changing loser-augmentation settings requires only a
+schema-17 cache rebuild, changing loser-augmentation settings requires only a
 new training run.
 
 Standalone validation has no command-line parameters and reads
@@ -188,22 +188,28 @@ Energy cards inside that region; decoder cards reuse the corresponding encoder
 region MLP. Setting `card_mlp_layers` to zero disables static-card embeddings
 while preserving all learned Card ID embeddings.
 
-The encoder has a 26-token base layout: eight bench slots per player, two
+The encoder has a 28-token base layout: eight bench slots per player, two
 active Pokémon, three dense summary tokens, separate discard tokens for both
-players, the own hand, remaining-deck estimate, and stadium. The own-player
-(69), opponent-player (71), and global/select (73) numeric summaries replace
+players, the own hand, remaining-deck estimate, stadium, and two pooled tokens
+for publicly revealed cards still held in the own/opponent hand. Revealed cards
+are tracked by physical serial and pooled with multiplicity by Card ID. The
+own-player (69), opponent-player (71), and global/select (73) numeric summaries replace
 the old sparse summaries through independent `Linear(n, d_model)` projections.
 Missing bench slots remain in the fixed layout but are excluded from encoder
 self-attention and decoder cross-attention by a boolean key-padding mask.
 Prize counts, selection type, and selection context are one-hot encoded.
 `pokemon_appear_embedding` adds one shared three-state embedding (absent,
 present from an earlier turn, present this turn) to the 18 Bench/Active Pokemon
-tokens. Five `*_token_mlp_layers` settings control eight independent post-token
-MLPs: own/opponent Bench, Active, and discard plus own hand and own deck. The
-two sides share configured depths but not weights. `region_token_mlp_residual`
+tokens. Six `*_token_mlp_layers` settings control ten independent post-token
+MLPs: own/opponent Bench, Active, discard, and revealed hand plus own hand and
+own deck. The two sides share configured depths but not weights.
+`region_token_mlp_residual`
 selects `token + MLP(token)` or `MLP(token)` globally for these modules.
-Changing these features requires rebuilding the feature cache (schema 15), but
-does not require replay extraction again.
+`learnable_cls_token` optionally appends one always-visible learned global
+workspace token. The added independent Card ID ranges increase `encoder_size`
+from 22,000 to 25,000, so earlier checkpoints are not shape-compatible with
+this architecture. Changing the revealed-hand features requires rebuilding the
+feature cache (schema 17), but does not require replay extraction again.
 
 The decoder stores each raw engine option once using eleven categorical fields:
 option type, selection context, candidate/target Card IDs, Attack ID, number,
@@ -232,7 +238,7 @@ Historical options in a combination action are summed, one shared
 and their concatenation is mapped by `history_sequence_mlp_layers` to one
 token. All trainable history parameters are independent from the current-action
 decoder. Switching among `basic`, `structural`, and `full` reuses the same
-schema-16 cache.
+schema-17 cache.
 
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the
@@ -307,7 +313,8 @@ the `cg` directory. In the first code cell, set the exact `MODEL_PATH`,
 The notebook reads width, FFN size, attention heads, encoder/decoder depth,
 normalization mode, static-card projections, and action-history mode from the checkpoint;
 these architecture fields are not configured twice. It embeds the inference
-code, including the 26-token base encoder layout and optional history token, and creates
+code, including the 28-token base encoder layout, optional history token,
+optional learnable CLS token, and stateful revealed-hand tracking, and creates
 `/kaggle/working/submission.tar.gz`.
 
 ## Training records

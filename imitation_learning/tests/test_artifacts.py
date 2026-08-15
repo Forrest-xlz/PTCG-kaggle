@@ -108,7 +108,7 @@ def test_submission_notebook_is_valid_json() -> None:
     assert "option_attack_embedding" in source
     assert "include_last_offset=True" in source
     assert "decoder_bag" not in source
-    assert "ENCODER_TOKENS = 26" in source
+    assert "ENCODER_TOKENS = 28" in source
     assert "num_encoder_words" not in source
     assert "own_summary_projection" in source
     assert "opponent_summary_projection" in source
