@@ -26,6 +26,10 @@ def _write_config(tmp_path: Path, *, games: int = 3) -> Path:
                     "seed": 17,
                     "games_per_matchup": games,
                     "output": "outputs/beam-test",
+                    "runtime": {
+                        "workers": 2,
+                        "torch_threads_per_worker": 1,
+                    },
                     "search": {
                         "beam_width": 4,
                         "expansion_top_k": 3,
@@ -54,6 +58,8 @@ def test_load_settings_resolves_paths_and_values(tmp_path: Path) -> None:
     assert settings.device == "cpu"
     assert settings.seed == 17
     assert settings.games_per_matchup == 3
+    assert settings.runtime.workers == 2
+    assert settings.runtime.torch_threads_per_worker == 1
     assert settings.search.beam_width == 4
     assert settings.search.expansion_top_k == 3
     assert settings.search.alpha == pytest.approx(0.8)
@@ -91,6 +97,12 @@ def test_schedule_contains_every_ordered_cell_and_balances_seats(
     ("path", "value", "message"),
     [
         (("games_per_matchup",), 0, "games_per_matchup"),
+        (("runtime", "workers"), 0, "runtime.workers"),
+        (
+            ("runtime", "torch_threads_per_worker"),
+            False,
+            "torch_threads_per_worker",
+        ),
         (("search", "beam_width"), 0, "beam_width"),
         (("search", "expansion_top_k"), False, "expansion_top_k"),
         (("search", "alpha"), -0.1, "alpha"),

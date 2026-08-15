@@ -28,6 +28,12 @@ class SearchSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeSettings:
+    workers: int
+    torch_threads_per_worker: int
+
+
+@dataclass(frozen=True, slots=True)
 class BeamSearchSettings:
     cg_path: Path
     checkpoint: Path
@@ -35,6 +41,7 @@ class BeamSearchSettings:
     seed: int
     games_per_matchup: int
     output: Path
+    runtime: RuntimeSettings
     search: SearchSettings
     decks: tuple[DeckSpec, ...]
 
@@ -80,6 +87,9 @@ def load_settings(path: Path | None = None) -> BeamSearchSettings:
     raw = _mapping(_required(root, "beam_search", "config"), "beam_search")
     search_raw = _mapping(
         _required(raw, "search", "beam_search"), "beam_search.search"
+    )
+    runtime_raw = _mapping(
+        _required(raw, "runtime", "beam_search"), "beam_search.runtime"
     )
     alpha_raw = _required(search_raw, "alpha", "beam_search.search")
     if type(alpha_raw) not in (int, float):
@@ -133,6 +143,20 @@ def load_settings(path: Path | None = None) -> BeamSearchSettings:
             "beam_search.games_per_matchup",
         ),
         output=_path(_required(raw, "output", "beam_search"), "output"),
+        runtime=RuntimeSettings(
+            workers=_positive_int(
+                _required(runtime_raw, "workers", "beam_search.runtime"),
+                "beam_search.runtime.workers",
+            ),
+            torch_threads_per_worker=_positive_int(
+                _required(
+                    runtime_raw,
+                    "torch_threads_per_worker",
+                    "beam_search.runtime",
+                ),
+                "beam_search.runtime.torch_threads_per_worker",
+            ),
+        ),
         search=SearchSettings(
             beam_width=_positive_int(
                 _required(search_raw, "beam_width", "beam_search.search"),
@@ -171,4 +195,3 @@ def schedule_games(settings: BeamSearchSettings) -> tuple[GameSpec, ...]:
                 )
                 game_id += 1
     return tuple(games)
-
