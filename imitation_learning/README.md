@@ -12,6 +12,7 @@ deck/       parallel deck extraction and deck EDA
 model/      sparse features and the notebook transformer
 training/   replay extraction and model training CLIs
 validation/ standalone, read-only checkpoint evaluation
+value/      encoder-only replay-outcome value training
 data/       generated caches (gitignored)
 ```
 
@@ -29,6 +30,36 @@ python -m training.cache_features
 python -m training.train
 python -m validation.evaluate
 ```
+
+## Value training
+
+The independent value workflow predicts the acting player's final replay
+result (`win=1`, `draw=0`, `loss=-1`) from the post-Transformer global encoder
+token. It loads the complete encoder architecture and pretrained weights from
+the policy checkpoint configured in `cfg/value_train.yaml`; no policy decoder
+is constructed or evaluated. The full encoder and the new tanh scalar head are
+then fine-tuned together with one MSE backward pass.
+
+Configure the checkpoint, optimization, validation, and WandB settings under
+the `value_train`, `value_model`, and `wandb` sections, then run:
+
+```bash
+python value/train.py
+```
+
+Value validation uses the same replay-level allocation, expert cutoffs,
+top-Deck order, and isolation CSVs as policy training, but retains winning,
+drawing, and losing samples. It reports RMSE and explained variance separately
+for in-distribution, latest-date, expert, per-Deck, expert-per-Deck, and each
+isolation group. All subgroups reuse their base validation forward pass.
+Checkpoints contain the resolved encoder architecture, value-head settings,
+optimizer, scheduler, mixed-precision state, EMA, epoch, and optimizer step.
+Set `resume: true` and point `resume_checkpoint` at one of these value
+checkpoints to continue training. WandB receives metrics only; checkpoint files
+remain under `value_train.output`.
+
+The existing schema-16 cache already stores both players and their final
+results, so this workflow does not require replay extraction or cache rebuilding.
 
 Both extractors create one output shard and one metadata file per ZIP. Existing
 valid shards are skipped, so interrupted runs are resumable. Deck extraction
