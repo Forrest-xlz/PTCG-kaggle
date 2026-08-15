@@ -20,31 +20,56 @@ class SearchInputs:
     warnings: tuple[str, ...]
 
 
+def _card_objects(cards: Iterable[Any] | None) -> list[Any]:
+    return [card for card in (cards or []) if card is not None]
+
+
 def _card_ids(cards: Iterable[Any] | None) -> list[int]:
-    return [int(card.id) for card in (cards or []) if card is not None]
+    return [int(card.id) for card in _card_objects(cards)]
 
 
-def _pokemon_ids(pokemon: Any | None) -> list[int]:
+def _pokemon_cards(pokemon: Any | None) -> list[Any]:
     if pokemon is None:
         return []
-    result = [int(pokemon.id)]
-    result.extend(_card_ids(getattr(pokemon, "tools", None)))
-    result.extend(_card_ids(getattr(pokemon, "energyCards", None)))
-    result.extend(_card_ids(getattr(pokemon, "preEvolution", None)))
+    result = [pokemon]
+    result.extend(_card_objects(getattr(pokemon, "tools", None)))
+    result.extend(_card_objects(getattr(pokemon, "energyCards", None)))
+    result.extend(_card_objects(getattr(pokemon, "preEvolution", None)))
     return result
 
 
-def _visible_player_cards(state: Any, player_index: int) -> list[int]:
+def _visible_player_cards(obs: Any, player_index: int) -> list[int]:
+    state = obs.current
     player = state.players[player_index]
-    result = _card_ids(player.hand)
-    result.extend(_card_ids(player.discard))
-    result.extend(_card_ids(player.prize))
+    cards = _card_objects(player.hand)
+    cards.extend(_card_objects(player.discard))
+    cards.extend(_card_objects(player.prize))
     for pokemon in list(player.active or []) + list(player.bench or []):
-        result.extend(_pokemon_ids(pokemon))
+        cards.extend(_pokemon_cards(pokemon))
     for stadium in list(state.stadium or []):
         if int(getattr(stadium, "playerIndex", -1)) == player_index:
-            result.append(int(stadium.id))
-    return result
+            cards.append(stadium)
+
+    seen = {
+        ("serial", int(card.serial))
+        if getattr(card, "serial", None) is not None
+        else ("object", id(card))
+        for card in cards
+    }
+    transients = [getattr(getattr(obs, "select", None), "effect", None)]
+    transients.extend(list(getattr(state, "looking", None) or []))
+    for card in transients:
+        if card is None or int(getattr(card, "playerIndex", -1)) != player_index:
+            continue
+        key = (
+            ("serial", int(card.serial))
+            if getattr(card, "serial", None) is not None
+            else ("object", id(card))
+        )
+        if key not in seen:
+            cards.append(card)
+            seen.add(key)
+    return [int(card.id) for card in cards]
 
 
 def _remaining_pool(
@@ -112,13 +137,13 @@ def build_search_inputs(
     opponent_player = state.players[opponent]
     your_pool = _remaining_pool(
         your_deck,
-        _visible_player_cards(state, yours),
+        _visible_player_cards(obs, yours),
         yours,
         warnings,
     )
     opponent_pool = _remaining_pool(
         opponent_deck,
-        _visible_player_cards(state, opponent),
+        _visible_player_cards(obs, opponent),
         opponent,
         warnings,
     )

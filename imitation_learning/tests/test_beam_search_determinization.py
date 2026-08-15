@@ -17,8 +17,12 @@ from beam_search.config import DeckSpec
 from beam_search.determinization import build_search_inputs
 
 
-def card(card_id: int, player: int):
-    return SimpleNamespace(id=card_id, playerIndex=player)
+def card(card_id: int, player: int, *, serial: int | None = None):
+    return SimpleNamespace(
+        id=card_id,
+        playerIndex=player,
+        serial=card_id * 10 + player if serial is None else serial,
+    )
 
 
 def pokemon(
@@ -32,6 +36,7 @@ def pokemon(
     return SimpleNamespace(
         id=card_id,
         playerIndex=player,
+        serial=card_id * 10 + player,
         tools=list(tools),
         energyCards=list(energies),
         preEvolution=list(previous),
@@ -72,7 +77,11 @@ def observation():
             stadium=[],
             looking=None,
         ),
-        select=SimpleNamespace(deck=None),
+        select=SimpleNamespace(
+            deck=None,
+            effect=None,
+            contextCard=None,
+        ),
     )
 
 
@@ -135,3 +144,48 @@ def test_inconsistent_hidden_zone_size_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="hidden zone sizes"):
         build_search_inputs(obs, deck, deck, random.Random(1))
+
+
+def test_effect_card_is_removed_from_hidden_pool() -> None:
+    obs = observation()
+    obs.select.effect = card(9, 0)
+    obs.current.players[0].deckCount = 49
+    deck = DeckSpec("deck", tuple(range(60)))
+
+    result = build_search_inputs(obs, deck, deck, random.Random(1))
+
+    assert len(result.your_deck) == 49
+    assert 9 not in result.your_deck
+
+
+def test_looking_cards_are_removed_from_hidden_pool() -> None:
+    obs = observation()
+    obs.current.looking = [card(card_id, 0) for card_id in range(9, 16)]
+    obs.current.players[0].deckCount = 43
+    deck = DeckSpec("deck", tuple(range(60)))
+
+    result = build_search_inputs(obs, deck, deck, random.Random(1))
+
+    assert len(result.your_deck) == 43
+    assert not set(range(9, 16)).intersection(result.your_deck)
+
+
+def test_effect_already_in_visible_zone_is_not_removed_twice() -> None:
+    obs = observation()
+    discard_card = obs.current.players[0].discard[0]
+    obs.select.effect = card(7, 0, serial=discard_card.serial)
+    deck = DeckSpec("deck", tuple(range(60)))
+
+    result = build_search_inputs(obs, deck, deck, random.Random(1))
+
+    assert len(result.your_deck) == 50
+
+
+def test_context_card_does_not_change_deck_conservation() -> None:
+    obs = observation()
+    obs.select.contextCard = card(9, 0)
+    deck = DeckSpec("deck", tuple(range(60)))
+
+    result = build_search_inputs(obs, deck, deck, random.Random(1))
+
+    assert len(result.your_deck) == 50
