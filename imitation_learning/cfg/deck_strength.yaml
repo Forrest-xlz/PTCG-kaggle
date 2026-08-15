@@ -1,13 +1,13 @@
 deck_strength:
   cg_path: ../pokemon_tcg_ai_battle/sample_submission
-  checkpoint: final_d2_33.pt
+  checkpoint: D:\learning\AI\Kaggle\The Pokémon Company - PTCG AI Battle Challenge Simulation\imitation_learning\final_d2_33.pt
   device: cuda
   seed: 42
-  games_per_pair: 100
+  games_per_pair: 50
   output: outputs/deck_strength
 
   runtime:
-    workers: 2                    # Independent model + CG worker processes.
+    workers: 12                    # Independent model + CG worker processes.
     torch_threads_per_worker: 1   # Avoid CPU thread oversubscription.
 
   decks:
