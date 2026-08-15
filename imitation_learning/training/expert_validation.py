@@ -21,6 +21,7 @@ class ExpertDateInfo:
     cutoff: float
     episode_count: int
     expert_episode_keys: frozenset[int]
+    expert_episode_ids: frozenset[int]
 
     @property
     def expert_episode_count(self) -> int:
@@ -42,6 +43,7 @@ class ExpertLoserDateInfo:
 
 @dataclass(frozen=True, slots=True)
 class _ManifestEpisode:
+    episode_id: int | None
     episode_key: int
     low_score: float
     high_score: float
@@ -124,6 +126,9 @@ def _read_manifest_episodes(
                     )
                 episodes.append(
                     _ManifestEpisode(
+                        episode_id=(
+                            int(episode_id) if episode_id.isdecimal() else None
+                        ),
                         episode_key=stable_episode_key(episode_id),
                         low_score=low_score,
                         high_score=high_score,
@@ -158,6 +163,11 @@ def _read_manifest(
         for episode in episodes
         if episode.high_score >= cutoff
     )
+    expert_ids = frozenset(
+        episode.episode_id
+        for episode in episodes
+        if episode.high_score >= cutoff and episode.episode_id is not None
+    )
     if not expert_keys:
         raise ValueError(f"{archive_path} produced an empty expert episode set")
     return ExpertDateInfo(
@@ -165,6 +175,7 @@ def _read_manifest(
         cutoff=cutoff,
         episode_count=len(episodes),
         expert_episode_keys=expert_keys,
+        expert_episode_ids=expert_ids,
     )
 
 

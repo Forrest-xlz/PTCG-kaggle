@@ -1309,7 +1309,7 @@ class PTCGTransformer(torch.nn.Module):
             )
         return result
 
-    def forward(
+    def action_hidden(
         self,
         index_encoder,
         value_encoder,
@@ -1422,6 +1422,9 @@ class PTCGTransformer(torch.nn.Module):
         # is deliberately no self-attention between candidate actions.
         for layer in self.decoder:
             policy = layer(policy, encoder_out, encoder_padding_mask)
-        # Return raw logits. Cross entropy applies log-softmax internally, and
-        # argmax(logits) is identical to argmax(softmax(logits)) at inference.
-        return self.decoder_fc(policy).transpose(0, 1).reshape(batch_size, -1)
+        return policy.transpose(0, 1)
+
+    def forward(self, *args, **kwargs):
+        """Return raw policy logits while exposing action_hidden for reuse."""
+        hidden = self.action_hidden(*args, **kwargs)
+        return self.decoder_fc(hidden).squeeze(-1)

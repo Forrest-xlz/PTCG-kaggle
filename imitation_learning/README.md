@@ -232,7 +232,32 @@ Historical options in a combination action are summed, one shared
 and their concatenation is mapped by `history_sequence_mlp_layers` to one
 token. All trainable history parameters are independent from the current-action
 decoder. Switching among `basic`, `structural`, and `full` reuses the same
-schema-16 cache.
+schema-17 cache.
+
+## Expert action classifier
+
+`expert_classifier/` is an isolated binary state-action classifier. It labels
+winning samples from per-date top-score episodes as expert, splits by replay,
+and learns from the decoder hidden representation of the recorded action.
+Configure it in `cfg/expert_classifier.yaml`; training and losing-sample
+inference have independent `recent_dates` settings.
+
+After this feature-cache schema change, rerun cache construction only; the
+existing extracted JSONL already contains the required episode, player, and
+step identity fields:
+
+```bash
+python training/cache_features.py
+python expert_classifier/train.py
+python expert_classifier/infer.py
+python expert_classifier/recover.py
+```
+
+Inference writes `selected_loser_samples.csv.gz` and an inference summary.
+Recovery uses the stable `(date, episode_id, player, step)` identity to write
+the selected complete records as per-date gzip JSONL files, ready for a later
+cache/build-training step. `inference.recent_dates: null` scans every cached
+date; otherwise it scans only the newest configured number of dates.
 
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the

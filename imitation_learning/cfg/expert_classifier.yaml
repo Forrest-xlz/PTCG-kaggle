@@ -1,0 +1,34 @@
+expert_classifier:
+  train_config: cfg/train.yaml       # Reuse cache/replay/CG paths and scratch architecture.
+  output: outputs/expert_classifier
+  extracted_data: data/training      # Existing extracted DATE.jsonl.gz files.
+
+  recent_dates: 7                    # Newest dates used to train the classifier.
+  expert_ratio: 0.05                 # Daily top-score fraction from train expert validation.
+  validation_ratio: 0.10             # Replay-grouped classifier validation fraction.
+  seed: 42
+
+  epochs: 3
+  batch_size: 4096
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  beta1: 0.9
+  beta2: 0.999
+  warmup_steps: 100
+  device: cuda
+  precision: bf16
+  log_every_steps: 10
+  grad_clip_norm: 1.0
+
+  model:
+    init_mode: scratch               # scratch or checkpoint.
+    checkpoint: null                 # BC checkpoint path when init_mode is checkpoint.
+
+  inference:
+    checkpoint: outputs/expert_classifier/best.pt
+    recent_dates: 3                  # null means every cached date.
+    threshold: 0.80
+    output: data/expert_classifier
+
+  recovery:
+    output: data/expert_classifier/recovered

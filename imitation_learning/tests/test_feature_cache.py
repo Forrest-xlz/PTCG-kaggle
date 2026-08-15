@@ -98,6 +98,9 @@ def record(
         episode_key=stable_episode_key(episode_id or f"episode-{marker}"),
         deck_key=stable_deck_key([marker] * 60),
         player_result=player_result,
+        episode_id=int(marker * 1000 + 17),
+        player=marker % 2,
+        step=marker * 3,
     )
 
 
@@ -175,8 +178,14 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
         assert sample.action_count == 2
         assert sample.episode_key == stable_episode_key("episode-11")
         assert sample.deck_key == stable_deck_key([11] * 60)
+        assert sample.episode_id == 11017
+        assert sample.player == 1
+        assert sample.step == 33
         assert shard.arrays["episode_key"].dtype == np.dtype("<u4")
         assert shard.arrays["deck_key"].dtype == np.dtype("<u8")
+        assert shard.arrays["episode_id"].dtype == np.dtype("<u8")
+        assert shard.arrays["player"].dtype == np.dtype("u1")
+        assert shard.arrays["step"].dtype == np.dtype("<u4")
     finally:
         shard.close()
 

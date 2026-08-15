@@ -14,7 +14,7 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 16
+CACHE_SCHEMA_VERSION = 17
 ENCODER_WORDS = 26
 POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
@@ -64,6 +64,9 @@ SECTION_DTYPES = {
     "target": np.dtype("u1"),
     "action_count": np.dtype("u1"),
     "episode_key": np.dtype("<u4"),
+    "episode_id": np.dtype("<u8"),
+    "player": np.dtype("u1"),
+    "step": np.dtype("<u4"),
     "deck_key": np.dtype("<u8"),
     "player_result": np.dtype("u1"),
 }
@@ -97,6 +100,9 @@ class FeatureRecord:
     history_attack_dynamic: list[float]
     history_option_offset: list[int]
     player_result: int = PLAYER_RESULT_WIN
+    episode_id: int = 0
+    player: int = 0
+    step: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +123,9 @@ class FeatureView:
     target: int
     action_count: int
     episode_key: int
+    episode_id: int
+    player: int
+    step: int
     deck_key: int
     player_result: int
     history_select_type: np.ndarray
@@ -413,6 +422,12 @@ class PackedShardWriter:
             raise ValueError("target must be smaller than action_count")
         if not 0 <= int(record.episode_key) <= np.iinfo(np.uint32).max:
             raise ValueError("episode_key must fit uint32")
+        if not 0 <= int(record.episode_id) <= np.iinfo(np.uint64).max:
+            raise ValueError("episode_id must fit uint64")
+        if not 0 <= int(record.player) <= np.iinfo(np.uint8).max:
+            raise ValueError("player must fit uint8")
+        if not 0 <= int(record.step) <= np.iinfo(np.uint32).max:
+            raise ValueError("step must fit uint32")
         if not 0 <= int(record.deck_key) <= np.iinfo(np.uint64).max:
             raise ValueError("deck_key must fit uint64")
         if int(record.player_result) not in PLAYER_RESULTS:
@@ -547,6 +562,9 @@ class PackedShardWriter:
         self._append("target", int(record.target))
         self._append("action_count", int(record.action_count))
         self._append("episode_key", int(record.episode_key))
+        self._append("episode_id", int(record.episode_id))
+        self._append("player", int(record.player))
+        self._append("step", int(record.step))
         self._append("deck_key", int(record.deck_key))
         self._append("player_result", int(record.player_result))
         self._samples += 1
@@ -737,8 +755,9 @@ class PackedShard:
             raise ValueError("target length does not match sample count")
         if self.arrays["action_count"].size != self.samples:
             raise ValueError("action_count length does not match sample count")
-        if self.arrays["episode_key"].size != self.samples:
-            raise ValueError("episode_key length does not match sample count")
+        for name in ("episode_key", "episode_id", "player", "step"):
+            if self.arrays[name].size != self.samples:
+                raise ValueError(f"{name} length does not match sample count")
         if self.arrays["deck_key"].size != self.samples:
             raise ValueError("deck_key length does not match sample count")
         if self.arrays["player_result"].size != self.samples:
@@ -878,6 +897,9 @@ class PackedShard:
             target=int(self.arrays["target"][local_id]),
             action_count=int(self.arrays["action_count"][local_id]),
             episode_key=int(self.arrays["episode_key"][local_id]),
+            episode_id=int(self.arrays["episode_id"][local_id]),
+            player=int(self.arrays["player"][local_id]),
+            step=int(self.arrays["step"][local_id]),
             deck_key=int(self.arrays["deck_key"][local_id]),
             player_result=int(self.arrays["player_result"][local_id]),
             history_select_type=self.arrays["history_select_type"][
