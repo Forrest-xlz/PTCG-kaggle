@@ -1309,7 +1309,7 @@ class PTCGTransformer(torch.nn.Module):
             )
         return result
 
-    def forward(
+    def _encode_state_with_context(
         self,
         index_encoder,
         value_encoder,
@@ -1326,16 +1326,10 @@ class PTCGTransformer(torch.nn.Module):
         history_pokemon_dynamic,
         history_attack_dynamic,
         history_option_offset,
-        option_categorical,
-        option_numeric,
-        pokemon_dynamic,
-        attack_dynamic,
-        action_option_index,
-        action_option_offset,
-    ):
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Encode observations without constructing action representations."""
         cfg = self.config
         projected_card_features = self.project_card_features()
-        projected_attack_features = self.project_attack_features()
         encoded = self.encoder_bag(
             index_encoder,
             offset_encoder,
@@ -1343,11 +1337,7 @@ class PTCGTransformer(torch.nn.Module):
             projected_card_features=projected_card_features,
         )
         batch_size = own_summary.size(0)
-        encoded = encoded.reshape(
-            batch_size,
-            ENCODER_TOKENS,
-            cfg.d_model,
-        )
+        encoded = encoded.reshape(batch_size, ENCODER_TOKENS, cfg.d_model)
         if self.pokemon_appear_embedding is not None:
             expected = (batch_size, POKEMON_ENCODER_TOKENS)
             if tuple(pokemon_appear.shape) != expected:
@@ -1360,8 +1350,7 @@ class PTCGTransformer(torch.nn.Module):
                 + self.pokemon_appear_embedding(pokemon_appear)
             )
             encoded = torch.cat(
-                (pokemon_tokens, encoded[:, POKEMON_ENCODER_TOKENS:]),
-                dim=1,
+                (pokemon_tokens, encoded[:, POKEMON_ENCODER_TOKENS:]), dim=1
             )
         encoded = torch.cat(
             (
@@ -1387,9 +1376,7 @@ class PTCGTransformer(torch.nn.Module):
             )
             encoded = torch.cat((encoded, history_token.unsqueeze(1)), dim=1)
         if self.encoder_input_norm is not None:
-            encoded = self.embedding_dropout(
-                self.encoder_input_norm(encoded)
-            )
+            encoded = self.embedding_dropout(self.encoder_input_norm(encoded))
         encoded = encoded.transpose(0, 1)
         encoder_padding_mask = self._encoder_padding_mask(
             own_summary,
@@ -1400,6 +1387,92 @@ class PTCGTransformer(torch.nn.Module):
             encoded,
             src_key_padding_mask=encoder_padding_mask,
         )
+        return encoder_out, encoder_padding_mask, projected_card_features
+
+    def encode_state(
+        self,
+        index_encoder,
+        value_encoder,
+        offset_encoder,
+        pokemon_appear,
+        own_summary,
+        opponent_summary,
+        global_summary,
+        history_select_type,
+        history_select_context,
+        history_valid,
+        history_option_categorical,
+        history_structural,
+        history_pokemon_dynamic,
+        history_attack_dynamic,
+        history_option_offset,
+    ) -> torch.Tensor:
+        """Return sequence-first post-Transformer observation tokens."""
+        encoder_out, _, _ = self._encode_state_with_context(
+            index_encoder,
+            value_encoder,
+            offset_encoder,
+            pokemon_appear,
+            own_summary,
+            opponent_summary,
+            global_summary,
+            history_select_type,
+            history_select_context,
+            history_valid,
+            history_option_categorical,
+            history_structural,
+            history_pokemon_dynamic,
+            history_attack_dynamic,
+            history_option_offset,
+        )
+        return encoder_out
+
+    def forward(
+        self,
+        index_encoder,
+        value_encoder,
+        offset_encoder,
+        pokemon_appear,
+        own_summary,
+        opponent_summary,
+        global_summary,
+        history_select_type,
+        history_select_context,
+        history_valid,
+        history_option_categorical,
+        history_structural,
+        history_pokemon_dynamic,
+        history_attack_dynamic,
+        history_option_offset,
+        option_categorical,
+        option_numeric,
+        pokemon_dynamic,
+        attack_dynamic,
+        action_option_index,
+        action_option_offset,
+    ):
+        cfg = self.config
+        encoder_out, encoder_padding_mask, projected_card_features = (
+            self._encode_state_with_context(
+                index_encoder,
+                value_encoder,
+                offset_encoder,
+                pokemon_appear,
+                own_summary,
+                opponent_summary,
+                global_summary,
+                history_select_type,
+                history_select_context,
+                history_valid,
+                history_option_categorical,
+                history_structural,
+                history_pokemon_dynamic,
+                history_attack_dynamic,
+                history_option_offset,
+            )
+        )
+        projected_attack_features = self.project_attack_features()
+        batch_size = own_summary.size(0)
         option_embeddings = self.encode_options(
             option_categorical,
             option_numeric,
