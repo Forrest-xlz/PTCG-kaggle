@@ -241,6 +241,11 @@ winning samples from per-date top-score episodes as expert, splits by replay,
 and learns from the decoder hidden representation of the recorded action.
 Configure it in `cfg/expert_classifier.yaml`; training and losing-sample
 inference have independent `recent_dates` settings.
+`eval_every_steps` controls replay-grouped validation during training. Its
+loss, accuracy, precision, recall, and F1 are logged under `validation/*`;
+batch training metrics use `train/*`. The nested `wandb` block uploads only
+these metrics, while every checkpoint remains under the configured local
+`output` directory.
 
 After this feature-cache schema change, rerun cache construction only; the
 existing extracted JSONL already contains the required episode, player, and

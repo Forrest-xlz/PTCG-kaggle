@@ -32,6 +32,15 @@ class RecoverySettings:
 
 
 @dataclass(frozen=True, slots=True)
+class WandbSettings:
+    enabled: bool
+    project: str
+    group: str
+    name: str
+    mode: str = "online"
+
+
+@dataclass(frozen=True, slots=True)
 class ExpertClassifierSettings:
     train_config: str
     output: str
@@ -50,10 +59,12 @@ class ExpertClassifierSettings:
     device: str
     precision: str
     log_every_steps: int
+    eval_every_steps: int
     grad_clip_norm: float
     model: ModelInitSettings
     inference: InferenceSettings
     recovery: RecoverySettings
+    wandb: WandbSettings
 
 
 def project_path(value: str | Path) -> Path:
@@ -81,10 +92,12 @@ def load_settings(path: Path = CONFIG_PATH) -> ExpertClassifierSettings:
         model = ModelInitSettings(**values.pop("model"))
         inference = InferenceSettings(**values.pop("inference"))
         recovery = RecoverySettings(**values.pop("recovery"))
+        wandb = WandbSettings(**values.pop("wandb"))
         settings = ExpertClassifierSettings(
             model=model,
             inference=inference,
             recovery=recovery,
+            wandb=wandb,
             **values,
         )
     except (KeyError, TypeError) as exc:
@@ -110,10 +123,22 @@ def load_settings(path: Path = CONFIG_PATH) -> ExpertClassifierSettings:
         raise ValueError("learning_rate must be positive and weight_decay non-negative")
     if not 0 <= settings.beta1 < 1 or not 0 <= settings.beta2 < 1:
         raise ValueError("beta1 and beta2 must be in [0, 1)")
-    if settings.warmup_steps < 0 or settings.log_every_steps < 1:
-        raise ValueError("warmup_steps must be >= 0 and log_every_steps >= 1")
+    if (
+        settings.warmup_steps < 0
+        or settings.log_every_steps < 1
+        or settings.eval_every_steps < 1
+    ):
+        raise ValueError(
+            "warmup_steps must be >= 0 and log/eval intervals must be >= 1"
+        )
     if settings.precision not in {"fp32", "fp16", "bf16"}:
         raise ValueError("precision must be fp32, fp16, or bf16")
     if settings.grad_clip_norm <= 0:
         raise ValueError("grad_clip_norm must be positive")
+    if type(settings.wandb.enabled) is not bool:
+        raise ValueError("wandb.enabled must be true or false")
+    if settings.wandb.enabled and not settings.wandb.project.strip():
+        raise ValueError("wandb.project is required when W&B is enabled")
+    if settings.wandb.mode not in {"online", "offline", "disabled"}:
+        raise ValueError("wandb.mode must be online, offline, or disabled")
     return settings

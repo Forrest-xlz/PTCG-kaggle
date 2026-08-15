@@ -18,6 +18,7 @@ expert_classifier:
   device: cuda
   precision: bf16
   log_every_steps: 10
+  eval_every_steps: 100              # Evaluate the replay-grouped validation set every N steps.
   grad_clip_norm: 1.0
 
   model:
@@ -32,3 +33,10 @@ expert_classifier:
 
   recovery:
     output: data/expert_classifier/recovered
+
+  wandb:
+    enabled: false                   # Metrics only; checkpoints remain local.
+    project: ptcg_expert_classifier
+    group: expert_classifier
+    name: expert_classifier
+    mode: online                     # online, offline, or disabled.

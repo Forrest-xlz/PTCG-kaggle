@@ -60,6 +60,28 @@ def binary_metrics(logits: torch.Tensor, labels: torch.Tensor) -> dict[str, floa
     }
 
 
+def should_evaluate(interval: int, global_step: int) -> bool:
+    return global_step > 0 and global_step % interval == 0
+
+
+def _init_wandb(settings):
+    if not settings.wandb.enabled:
+        return None
+    try:
+        import wandb
+    except ImportError as exc:
+        raise RuntimeError(
+            "wandb.enabled is true, but wandb is not installed"
+        ) from exc
+    return wandb.init(
+        project=settings.wandb.project,
+        group=settings.wandb.group or None,
+        name=settings.wandb.name or None,
+        mode=settings.wandb.mode,
+        config=asdict(settings),
+    )
+
+
 def _evaluate(model, dataset, indices, labels_by_id, batch_size, device, precision):
     model.eval()
     loss_sum = 0.0
@@ -118,6 +140,7 @@ def main() -> None:
     output = project_path(settings.output)
     checkpoint_dir = output / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    wandb_run = None
     try:
         dates = select_recent_dates(dataset.shard_dates, settings.recent_dates)
         expert_info = load_expert_date_info(
@@ -146,6 +169,7 @@ def main() -> None:
             f"validation={split.validation_indices.size:,} "
             f"positive_weight={pos_weight_value:.3f}", flush=True
         )
+        wandb_run = _init_wandb(settings)
 
         device = resolve_device(settings.device)
         precision = PrecisionContext(settings.precision, device)
@@ -162,6 +186,58 @@ def main() -> None:
         pos_weight_tensor = torch.tensor(pos_weight_value, device=device)
         best_loss = float("inf")
         global_step = 0
+        last_eval_step = -1
+        last_validation = None
+
+        def checkpoint_payload(epoch: int, validation: dict[str, float]) -> dict:
+            return {
+                "model": model.state_dict(),
+                "config": config.to_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "scaler": precision.state_dict(),
+                "epoch": epoch,
+                "global_step": global_step,
+                "validation": validation,
+                "expert_classifier": asdict(settings),
+            }
+
+        def run_validation(epoch: int) -> dict[str, float]:
+            nonlocal best_loss, last_eval_step, last_validation
+            validation = _evaluate(
+                model, dataset, split.validation_indices, labels_by_id,
+                settings.batch_size, device, precision
+            )
+            last_eval_step = global_step
+            last_validation = validation
+            print(
+                f"validation epoch={epoch} step={global_step:,} "
+                + " ".join(
+                    f"{name}={value:.4f}"
+                    for name, value in validation.items()
+                ),
+                flush=True,
+            )
+            if wandb_run is not None:
+                wandb_run.log(
+                    {
+                        **{
+                            f"validation/{name}": value
+                            for name, value in validation.items()
+                        },
+                        "optimizer_step": global_step,
+                        "epoch": epoch,
+                    },
+                    step=global_step,
+                )
+            if validation["loss"] < best_loss:
+                best_loss = validation["loss"]
+                torch.save(
+                    checkpoint_payload(epoch, validation),
+                    output / "best.pt",
+                )
+            return validation
+
         for epoch in range(1, settings.epochs + 1):
             model.train()
             for index_batch in dataset.iter_index_batches(
@@ -192,30 +268,37 @@ def main() -> None:
                         f"acc={metrics['accuracy']:.3f} precision={metrics['precision']:.3f} "
                         f"recall={metrics['recall']:.3f}", flush=True
                     )
-            validation = _evaluate(
-                model, dataset, split.validation_indices, labels_by_id,
-                settings.batch_size, device, precision
-            )
-            print(f"validation epoch={epoch} " + " ".join(
-                f"{name}={value:.4f}" for name, value in validation.items()
-            ), flush=True)
-            payload = {
-                "model": model.state_dict(),
-                "config": config.to_dict(),
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
-                "scaler": precision.state_dict(),
-                "epoch": epoch,
-                "global_step": global_step,
-                "validation": validation,
-                "expert_classifier": asdict(settings),
-            }
+                    if wandb_run is not None:
+                        wandb_run.log(
+                            {
+                                "train/loss": float(loss.item()),
+                                **{
+                                    f"train/{name}": value
+                                    for name, value in metrics.items()
+                                },
+                                "train/learning_rate": float(
+                                    optimizer.param_groups[0]["lr"]
+                                ),
+                                "optimizer_step": global_step,
+                                "epoch": epoch,
+                            },
+                            step=global_step,
+                        )
+                if (
+                    should_evaluate(settings.eval_every_steps, global_step)
+                    and global_step != last_eval_step
+                ):
+                    run_validation(epoch)
+                    model.train()
+            if global_step != last_eval_step:
+                run_validation(epoch)
+            assert last_validation is not None
+            payload = checkpoint_payload(epoch, last_validation)
             torch.save(payload, checkpoint_dir / f"epoch-{epoch:03d}.pt")
-            if validation["loss"] < best_loss:
-                best_loss = validation["loss"]
-                torch.save(payload, output / "best.pt")
     finally:
         dataset.close()
+        if wandb_run is not None:
+            wandb_run.finish()
 
 
 if __name__ == "__main__":
