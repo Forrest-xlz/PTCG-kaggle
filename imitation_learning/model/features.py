@@ -31,7 +31,7 @@ from model.card_features import (
 )
 
 
-ENCODER_TOKENS = 26
+ENCODER_TOKENS = 28
 POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
 OPPONENT_SUMMARY_DIM = 71
@@ -103,6 +103,7 @@ class EncoderFeatures:
     own_summary: list[float]
     opponent_summary: list[float]
     global_summary: list[float]
+    revealed_hand_present: list[int]
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,23 @@ def _add_card(sv: SparseVector, card: Any, card_count: int) -> None:
 def _add_cards(sv: SparseVector, cards: Any, weight: float, card_count: int) -> None:
     if cards is not None:
         for card in cards: sv.add(card.id, weight)
+    sv.add_pos(card_count)
+
+
+def _add_card_ids(
+    sv: SparseVector,
+    card_ids: Iterable[int],
+    weight: float,
+    card_count: int,
+) -> None:
+    for raw_card_id in card_ids:
+        card_id = int(raw_card_id)
+        if not 0 <= card_id < card_count:
+            raise ValueError(
+                f"revealed hand card ID {card_id} is outside "
+                f"[0, {card_count})"
+            )
+        sv.add(card_id, weight)
     sv.add_pos(card_count)
 
 
@@ -523,6 +541,8 @@ def encoder_features(
     card_count: int,
     *,
     numeric_catalog: NumericFeatureCatalog | None = None,
+    own_revealed_hand: Iterable[int] = (),
+    opponent_revealed_hand: Iterable[int] = (),
 ) -> EncoderFeatures:
     catalog = numeric_catalog or _default_numeric_catalog(card_count)
     state, yours, sparse = obs.current, obs.current.yourIndex, SparseVector()
@@ -582,6 +602,14 @@ def encoder_features(
 
     # Dense global summary placeholder.
     sparse.word_start()
+    own_revealed_hand = tuple(int(value) for value in own_revealed_hand)
+    opponent_revealed_hand = tuple(
+        int(value) for value in opponent_revealed_hand
+    )
+    sparse.word_start()
+    _add_card_ids(sparse, own_revealed_hand, 1.0, card_count)
+    sparse.word_start()
+    _add_card_ids(sparse, opponent_revealed_hand, 1.0, card_count)
     if len(sparse.offset) != ENCODER_TOKENS:
         raise RuntimeError(
             f"encoder produced {len(sparse.offset)} tokens"
@@ -609,6 +637,10 @@ def encoder_features(
         own_summary=own_summary,
         opponent_summary=opponent_summary,
         global_summary=_global_summary(obs, yours),
+        revealed_hand_present=[
+            int(bool(own_revealed_hand)),
+            int(bool(opponent_revealed_hand)),
+        ],
     )
 
 

@@ -14,8 +14,8 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 16
-ENCODER_WORDS = 26
+CACHE_SCHEMA_VERSION = 17
+ENCODER_WORDS = 28
 POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
 OPPONENT_SUMMARY_DIM = 71
@@ -41,6 +41,7 @@ SECTION_DTYPES = {
     "encoder_ptr": np.dtype("<u4"),
     "encoder_offset": np.dtype("<u2"),
     "encoder_pokemon_appear": np.dtype("u1"),
+    "revealed_hand_present": np.dtype("u1"),
     "own_summary": np.dtype("<f2"),
     "opponent_summary": np.dtype("<f2"),
     "global_summary": np.dtype("<f2"),
@@ -75,6 +76,7 @@ class FeatureRecord:
     encoder_value: list[float]
     encoder_offset: list[int]
     encoder_pokemon_appear: list[int]
+    revealed_hand_present: list[int]
     own_summary: list[float]
     opponent_summary: list[float]
     global_summary: list[float]
@@ -105,6 +107,7 @@ class FeatureView:
     encoder_value: np.ndarray
     encoder_offset: np.ndarray
     encoder_pokemon_appear: np.ndarray
+    revealed_hand_present: np.ndarray
     own_summary: np.ndarray
     opponent_summary: np.ndarray
     global_summary: np.ndarray
@@ -140,6 +143,7 @@ class CachedBatch:
     encoder_value: np.ndarray
     encoder_offset: np.ndarray
     encoder_pokemon_appear: np.ndarray
+    revealed_hand_present: np.ndarray
     own_summary: np.ndarray
     opponent_summary: np.ndarray
     global_summary: np.ndarray
@@ -333,6 +337,16 @@ class PackedShardWriter:
             raise ValueError(
                 "encoder_pokemon_appear values must be in [0, 2]"
             )
+        if (
+            len(record.revealed_hand_present) != 2
+            or any(
+                value not in (0, 1)
+                for value in record.revealed_hand_present
+            )
+        ):
+            raise ValueError(
+                "revealed_hand_present must contain two binary values"
+            )
         _validate_dense_summary("own_summary", record.own_summary, OWN_SUMMARY_DIM)
         _validate_dense_summary(
             "opponent_summary", record.opponent_summary, OPPONENT_SUMMARY_DIM
@@ -492,6 +506,9 @@ class PackedShardWriter:
         self._buffers["encoder_offset"].extend(record.encoder_offset)
         self._buffers["encoder_pokemon_appear"].extend(
             record.encoder_pokemon_appear
+        )
+        self._buffers["revealed_hand_present"].extend(
+            record.revealed_hand_present
         )
         self._buffers["own_summary"].extend(record.own_summary)
         self._buffers["opponent_summary"].extend(record.opponent_summary)
@@ -716,6 +733,14 @@ class PackedShard:
             raise ValueError(
                 "encoder_pokemon_appear contains an invalid value"
             )
+        if self.arrays["revealed_hand_present"].size != self.samples * 2:
+            raise ValueError(
+                "revealed_hand_present length does not match sample count"
+            )
+        if np.any(self.arrays["revealed_hand_present"] > 1):
+            raise ValueError(
+                "revealed_hand_present contains an invalid value"
+            )
         dense_widths = {
             "own_summary": OWN_SUMMARY_DIM,
             "opponent_summary": OPPONENT_SUMMARY_DIM,
@@ -828,6 +853,7 @@ class PackedShard:
         )
         encoder_word_start = local_id * ENCODER_WORDS
         pokemon_start = local_id * POKEMON_ENCODER_TOKENS
+        revealed_start = local_id * 2
         own_start = local_id * OWN_SUMMARY_DIM
         opponent_start = local_id * OPPONENT_SUMMARY_DIM
         global_start = local_id * GLOBAL_SUMMARY_DIM
@@ -844,6 +870,9 @@ class PackedShard:
                 pokemon_start:
                 pokemon_start + POKEMON_ENCODER_TOKENS
             ],
+            revealed_hand_present=self.arrays[
+                "revealed_hand_present"
+            ][revealed_start:revealed_start + 2],
             own_summary=self.arrays["own_summary"][
                 own_start : own_start + OWN_SUMMARY_DIM
             ],
@@ -1463,6 +1492,9 @@ class MmapFeatureDataset:
             (global_ids.size, POKEMON_ENCODER_TOKENS),
             dtype=np.uint8,
         )
+        revealed_hand_present = np.empty(
+            (global_ids.size, 2), dtype=np.uint8
+        )
         own_summaries = np.empty(
             (global_ids.size, OWN_SUMMARY_DIM), dtype=np.float16
         )
@@ -1501,6 +1533,7 @@ class MmapFeatureDataset:
             encoder_indices.append(sample.encoder_index)
             encoder_values.append(sample.encoder_value)
             encoder_pokemon_appear[row] = sample.encoder_pokemon_appear
+            revealed_hand_present[row] = sample.revealed_hand_present
             option_categorical.append(sample.option_categorical)
             option_numeric.append(sample.option_numeric)
             pokemon_dynamic.append(sample.pokemon_dynamic)
@@ -1558,6 +1591,7 @@ class MmapFeatureDataset:
             encoder_value=np.concatenate(encoder_values).astype(np.float16, copy=False),
             encoder_offset=encoder_offsets,
             encoder_pokemon_appear=encoder_pokemon_appear,
+            revealed_hand_present=revealed_hand_present,
             own_summary=own_summaries,
             opponent_summary=opponent_summaries,
             global_summary=global_summaries,
