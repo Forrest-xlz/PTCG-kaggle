@@ -18,6 +18,7 @@ from deck_strength.config import (
     GameSpec,
     RuntimeSettings,
 )
+from deck_strength.evaluate import format_progress
 
 
 def _settings(*, workers: int) -> DeckStrengthSettings:
@@ -121,3 +122,14 @@ def test_worker_game_requires_initializer() -> None:
         assert "not initialized" in str(exc)
     else:
         raise AssertionError("run_worker_game should require initialization")
+
+
+def test_format_progress_contains_game_and_seat_information() -> None:
+    line = format_progress(3, 12, _result(8))
+
+    assert "[3/12]" in line
+    assert "game_id=8" in line
+    assert "a vs b" in line
+    assert "a_player=0" in line
+    assert "outcome_a=win" in line
+    assert "selections=2" in line

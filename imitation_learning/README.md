@@ -348,6 +348,25 @@ numeric win-rate matrix, and `beam_win_rate_matrix.png`. Matrix rows are Beam
 Decks, columns are Greedy Decks, and the primary win rate excludes draws and
 failed games.
 
+## Greedy Deck strength evaluation
+
+The isolated `deck_strength/` package compares configured Decks while the same
+checkpoint controls both players with Greedy Top-1 actions. Configure the
+checkpoint, Deck lists, games per pair, and worker count in
+`cfg/deck_strength.yaml`, then run from the `imitation_learning` directory:
+
+```bash
+python deck_strength/evaluate.py
+```
+
+Every unordered pair of different Decks plays exactly `games_per_pair` games
+in total, alternating player seats. Same-Deck mirror games are omitted. The
+output directory contains per-game and per-pair CSV files, a directed win-rate
+matrix and PNG, `deck_ranking.csv`, and `summary.json`. Matrix rows are the
+evaluated Deck, columns are the opponent Deck, and draws and failed games are
+excluded from decisive-game win rates. Multiple workers independently load the
+model on the configured device, so start with two workers on one GPU.
+
 ## Training records
 
 Each deck cache contains only two rows per replay: the two complete sorted
