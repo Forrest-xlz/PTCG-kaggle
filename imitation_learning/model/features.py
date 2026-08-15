@@ -691,6 +691,47 @@ def _area_card(
     return cards[position] if 0 <= position < len(cards) else None
 
 
+def damage_counter_action_eligibility(
+    obs: Any,
+    actions: list[list[int]],
+) -> np.ndarray:
+    """Return safe action choices for freely placed damage counters."""
+    from cg.api import AreaType
+
+    result = np.ones(len(actions), dtype=np.bool_)
+    if int(obs.select.context) != 14:
+        return result
+
+    options = list(obs.select.option)
+    option_eligible = np.ones(len(options), dtype=np.bool_)
+    for option_index, option in enumerate(options):
+        if getattr(option, "area", None) != AreaType.BENCH:
+            continue
+        player_index = _optional_int(
+            getattr(option, "playerIndex", None), -1
+        )
+        bench_index = _optional_int(getattr(option, "index", None), -1)
+        players = list(getattr(obs.current, "players", ()) or ())
+        if not 0 <= player_index < len(players):
+            continue
+        bench = list(getattr(players[player_index], "bench", ()) or ())
+        if not 0 <= bench_index < len(bench):
+            continue
+        hp = getattr(bench[bench_index], "hp", None)
+        if hp is not None and float(hp) <= 0:
+            option_eligible[option_index] = False
+
+    for action_index, action in enumerate(actions):
+        result[action_index] = all(
+            0 <= option_index < len(options)
+            and bool(option_eligible[option_index])
+            for option_index in action
+        )
+    if len(result) and not bool(result.any()):
+        result.fill(True)
+    return result
+
+
 def _valid_card_id(card: Any, card_count: int) -> int:
     if card is None:
         return card_count
