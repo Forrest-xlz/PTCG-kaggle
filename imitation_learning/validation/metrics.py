@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+from training.action_mask import prepare_policy_batch
 from training.feature_cache import CachedBatch, IndexBatch, MmapFeatureDataset
 
 
@@ -52,7 +53,7 @@ def _forward_batch(
     batch: CachedBatch,
     model: torch.nn.Module,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     logits = model(
         _to_device(batch.encoder_index, device),
         _to_device(batch.encoder_value, device, dtype=torch.float32),
@@ -83,19 +84,32 @@ def _forward_batch(
     )
     targets = _to_device(batch.target, device, dtype=torch.long)
     action_counts = _to_device(batch.action_count, device, dtype=torch.long)
-    return logits, targets, action_counts
+    action_eligible = _to_device(
+        batch.action_eligible, device, dtype=torch.bool
+    )
+    return logits, targets, action_counts, action_eligible
 
 
 def policy_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
     action_counts: torch.Tensor,
+    action_eligible: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, PolicyMetrics]:
-    invalid = (
-        torch.arange(logits.shape[1], device=logits.device).unsqueeze(0)
-        >= action_counts.unsqueeze(1)
+    masked, targets, _ = prepare_policy_batch(
+        logits,
+        targets,
+        action_counts,
+        action_eligible,
     )
-    masked = logits.masked_fill(invalid, torch.finfo(logits.dtype).min)
+    if targets.numel() == 0:
+        return logits.sum() * 0.0, PolicyMetrics(
+            loss=0.0,
+            top1_correct=0,
+            top3_correct=0,
+            top5_correct=0,
+            samples=0,
+        )
     loss = torch.nn.functional.cross_entropy(masked, targets)
     top_indices = masked.topk(min(5, masked.shape[1]), dim=1).indices
 
@@ -123,6 +137,7 @@ def policy_metrics(
 def legal_action_probabilities(
     logits: torch.Tensor,
     action_counts: torch.Tensor,
+    action_eligible: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Return FP32 softmax probabilities with invalid actions set to zero."""
     logits = logits.float()
@@ -130,6 +145,8 @@ def legal_action_probabilities(
         torch.arange(logits.shape[1], device=logits.device).unsqueeze(0)
         >= action_counts.unsqueeze(1)
     )
+    if action_eligible is not None:
+        invalid = invalid | ~action_eligible.to(torch.bool)
     return torch.softmax(logits.masked_fill(invalid, float("-inf")), dim=1)
 
 
@@ -142,6 +159,7 @@ def evaluate_dataset(
     device: torch.device,
     precision,
     subgroup_masks: dict[str, np.ndarray],
+    damage_counter_ko_mask: bool,
 ) -> ValidationResult:
     models = tuple(models)
     if not models:
@@ -198,15 +216,22 @@ def evaluate_dataset(
                 end = min(start + batch_size, len(indices))
                 batch = dataset.collate(IndexBatch(indices[start:end]))
                 with precision.autocast():
-                    logits, targets, action_counts = _forward_batch(
+                    logits, targets, action_counts, action_eligible = _forward_batch(
                         batch, models[0], device
+                    )
+                    enabled_eligibility = (
+                        action_eligible
+                        if damage_counter_ko_mask
+                        else None
                     )
                     if ensemble_enabled:
                         probability_sum = legal_action_probabilities(
-                            logits, action_counts
+                            logits,
+                            action_counts,
+                            enabled_eligibility,
                         )
                         for model in models[1:]:
-                            model_logits, _, _ = _forward_batch(
+                            model_logits, _, _, _ = _forward_batch(
                                 batch, model, device
                             )
                             if model_logits.shape != logits.shape:
@@ -216,7 +241,9 @@ def evaluate_dataset(
                                 )
                             probability_sum.add_(
                                 legal_action_probabilities(
-                                    model_logits, action_counts
+                                    model_logits,
+                                    action_counts,
+                                    enabled_eligibility,
                                 )
                             )
                         averaged = probability_sum / len(models)
@@ -228,7 +255,10 @@ def evaluate_dataset(
                     else:
                         scores = logits
                     _, metrics = policy_metrics(
-                        scores, targets, action_counts
+                        scores,
+                        targets,
+                        action_counts,
+                        enabled_eligibility,
                     )
                     accumulate("overall", metrics)
                     for name, mask in masks.items():
@@ -240,6 +270,11 @@ def evaluate_dataset(
                                 scores[selected],
                                 targets[selected],
                                 action_counts[selected],
+                                (
+                                    enabled_eligibility[selected]
+                                    if enabled_eligibility is not None
+                                    else None
+                                ),
                             )
                             accumulate(name, subgroup_metrics)
     finally:

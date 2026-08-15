@@ -103,6 +103,7 @@ def feature_signature(config: ModelConfig) -> dict[str, Any]:
         "history_layout": "selected-option-superset-v1",
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
+        "action_mask": "damage-counter-ko-action-mask-v1",
     }
 
 
@@ -322,6 +323,9 @@ def main() -> None:
                 device=device,
                 precision=precision,
                 subgroup_masks=spec.subgroup_masks,
+                damage_counter_ko_mask=(
+                    settings.damage_counter_ko_mask
+                ),
             )
             if spec.namespace == "isolation_union":
                 print(

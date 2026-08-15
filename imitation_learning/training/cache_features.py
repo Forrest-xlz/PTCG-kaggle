@@ -42,6 +42,7 @@ from cg.api import all_attack, all_card_data, to_observation_class
 from model.features import (
     HISTORY_STEPS,
     HistoryActionFeatures,
+    damage_counter_action_eligibility,
     decoder_features,
     encoder_features,
     enumerate_actions,
@@ -168,6 +169,7 @@ def feature_signature(config: ModelConfig) -> dict:
         "history_layout": "selected-option-superset-v1",
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
+        "action_mask": "damage-counter-ko-action-mask-v1",
     }
 
 
@@ -221,6 +223,7 @@ def _prepare_record(
     decoder = decoder_features(
         obs, actions, config.card_count, config.attack_count
     )
+    action_eligible = damage_counter_action_eligibility(obs, actions)
     current_history = history_action_features(
         obs,
         selected,
@@ -245,6 +248,7 @@ def _prepare_record(
             attack_dynamic=decoder.attack_dynamic.reshape(-1).tolist(),
             action_option_index=decoder.action_index.tolist(),
             action_option_offset=decoder.action_offset.tolist(),
+            action_eligible=action_eligible.astype("u1").tolist(),
             target=target,
             action_count=len(actions),
             episode_key=stable_episode_key(record["episode_id"]),

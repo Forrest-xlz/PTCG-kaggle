@@ -14,7 +14,7 @@ from typing import AbstractSet, Iterable, Mapping
 import numpy as np
 
 
-CACHE_SCHEMA_VERSION = 17
+CACHE_SCHEMA_VERSION = 18
 ENCODER_WORDS = 28
 POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
@@ -62,6 +62,7 @@ SECTION_DTYPES = {
     "action_option_ptr": np.dtype("<u4"),
     "action_option_offset": np.dtype("<u2"),
     "action_option_offset_ptr": np.dtype("<u4"),
+    "action_eligible": np.dtype("u1"),
     "target": np.dtype("u1"),
     "action_count": np.dtype("u1"),
     "episode_key": np.dtype("<u4"),
@@ -86,6 +87,7 @@ class FeatureRecord:
     attack_dynamic: list[float]
     action_option_index: list[int]
     action_option_offset: list[int]
+    action_eligible: list[int]
     target: int
     action_count: int
     episode_key: int
@@ -117,6 +119,7 @@ class FeatureView:
     attack_dynamic: np.ndarray
     action_option_index: np.ndarray
     action_option_offset: np.ndarray
+    action_eligible: np.ndarray
     target: int
     action_count: int
     episode_key: int
@@ -153,6 +156,7 @@ class CachedBatch:
     attack_dynamic: np.ndarray
     action_option_index: np.ndarray
     action_option_offset: np.ndarray
+    action_eligible: np.ndarray
     target: np.ndarray
     action_count: np.ndarray
     history_select_type: np.ndarray
@@ -425,6 +429,13 @@ class PackedShardWriter:
             raise ValueError("action_option_index contains an invalid option")
         if not 0 <= int(record.target) < int(record.action_count):
             raise ValueError("target must be smaller than action_count")
+        if (
+            len(record.action_eligible) != int(record.action_count)
+            or any(value not in (0, 1) for value in record.action_eligible)
+        ):
+            raise ValueError(
+                "action_eligible must contain one binary value per action"
+            )
         if not 0 <= int(record.episode_key) <= np.iinfo(np.uint32).max:
             raise ValueError("episode_key must fit uint32")
         if not 0 <= int(record.deck_key) <= np.iinfo(np.uint64).max:
@@ -544,6 +555,7 @@ class PackedShardWriter:
         self._buffers["action_option_offset"].extend(
             record.action_option_offset
         )
+        self._buffers["action_eligible"].extend(record.action_eligible)
 
         self._encoder_nnz = next_encoder_nnz
         self._option_count = next_option_count
@@ -762,6 +774,14 @@ class PackedShard:
             raise ValueError("target length does not match sample count")
         if self.arrays["action_count"].size != self.samples:
             raise ValueError("action_count length does not match sample count")
+        if self.arrays["action_eligible"].size != int(
+            self.arrays["action_count"].sum()
+        ):
+            raise ValueError(
+                "action_eligible length does not match action counts"
+            )
+        if np.any(self.arrays["action_eligible"] > 1):
+            raise ValueError("action_eligible contains an invalid value")
         if self.arrays["episode_key"].size != self.samples:
             raise ValueError("episode_key length does not match sample count")
         if self.arrays["deck_key"].size != self.samples:
@@ -851,6 +871,10 @@ class PackedShard:
         offset_end = int(
             self.arrays["action_option_offset_ptr"][local_id + 1]
         )
+        eligibility_start = offset_start - local_id
+        eligibility_end = eligibility_start + int(
+            self.arrays["action_count"][local_id]
+        )
         encoder_word_start = local_id * ENCODER_WORDS
         pokemon_start = local_id * POKEMON_ENCODER_TOKENS
         revealed_start = local_id * 2
@@ -903,6 +927,9 @@ class PackedShard:
             ],
             action_option_offset=self.arrays["action_option_offset"][
                 offset_start:offset_end
+            ],
+            action_eligible=self.arrays["action_eligible"][
+                eligibility_start:eligibility_end
             ],
             target=int(self.arrays["target"][local_id]),
             action_count=int(self.arrays["action_count"][local_id]),
@@ -1522,6 +1549,9 @@ class MmapFeatureDataset:
         )
         targets = np.empty(global_ids.size, dtype=np.int64)
         action_counts = np.empty(global_ids.size, dtype=np.int64)
+        action_eligible = np.zeros(
+            (global_ids.size, MAX_ACTIONS), dtype=np.uint8
+        )
         encoder_base = 0
         option_base = 0
         action_option_base = 0
@@ -1579,6 +1609,9 @@ class MmapFeatureDataset:
             )
             targets[row] = sample.target
             action_counts[row] = sample.action_count
+            action_eligible[row, :sample.action_count] = (
+                sample.action_eligible
+            )
             encoder_base += int(sample.encoder_index.size)
             option_base += int(sample.option_categorical.shape[0])
             action_option_base += int(sample.action_option_index.size)
@@ -1611,6 +1644,7 @@ class MmapFeatureDataset:
                 np.int64, copy=False
             ),
             action_option_offset=action_option_offsets,
+            action_eligible=action_eligible,
             target=targets,
             action_count=action_counts,
             history_select_type=history_select_type,

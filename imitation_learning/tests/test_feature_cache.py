@@ -94,6 +94,7 @@ def record(
         history_option_offset=[0, 0, 0, 0],
         action_option_index=action_option_index,
         action_option_offset=action_option_offset,
+        action_eligible=([0, 1] if action_count == 2 else [1]),
         target=min(1, action_count - 1),
         action_count=action_count,
         episode_key=stable_episode_key(episode_id or f"episode-{marker}"),
@@ -173,6 +174,7 @@ def test_packed_shard_round_trip(tmp_path: Path) -> None:
         )
         np.testing.assert_array_equal(sample.action_option_index, [0, 1, 0])
         np.testing.assert_array_equal(sample.action_option_offset, [0, 2, 3])
+        np.testing.assert_array_equal(sample.action_eligible, [0, 1])
         assert sample.target == 1
         assert sample.action_count == 2
         assert sample.episode_key == stable_episode_key("episode-11")
@@ -661,6 +663,9 @@ def test_collate_rebases_options_and_pads_action_offsets(tmp_path: Path) -> None
             POKEMON_ENCODER_TOKENS,
         )
         assert batch.revealed_hand_present.shape == (2, 2)
+        assert batch.action_eligible.shape == (2, 64)
+        np.testing.assert_array_equal(batch.action_eligible[:, :2], [[0, 1], [0, 1]])
+        assert not bool(batch.action_eligible[:, 2:].any())
         assert batch.own_summary.shape == (2, OWN_SUMMARY_DIM)
         assert batch.opponent_summary.shape == (2, OPPONENT_SUMMARY_DIM)
         assert batch.global_summary.shape == (2, GLOBAL_SUMMARY_DIM)

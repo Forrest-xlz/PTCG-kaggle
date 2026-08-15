@@ -46,6 +46,7 @@ def _record() -> FeatureRecord:
         attack_dynamic=[0.0] * ATTACK_DYNAMIC_DIM,
         action_option_index=[0],
         action_option_offset=[0, 1],
+        action_eligible=[1],
         target=0,
         action_count=1,
         episode_key=stable_episode_key("episode"),

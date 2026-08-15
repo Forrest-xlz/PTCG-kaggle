@@ -42,6 +42,7 @@ from cg.api import all_attack, all_card_data
 from model.attack_features import build_attack_feature_table
 from model.card_features import build_card_feature_table
 from model.network import ModelConfig, PTCGTransformer
+from training.action_mask import prepare_policy_batch
 from training.expert_validation import (
     ExpertLoserDateInfo,
     load_expert_date_info,
@@ -106,6 +107,7 @@ class TrainSettings:
     seed: int
     device: str
     precision: str
+    damage_counter_ko_mask: bool
     log_every_steps: int
     eval_every_steps: int
     save_every_steps: int
@@ -378,6 +380,8 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError("train.warmup_steps must be >= 0")
     if train.precision not in {"fp32", "fp16", "bf16"}:
         raise ValueError("train.precision must be fp32, fp16, or bf16")
+    if type(train.damage_counter_ko_mask) is not bool:
+        raise ValueError("train.damage_counter_ko_mask must be true or false")
     if train.learning_rate <= 0 or train.weight_decay < 0:
         raise ValueError("learning rate must be positive and weight decay non-negative")
     if train.grad_clip_norm <= 0:
@@ -656,6 +660,7 @@ def feature_signature(config: ModelConfig) -> dict:
         "history_layout": "selected-option-superset-v1",
         "max_actions": MAX_ACTIONS,
         "action_enumeration": "max-to-min-v1",
+        "action_mask": "damage-counter-ko-action-mask-v1",
     }
 
 
@@ -697,7 +702,7 @@ def _forward_batch(
     batch: CachedBatch,
     model: torch.nn.Module,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     logits = model(
         _to_device(batch.encoder_index, device),
         _to_device(batch.encoder_value, device, dtype=torch.float32),
@@ -738,19 +743,33 @@ def _forward_batch(
     )
     targets = _to_device(batch.target, device, dtype=torch.long)
     action_counts = _to_device(batch.action_count, device, dtype=torch.long)
-    return logits, targets, action_counts
+    action_eligible = _to_device(
+        batch.action_eligible, device, dtype=torch.bool
+    )
+    return logits, targets, action_counts, action_eligible
 
 
 def policy_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
     action_counts: torch.Tensor,
+    action_eligible: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, PolicyMetrics]:
-    invalid = (
-        torch.arange(logits.shape[1], device=logits.device).unsqueeze(0)
-        >= action_counts.unsqueeze(1)
+    masked, targets, _ = prepare_policy_batch(
+        logits,
+        targets,
+        action_counts,
+        action_eligible,
     )
-    masked = logits.masked_fill(invalid, torch.finfo(logits.dtype).min)
+    if targets.numel() == 0:
+        loss = logits.sum() * 0.0
+        return loss, PolicyMetrics(
+            loss=0.0,
+            top1_correct=0,
+            top3_correct=0,
+            top5_correct=0,
+            samples=0,
+        )
     loss = torch.nn.functional.cross_entropy(masked, targets)
     top_indices = masked.topk(min(5, masked.shape[1]), dim=1).indices
 
@@ -785,12 +804,33 @@ def train_batch(
     device: torch.device,
     precision: PrecisionContext,
     grad_clip_norm: float,
+    damage_counter_ko_mask: bool,
 ) -> BatchResult:
     optimizer.zero_grad(set_to_none=True)
     learning_rate = float(optimizer.param_groups[0]["lr"])
     with precision.autocast():
-        logits, targets, action_counts = _forward_batch(batch, model, device)
-        loss, metrics = policy_metrics(logits, targets, action_counts)
+        logits, targets, action_counts, action_eligible = _forward_batch(
+            batch, model, device
+        )
+        loss, metrics = policy_metrics(
+            logits,
+            targets,
+            action_counts,
+            action_eligible if damage_counter_ko_mask else None,
+        )
+    if metrics.samples == 0:
+        grad_scale = (
+            float(precision.scaler.get_scale())
+            if precision.scaler.is_enabled()
+            else 1.0
+        )
+        return BatchResult(
+            metrics=metrics,
+            grad_norm=0.0,
+            learning_rate=learning_rate,
+            optimizer_stepped=False,
+            grad_scale=grad_scale,
+        )
     step = precision.backward_step(
         loss=loss,
         model=model,
@@ -815,6 +855,7 @@ def evaluate_dataset(
     device: torch.device,
     precision: PrecisionContext,
     subgroup_masks: dict[str, np.ndarray],
+    damage_counter_ko_mask: bool,
 ) -> ValidationResult:
     indices = np.asarray(indices)
     if indices.ndim != 1:
@@ -863,11 +904,14 @@ def evaluate_dataset(
                 end = min(start + batch_size, len(indices))
                 batch = dataset.collate(IndexBatch(indices[start:end]))
                 with precision.autocast():
-                    logits, targets, action_counts = _forward_batch(
+                    logits, targets, action_counts, action_eligible = _forward_batch(
                         batch, model, device
                     )
                     _, metrics = policy_metrics(
-                        logits, targets, action_counts
+                        logits,
+                        targets,
+                        action_counts,
+                        action_eligible if damage_counter_ko_mask else None,
                     )
                     accumulate("overall", metrics)
                     for name, mask in masks.items():
@@ -879,6 +923,11 @@ def evaluate_dataset(
                                 logits[selected],
                                 targets[selected],
                                 action_counts[selected],
+                                (
+                                    action_eligible[selected]
+                                    if damage_counter_ko_mask
+                                    else None
+                                ),
                             )
                             accumulate(name, subgroup_metrics)
     finally:
@@ -1447,6 +1496,7 @@ def main() -> None:
             device=device,
             precision=precision,
             subgroup_masks=splits.isolation_masks,
+            damage_counter_ko_mask=train_cfg.damage_counter_ko_mask,
         )
         print(
             f"isolation_union step={global_step:,} "
@@ -1499,6 +1549,7 @@ def main() -> None:
                 device=device,
                 precision=precision,
                 subgroup_masks=subgroup_masks,
+                damage_counter_ko_mask=train_cfg.damage_counter_ko_mask,
             )
             _log_validation(
                 namespace,
@@ -1540,9 +1591,15 @@ def main() -> None:
                     device=device,
                     precision=precision,
                     grad_clip_norm=train_cfg.grad_clip_norm,
+                    damage_counter_ko_mask=(
+                        train_cfg.damage_counter_ko_mask
+                    ),
                 )
                 train_compute_seconds += time.perf_counter() - batch_started
                 metrics = result.metrics
+                if metrics.samples == 0:
+                    skipped_updates += 1
+                    continue
                 averages = metrics.averages()
                 ema_values = {
                     "loss": ema["loss"].update(averages["loss"]),

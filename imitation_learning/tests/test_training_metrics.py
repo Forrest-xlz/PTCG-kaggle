@@ -175,6 +175,7 @@ class DummyDataset:
             action_option_offset=np.zeros(
                 size * 64 + 1, dtype=np.int32
             ),
+            action_eligible=np.ones((size, 64), dtype=np.uint8),
             target=np.full(size, 4, dtype=np.int64),
             action_count=np.full(size, 5, dtype=np.int64),
             history_select_type=np.zeros(
@@ -222,6 +223,7 @@ def test_validation_subgroups_share_model_forwards() -> None:
             "expert": np.asarray([True, False, True, False, True]),
             "top_deck": np.asarray([False, True, True, False, False]),
         },
+        damage_counter_ko_mask=False,
     )
 
     assert model.forward_calls == 3

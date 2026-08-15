@@ -30,6 +30,7 @@ class ValidationSettings:
     batch_size: int
     device: str
     precision: str
+    damage_counter_ko_mask: bool
     validation_ratio: float
     validation_seed: int
     expert_validation_ratio: float
@@ -172,6 +173,13 @@ def load_settings(path: Path = CONFIG_PATH) -> ValidationSettings:
     validation_seed = _required(train, "validation_seed", "train")
     if isinstance(validation_seed, bool) or not isinstance(validation_seed, int):
         raise ValueError("train.validation_seed must be an integer")
+    damage_counter_ko_mask = _required(
+        train, "damage_counter_ko_mask", "train"
+    )
+    if type(damage_counter_ko_mask) is not bool:
+        raise ValueError(
+            "train.damage_counter_ko_mask must be true or false"
+        )
 
     isolation = _mapping(
         _required(train, "isolation_validation", "train"),
@@ -228,6 +236,7 @@ def load_settings(path: Path = CONFIG_PATH) -> ValidationSettings:
         batch_size=batch_size,
         device=device,
         precision=precision,
+        damage_counter_ko_mask=damage_counter_ko_mask,
         validation_ratio=_ratio(
             _required(train, "validation_ratio", "train"),
             "train.validation_ratio",
