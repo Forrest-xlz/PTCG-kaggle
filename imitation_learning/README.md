@@ -325,8 +325,11 @@ python beam_search/evaluate.py
 The checkpoint's saved `config` is the only source of model architecture
 parameters. `games_per_matchup` applies to every ordered matrix cell, including
 same-Deck mirrors. Beam and Greedy alternate player seats inside each cell.
-The baseline is intentionally single-process so one CUDA model and the CG
-global Search state are not duplicated across workers.
+`runtime.workers` runs independent games in spawn-based processes; every worker
+owns its own model and CG state. With one GPU, start with two workers and compare
+against one. Four workers can help when the GPU remains idle, but every worker
+loads another model copy, so both GPU and host memory usage increase. Keep
+`runtime.torch_threads_per_worker` at one unless CPU profiling shows otherwise.
 
 Search expands the Beam player's `expansion_top_k` policy actions, retains at
 most `beam_width` live trajectories, resolves any opponent selection with

@@ -9,48 +9,47 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from beam_search.battle import CgBattleBackend, run_game
+from beam_search.battle import GameResult
 from beam_search.config import load_settings, schedule_games
-from beam_search.model_agent import load_policy_agent
 from beam_search.plot import aggregate_results, write_outputs
-from beam_search.search import BeamSearcher, CgSearchBackend
+from beam_search.runner import execute_games
+
+
+def format_progress(completed: int, total: int, result: GameResult) -> str:
+    return (
+        f"[{completed:,}/{total:,}] game_id={result.game_id} "
+        f"beam={result.beam_deck} greedy={result.greedy_deck} "
+        f"seat={result.beam_player} outcome={result.outcome} "
+        f"seconds={result.duration_seconds:.2f} "
+        f"searches={result.search_calls} nodes={result.expanded_nodes}"
+        + (f" error={result.error}" if result.error else "")
+    )
 
 
 def main() -> None:
     settings = load_settings()
-    policy = load_policy_agent(settings)
-    from cg.api import all_card_data
-
-    basic_card_ids = frozenset(
-        int(card.cardId) for card in all_card_data() if bool(card.basic)
-    )
-    searcher = BeamSearcher(policy, CgSearchBackend(), settings.search)
-    battle_backend = CgBattleBackend()
     games = schedule_games(settings)
     print(
         f"checkpoint={settings.checkpoint} decks={len(settings.decks)} "
-        f"matchup_cells={len(settings.decks) ** 2} games={len(games):,}",
+        f"matchup_cells={len(settings.decks) ** 2} games={len(games):,} "
+        f"workers={settings.runtime.workers} device={settings.device}",
         flush=True,
     )
-    results = []
-    for number, game in enumerate(games, start=1):
-        result = run_game(
-            game,
-            policy,
-            searcher,
-            basic_card_ids,
-            backend=battle_backend,
-        )
-        results.append(result)
+    if settings.runtime.workers > 1 and settings.device.lower().startswith("cuda"):
         print(
-            f"[{number:,}/{len(games):,}] "
-            f"beam={result.beam_deck} greedy={result.greedy_deck} "
-            f"seat={result.beam_player} outcome={result.outcome} "
-            f"seconds={result.duration_seconds:.2f} "
-            f"searches={result.search_calls} nodes={result.expanded_nodes}"
-            + (f" error={result.error}" if result.error else ""),
+            "warning: each worker loads an independent model on the same CUDA "
+            "device; GPU memory use grows with worker count",
             flush=True,
         )
+
+    completed = 0
+
+    def report_progress(result: GameResult) -> None:
+        nonlocal completed
+        completed += 1
+        print(format_progress(completed, len(games), result), flush=True)
+
+    results = execute_games(settings, games, on_result=report_progress)
     names = tuple(deck.name for deck in settings.decks)
     report = aggregate_results(results, names)
     write_outputs(settings.output, results, report, names)

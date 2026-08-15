@@ -19,6 +19,7 @@ from beam_search.config import (
     RuntimeSettings,
     SearchSettings,
 )
+from beam_search.evaluate import format_progress
 
 
 def _settings(*, workers: int) -> BeamSearchSettings:
@@ -125,3 +126,12 @@ def test_worker_game_requires_initializer() -> None:
         assert "not initialized" in str(exc)
     else:
         raise AssertionError("run_worker_game should require initialization")
+
+
+def test_format_progress_contains_completion_and_game_identity() -> None:
+    line = format_progress(3, 12, _result(8))
+
+    assert "[3/12]" in line
+    assert "game_id=8" in line
+    assert "beam=deck" in line
+    assert "greedy=deck" in line

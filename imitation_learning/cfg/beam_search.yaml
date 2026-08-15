@@ -6,6 +6,10 @@ beam_search:
   games_per_matchup: 100
   output: outputs/beam_search
 
+  runtime:
+    workers: 2                    # Independent model + CG worker processes.
+    torch_threads_per_worker: 1   # Avoid CPU thread oversubscription.
+
   search:
     beam_width: 4
     expansion_top_k: 4
