@@ -147,6 +147,8 @@ class ModelSettings:
     discard_token_mlp_layers: int = 0
     hand_token_mlp_layers: int = 0
     deck_token_mlp_layers: int = 0
+    revealed_hand_token_mlp_layers: int = 0
+    learnable_cls_token: bool = False
     region_token_mlp_residual: bool = True
     history_encoding: str = "off"
     history_action_mlp_layers: int = 1
@@ -642,7 +644,7 @@ def feature_signature(config: ModelConfig) -> dict:
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
         "encoder_tokens": ENCODER_WORDS,
-        "encoder_layout": "numeric-summary-26-appear-v2",
+        "encoder_layout": "numeric-summary-28-revealed-hand-v1",
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_layout": "routed-option-dynamics-plus-numeric-v7",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,
@@ -708,6 +710,11 @@ def _forward_batch(
         _to_device(batch.own_summary, device, dtype=torch.float32),
         _to_device(batch.opponent_summary, device, dtype=torch.float32),
         _to_device(batch.global_summary, device, dtype=torch.float32),
+        _to_device(
+            batch.revealed_hand_present,
+            device,
+            dtype=torch.long,
+        ),
         _to_device(batch.history_select_type, device, dtype=torch.long),
         _to_device(batch.history_select_context, device, dtype=torch.long),
         _to_device(batch.history_valid, device, dtype=torch.long),
@@ -1003,6 +1010,10 @@ def main() -> None:
         discard_token_mlp_layers=model_cfg.discard_token_mlp_layers,
         hand_token_mlp_layers=model_cfg.hand_token_mlp_layers,
         deck_token_mlp_layers=model_cfg.deck_token_mlp_layers,
+        revealed_hand_token_mlp_layers=(
+            model_cfg.revealed_hand_token_mlp_layers
+        ),
+        learnable_cls_token=model_cfg.learnable_cls_token,
         region_token_mlp_residual=model_cfg.region_token_mlp_residual,
         history_encoding=model_cfg.history_encoding,
         history_action_mlp_layers=model_cfg.history_action_mlp_layers,

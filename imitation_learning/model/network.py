@@ -9,7 +9,7 @@ from model.attack_features import ATTACK_FEATURE_DIM
 from model.card_features import CARD_FEATURE_DIM
 
 
-ENCODER_TOKENS = 26
+ENCODER_TOKENS = 28
 POKEMON_ENCODER_TOKENS = 18
 BENCH_SLOTS = 8
 PLAYER_BENCH_COUNT_INDEX = 10
@@ -107,7 +107,7 @@ _OPPONENT_AREA_REGIONS = (
 class ModelConfig:
     card_count: int
     attack_count: int
-    encoder_size: int = 22_000
+    encoder_size: int = 25_000
     d_model: int = 128
     num_heads: int = 2
     d_feedforward: int = 256
@@ -131,6 +131,8 @@ class ModelConfig:
     discard_token_mlp_layers: int = 0
     hand_token_mlp_layers: int = 0
     deck_token_mlp_layers: int = 0
+    revealed_hand_token_mlp_layers: int = 0
+    learnable_cls_token: bool = False
     region_token_mlp_residual: bool = True
     history_encoding: str = "off"
     history_action_mlp_layers: int = 1
@@ -179,10 +181,13 @@ class ModelConfig:
             "discard_token_mlp_layers",
             "hand_token_mlp_layers",
             "deck_token_mlp_layers",
+            "revealed_hand_token_mlp_layers",
         ):
             value = getattr(self, name)
             if type(value) is not int or value < 0:
                 raise ValueError(f"{name} must be an integer >= 0")
+        if type(self.learnable_cls_token) is not bool:
+            raise ValueError("learnable_cls_token must be a boolean")
         if type(self.region_token_mlp_residual) is not bool:
             raise ValueError("region_token_mlp_residual must be a boolean")
         if self.history_encoding not in {
@@ -282,13 +287,15 @@ def _encoder_card_mappings(
                 region,
             )
 
-    # Own discard, opponent discard, own hand, known deck, and stadium.
+    # Visible zones followed by the two publicly revealed hand pools.
     zone_regions = (
         CARD_REGION_INDEX["own_discard"],
         CARD_REGION_INDEX["opponent_discard"],
         CARD_REGION_INDEX["own_hand"],
         CARD_REGION_INDEX["own_deck"],
         CARD_REGION_INDEX["stadium"],
+        CARD_REGION_INDEX["own_hand"],
+        CARD_REGION_INDEX["opponent_hand"],
     )
     for region in zone_regions:
         position = _fill_card_range(
@@ -528,8 +535,10 @@ class PTCGTransformer(torch.nn.Module):
     ):
         super().__init__()
         self.config = config
-        self.encoder_token_count = ENCODER_TOKENS + int(
-            config.history_encoding != "off"
+        self.encoder_token_count = (
+            ENCODER_TOKENS
+            + int(config.history_encoding != "off")
+            + int(config.learnable_cls_token)
         )
         card_feature_table = torch.as_tensor(
             card_feature_table,
@@ -635,6 +644,19 @@ class PTCGTransformer(torch.nn.Module):
         self.own_deck_token_mlp = self._make_token_mlp(
             config.deck_token_mlp_layers
         )
+        self.own_revealed_hand_token_mlp = self._make_token_mlp(
+            config.revealed_hand_token_mlp_layers
+        )
+        self.opponent_revealed_hand_token_mlp = self._make_token_mlp(
+            config.revealed_hand_token_mlp_layers
+        )
+        self.cls_token = (
+            torch.nn.Parameter(torch.empty(1, 1, config.d_model))
+            if config.learnable_cls_token
+            else None
+        )
+        if self.cls_token is not None:
+            torch.nn.init.normal_(self.cls_token, mean=0.0, std=0.02)
         self.register_buffer(
             "own_area_card_regions",
             torch.tensor(_OWN_AREA_REGIONS, dtype=torch.long),
@@ -927,6 +949,14 @@ class PTCGTransformer(torch.nn.Module):
                     encoded[:, 23:24], self.own_deck_token_mlp
                 ),
                 encoded[:, 24:26],
+                self._apply_token_mlp(
+                    encoded[:, 26:27],
+                    self.own_revealed_hand_token_mlp,
+                ),
+                self._apply_token_mlp(
+                    encoded[:, 27:28],
+                    self.opponent_revealed_hand_token_mlp,
+                ),
             ),
             dim=1,
         )
@@ -1277,10 +1307,11 @@ class PTCGTransformer(torch.nn.Module):
         history_token = self.history_sequence_mlp(actions)
         return history_token * valid.any(dim=1, keepdim=True)
 
-    @staticmethod
     def _encoder_padding_mask(
+        self,
         own_summary: torch.Tensor,
         opponent_summary: torch.Tensor,
+        revealed_hand_present: torch.Tensor,
         history_valid: torch.Tensor | None = None,
     ) -> torch.Tensor:
         slots = torch.arange(BENCH_SLOTS, device=own_summary.device)
@@ -1295,16 +1326,42 @@ class PTCGTransformer(torch.nn.Module):
             slots.unsqueeze(0) >= opponent_count.unsqueeze(1)
         )
         fixed_tokens = torch.zeros(
-            (own_summary.size(0), ENCODER_TOKENS - 2 * BENCH_SLOTS),
+            (own_summary.size(0), 26 - 2 * BENCH_SLOTS),
             dtype=torch.bool,
             device=own_summary.device,
         )
+        expected_revealed = (own_summary.size(0), 2)
+        if tuple(revealed_hand_present.shape) != expected_revealed:
+            raise ValueError(
+                "revealed_hand_present must have shape "
+                f"{expected_revealed}, found "
+                f"{tuple(revealed_hand_present.shape)}"
+            )
+        revealed_padding = ~revealed_hand_present.to(torch.bool)
         result = torch.cat(
-            (own_padding, opponent_padding, fixed_tokens), dim=1
+            (
+                own_padding,
+                opponent_padding,
+                fixed_tokens,
+                revealed_padding,
+            ),
+            dim=1,
         )
         if history_valid is not None:
             result = torch.cat(
                 (result, ~history_valid.to(torch.bool).any(dim=1, keepdim=True)),
+                dim=1,
+            )
+        if self.cls_token is not None:
+            result = torch.cat(
+                (
+                    result,
+                    torch.zeros(
+                        (result.size(0), 1),
+                        dtype=torch.bool,
+                        device=result.device,
+                    ),
+                ),
                 dim=1,
             )
         return result
@@ -1318,6 +1375,7 @@ class PTCGTransformer(torch.nn.Module):
         own_summary,
         opponent_summary,
         global_summary,
+        revealed_hand_present,
         history_select_type,
         history_select_context,
         history_valid,
@@ -1370,6 +1428,7 @@ class PTCGTransformer(torch.nn.Module):
                 self.opponent_summary_projection(opponent_summary).unsqueeze(1),
                 encoded[:, 20:25],
                 self.global_summary_projection(global_summary).unsqueeze(1),
+                encoded[:, 26:28],
             ),
             dim=1,
         )
@@ -1386,6 +1445,11 @@ class PTCGTransformer(torch.nn.Module):
                 history_option_offset,
             )
             encoded = torch.cat((encoded, history_token.unsqueeze(1)), dim=1)
+        if self.cls_token is not None:
+            encoded = torch.cat(
+                (encoded, self.cls_token.expand(batch_size, -1, -1)),
+                dim=1,
+            )
         if self.encoder_input_norm is not None:
             encoded = self.embedding_dropout(
                 self.encoder_input_norm(encoded)
@@ -1394,6 +1458,7 @@ class PTCGTransformer(torch.nn.Module):
         encoder_padding_mask = self._encoder_padding_mask(
             own_summary,
             opponent_summary,
+            revealed_hand_present,
             history_valid if cfg.history_encoding != "off" else None,
         )
         encoder_out = self.encoder(

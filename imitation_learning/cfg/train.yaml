@@ -86,6 +86,8 @@ model:
   discard_token_mlp_layers: 2   # Separate own/opponent weights.
   hand_token_mlp_layers: 2      # Own hand token only.
   deck_token_mlp_layers: 2      # Own remaining-deck token only.
+  revealed_hand_token_mlp_layers: 1 # Separate own/opponent revealed-hand MLPs.
+  learnable_cls_token: true     # Add one learned global encoder workspace.
   region_token_mlp_residual: false
   history_encoding: full          # off, basic, structural, or full.
   history_action_mlp_layers: 1   # Shared by the three historical actions.

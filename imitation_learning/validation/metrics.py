@@ -61,6 +61,11 @@ def _forward_batch(
         _to_device(batch.own_summary, device, dtype=torch.float32),
         _to_device(batch.opponent_summary, device, dtype=torch.float32),
         _to_device(batch.global_summary, device, dtype=torch.float32),
+        _to_device(
+            batch.revealed_hand_present,
+            device,
+            dtype=torch.long,
+        ),
         _to_device(batch.history_select_type, device, dtype=torch.long),
         _to_device(batch.history_select_context, device, dtype=torch.long),
         _to_device(batch.history_valid, device, dtype=torch.long),
