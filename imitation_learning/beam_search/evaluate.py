@@ -1,4 +1,4 @@
-"""Run the configured policy-only Beam-versus-Greedy matchup matrix."""
+"""Compare Beam and Greedy Festival Lead against configured opponents."""
 from __future__ import annotations
 
 import sys
@@ -18,8 +18,9 @@ from beam_search.runner import execute_games
 def format_progress(completed: int, total: int, result: GameResult) -> str:
     return (
         f"[{completed:,}/{total:,}] game_id={result.game_id} "
-        f"beam={result.beam_deck} greedy={result.greedy_deck} "
-        f"seat={result.beam_player} outcome={result.outcome} "
+        f"condition={result.condition} target={result.target_deck} "
+        f"opponent={result.opponent_deck} seat={result.target_player} "
+        f"outcome={result.outcome} "
         f"seconds={result.duration_seconds:.2f} "
         f"searches={result.search_calls} nodes={result.expanded_nodes}"
         + (f" error={result.error}" if result.error else "")
@@ -30,8 +31,9 @@ def main() -> None:
     settings = load_settings()
     games = schedule_games(settings)
     print(
-        f"checkpoint={settings.checkpoint} decks={len(settings.decks)} "
-        f"matchup_cells={len(settings.decks) ** 2} games={len(games):,} "
+        f"checkpoint={settings.checkpoint} target={settings.target_deck} "
+        f"opponents={len(settings.decks) - 1} conditions=2 "
+        f"games={len(games):,} "
         f"workers={settings.runtime.workers} device={settings.device}",
         flush=True,
     )
@@ -50,16 +52,28 @@ def main() -> None:
         print(format_progress(completed, len(games), result), flush=True)
 
     results = execute_games(settings, games, on_result=report_progress)
-    names = tuple(deck.name for deck in settings.decks)
-    report = aggregate_results(results, names)
-    write_outputs(settings.output, results, report, names)
-    overall = report.overall
-    rate = overall["beam_win_rate"]
-    rate_text = "N/A" if rate is None else f"{rate:.2%}"
+    opponents = tuple(
+        deck.name
+        for deck in settings.decks
+        if deck.name != settings.target_deck
+    )
+    report = aggregate_results(results, settings.target_deck, opponents)
+    write_outputs(settings.output, results, report)
+
+    def percent(value: float | None) -> str:
+        return "N/A" if value is None else f"{value:.2%}"
+
+    search_calls = report.overall_beam["search_calls"]
+    fallback_rate = (
+        report.overall_beam["greedy_fallbacks"] / search_calls
+        if search_calls
+        else None
+    )
     print(
-        f"beam_overall_win_rate={rate_text} "
-        f"wins={overall['beam_wins']:,} losses={overall['beam_losses']:,} "
-        f"draws={overall['draws']:,} failures={overall['failures']:,} "
+        f"beam_win_rate={percent(report.overall_beam['win_rate'])} "
+        f"greedy_win_rate={percent(report.overall_greedy['win_rate'])} "
+        f"uplift={percent(report.overall_uplift)} "
+        f"fallback_rate={percent(fallback_rate)} "
         f"output={settings.output}",
         flush=True,
     )

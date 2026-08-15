@@ -1,4 +1,4 @@
-"""CSV, JSON, and matrix-plot reporting for Beam-versus-Greedy games."""
+"""Focused reporting for a target Deck's Beam and Greedy conditions."""
 from __future__ import annotations
 
 import csv
@@ -7,19 +7,16 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-import numpy as np
-
 from beam_search.battle import GameResult
 
 
 @dataclass(frozen=True, slots=True)
 class AggregateReport:
-    matchups: tuple[dict[str, Any], ...]
-    matrix: dict[tuple[str, str], float | None]
-    completed: dict[tuple[str, str], int]
-    overall: dict[str, Any]
-    by_beam_deck: dict[str, dict[str, Any]]
-    by_greedy_deck: dict[str, dict[str, Any]]
+    target_deck: str
+    comparisons: tuple[dict[str, Any], ...]
+    overall_beam: dict[str, Any]
+    overall_greedy: dict[str, Any]
+    overall_uplift: float | None
 
 
 def _summary(rows: list[GameResult]) -> dict[str, Any]:
@@ -35,12 +32,12 @@ def _summary(rows: list[GameResult]) -> dict[str, Any]:
     return {
         "attempted_games": len(rows),
         "completed_games": completed,
-        "beam_wins": wins,
-        "beam_losses": losses,
+        "wins": wins,
+        "losses": losses,
         "draws": draws,
         "failures": failures,
-        "beam_win_rate": wins / decisive if decisive else None,
-        "beam_non_loss_rate": (wins + draws) / completed if completed else None,
+        "win_rate": wins / decisive if decisive else None,
+        "non_loss_rate": (wins + draws) / completed if completed else None,
         "mean_duration_seconds": (
             sum(durations) / len(durations) if durations else None
         ),
@@ -54,46 +51,63 @@ def _summary(rows: list[GameResult]) -> dict[str, Any]:
     }
 
 
+def _prefixed(prefix: str, values: dict[str, Any]) -> dict[str, Any]:
+    return {f"{prefix}_{key}": value for key, value in values.items()}
+
+
+def _difference(left: float | None, right: float | None) -> float | None:
+    return None if left is None or right is None else left - right
+
+
 def aggregate_results(
     results: Iterable[GameResult],
-    deck_names: tuple[str, ...],
+    target_deck: str,
+    opponent_names: tuple[str, ...],
 ) -> AggregateReport:
     rows = list(results)
-    matrix: dict[tuple[str, str], float | None] = {}
-    completed: dict[tuple[str, str], int] = {}
-    matchups: list[dict[str, Any]] = []
-    for beam_name in deck_names:
-        for greedy_name in deck_names:
-            cell_rows = [
+    comparisons: list[dict[str, Any]] = []
+    for opponent_name in opponent_names:
+        beam = _summary(
+            [
                 row
                 for row in rows
-                if row.beam_deck == beam_name
-                and row.greedy_deck == greedy_name
+                if row.condition == "beam"
+                and row.opponent_deck == opponent_name
             ]
-            values = _summary(cell_rows)
-            matchups.append(
-                {
-                    "beam_deck": beam_name,
-                    "greedy_deck": greedy_name,
-                    **values,
-                }
-            )
-            key = (beam_name, greedy_name)
-            matrix[key] = values["beam_win_rate"]
-            completed[key] = values["completed_games"]
+        )
+        greedy = _summary(
+            [
+                row
+                for row in rows
+                if row.condition == "greedy"
+                and row.opponent_deck == opponent_name
+            ]
+        )
+        comparisons.append(
+            {
+                "target_deck": target_deck,
+                "opponent_deck": opponent_name,
+                **_prefixed("beam", beam),
+                **_prefixed("greedy", greedy),
+                "beam_uplift": _difference(
+                    beam["win_rate"], greedy["win_rate"]
+                ),
+            }
+        )
+    overall_beam = _summary(
+        [row for row in rows if row.condition == "beam"]
+    )
+    overall_greedy = _summary(
+        [row for row in rows if row.condition == "greedy"]
+    )
     return AggregateReport(
-        matchups=tuple(matchups),
-        matrix=matrix,
-        completed=completed,
-        overall=_summary(rows),
-        by_beam_deck={
-            name: _summary([row for row in rows if row.beam_deck == name])
-            for name in deck_names
-        },
-        by_greedy_deck={
-            name: _summary([row for row in rows if row.greedy_deck == name])
-            for name in deck_names
-        },
+        target_deck=target_deck,
+        comparisons=tuple(comparisons),
+        overall_beam=overall_beam,
+        overall_greedy=overall_greedy,
+        overall_uplift=_difference(
+            overall_beam["win_rate"], overall_greedy["win_rate"]
+        ),
     )
 
 
@@ -106,43 +120,51 @@ def _write_dict_rows(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _plot_matrix(
-    path: Path,
-    report: AggregateReport,
-    deck_names: tuple[str, ...],
-) -> None:
+def _plot_comparison(path: Path, report: AggregateReport) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import numpy as np
 
-    size = len(deck_names)
-    values = np.full((size, size), np.nan, dtype=np.float64)
-    for row, beam_name in enumerate(deck_names):
-        for column, greedy_name in enumerate(deck_names):
-            value = report.matrix[(beam_name, greedy_name)]
-            if value is not None:
-                values[row, column] = value
+    labels = [row["opponent_deck"] for row in report.comparisons]
+    beam_values = [row["beam_win_rate"] for row in report.comparisons]
+    greedy_values = [row["greedy_win_rate"] for row in report.comparisons]
+    beam_plot = [float("nan") if value is None else value for value in beam_values]
+    greedy_plot = [
+        float("nan") if value is None else value for value in greedy_values
+    ]
+    positions = np.arange(len(labels))
+    width = 0.38
     figure, axis = plt.subplots(
-        figsize=(max(6.0, size * 1.7), max(5.0, size * 1.35))
+        figsize=(max(7.0, len(labels) * 1.8), 5.5)
     )
-    image = axis.imshow(values, vmin=0.0, vmax=1.0, cmap="RdYlGn")
-    axis.set_xticks(range(size), labels=deck_names, rotation=30, ha="right")
-    axis.set_yticks(range(size), labels=deck_names)
-    axis.set_xlabel("Greedy deck")
-    axis.set_ylabel("Beam deck")
-    axis.set_title("Beam Search Win Rate vs Greedy")
-    for row, beam_name in enumerate(deck_names):
-        for column, greedy_name in enumerate(deck_names):
-            key = (beam_name, greedy_name)
-            value = report.matrix[key]
-            text = (
-                "N/A\n"
-                if value is None
-                else f"{value:.1%}\n"
-            ) + f"n={report.completed[key]}"
-            axis.text(column, row, text, ha="center", va="center")
-    figure.colorbar(image, ax=axis, label="Beam win rate (draws excluded)")
+    beam_bars = axis.bar(
+        positions - width / 2, beam_plot, width, label="Beam Festival"
+    )
+    greedy_bars = axis.bar(
+        positions + width / 2, greedy_plot, width, label="Greedy Festival"
+    )
+    axis.set_ylim(0.0, 1.0)
+    axis.set_ylabel("Festival Lead win rate (draws excluded)")
+    axis.set_xlabel("Greedy opponent Deck")
+    axis.set_title("Festival Lead: Beam Search vs Greedy Baseline")
+    axis.set_xticks(positions, labels=labels, rotation=25, ha="right")
+    axis.legend()
+    for bars, prefix in ((beam_bars, "beam"), (greedy_bars, "greedy")):
+        for bar, row in zip(bars, report.comparisons):
+            rate = row[f"{prefix}_win_rate"]
+            completed = row[f"{prefix}_completed_games"]
+            label = f"N/A\nn={completed}" if rate is None else f"{rate:.1%}\nn={completed}"
+            axis.annotate(
+                label,
+                (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                xytext=(0, 3),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
     figure.tight_layout()
     figure.savefig(path, dpi=160)
     plt.close(figure)
@@ -152,41 +174,21 @@ def write_outputs(
     output: Path,
     results: Iterable[GameResult],
     report: AggregateReport,
-    deck_names: tuple[str, ...],
 ) -> None:
     output.mkdir(parents=True, exist_ok=True)
     rows = list(results)
+    comparison_rows = list(report.comparisons)
     _write_dict_rows(output / "games.csv", [asdict(row) for row in rows])
-    _write_dict_rows(
-        output / "matchup_summary.csv", list(report.matchups)
-    )
-    with (output / "beam_win_rate_matrix.csv").open(
-        "w", newline="", encoding="utf-8"
-    ) as handle:
-        writer = csv.writer(handle)
-        writer.writerow(("beam_deck", *deck_names))
-        for beam_name in deck_names:
-            writer.writerow(
-                (
-                    beam_name,
-                    *(
-                        ""
-                        if report.matrix[(beam_name, greedy_name)] is None
-                        else report.matrix[(beam_name, greedy_name)]
-                        for greedy_name in deck_names
-                    ),
-                )
-            )
+    _write_dict_rows(output / "opponent_summary.csv", comparison_rows)
+    _write_dict_rows(output / "festival_comparison.csv", comparison_rows)
     payload = {
-        "overall": report.overall,
-        "by_beam_deck": report.by_beam_deck,
-        "by_greedy_deck": report.by_greedy_deck,
-        "matchups": list(report.matchups),
+        "target_deck": report.target_deck,
+        "overall_beam": report.overall_beam,
+        "overall_greedy": report.overall_greedy,
+        "overall_uplift": report.overall_uplift,
+        "comparisons": comparison_rows,
     }
     (output / "summary.json").write_text(
         json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    _plot_matrix(
-        output / "beam_win_rate_matrix.png", report, deck_names
-    )
-
+    _plot_comparison(output / "festival_win_rate_comparison.png", report)

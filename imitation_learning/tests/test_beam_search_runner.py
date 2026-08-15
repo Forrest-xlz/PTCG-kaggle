@@ -23,34 +23,54 @@ from beam_search.evaluate import format_progress
 
 
 def _settings(*, workers: int) -> BeamSearchSettings:
-    deck = DeckSpec("deck", tuple(range(60)))
+    target = DeckSpec("festival_lead", tuple(range(60)))
+    opponent = DeckSpec("opponent", tuple(reversed(range(60))))
     return BeamSearchSettings(
         cg_path=Path("cg"),
         checkpoint=Path("model.pt"),
         device="cpu",
         seed=7,
         games_per_matchup=3,
+        target_deck="festival_lead",
         output=Path("output"),
         runtime=RuntimeSettings(
             workers=workers,
             torch_threads_per_worker=1,
         ),
         search=SearchSettings(2, 2, 1.0, 8),
-        decks=(deck,),
+        decks=(target, opponent),
     )
 
 
 def _games(count: int = 3) -> tuple[GameSpec, ...]:
-    deck = DeckSpec("deck", tuple(range(60)))
-    return tuple(GameSpec(index, deck, deck, index % 2, 10 + index) for index in range(count))
+    target = DeckSpec("festival_lead", tuple(range(60)))
+    opponent = DeckSpec("opponent", tuple(reversed(range(60))))
+    return tuple(
+        GameSpec(
+            index,
+            "beam" if index % 2 == 0 else "greedy",
+            target,
+            opponent,
+            index % 2,
+            10 + index,
+        )
+        for index in range(count)
+    )
 
 
 def _result(game_id: int) -> GameResult:
     return GameResult(
         game_id=game_id,
-        beam_deck="deck",
-        greedy_deck="deck",
-        beam_player=game_id % 2,
+        condition="beam" if game_id % 2 == 0 else "greedy",
+        target_deck="festival_lead",
+        opponent_deck="opponent",
+        target_player=game_id % 2,
+        player0_deck=(
+            "festival_lead" if game_id % 2 == 0 else "opponent"
+        ),
+        player1_deck=(
+            "opponent" if game_id % 2 == 0 else "festival_lead"
+        ),
         outcome="win",
         winner=game_id % 2,
         duration_seconds=0.1,
@@ -133,5 +153,7 @@ def test_format_progress_contains_completion_and_game_identity() -> None:
 
     assert "[3/12]" in line
     assert "game_id=8" in line
-    assert "beam=deck" in line
-    assert "greedy=deck" in line
+    assert "condition=beam" in line
+    assert "target=festival_lead" in line
+    assert "opponent=opponent" in line
+    assert "seat=0" in line

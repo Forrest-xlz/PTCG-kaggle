@@ -15,9 +15,12 @@ from beam_search.search import BeamSearcher
 @dataclass(frozen=True, slots=True)
 class GameResult:
     game_id: int
-    beam_deck: str
-    greedy_deck: str
-    beam_player: int
+    condition: str
+    target_deck: str
+    opponent_deck: str
+    target_player: int
+    player0_deck: str
+    player1_deck: str
     outcome: str
     winner: int
     duration_seconds: float
@@ -67,8 +70,8 @@ def run_game(
 ) -> GameResult:
     engine = backend or CgBattleBackend()
     decks = {
-        game.beam_player: game.beam_deck,
-        1 - game.beam_player: game.greedy_deck,
+        game.target_player: game.target_deck,
+        1 - game.target_player: game.opponent_deck,
     }
     histories = {0: PolicyHistory(), 1: PolicyHistory()}
     counters = {
@@ -106,7 +109,12 @@ def run_game(
                 winner = int(obs.current.result)
                 break
             actor = int(obs.current.yourIndex)
-            if actor == game.beam_player:
+            use_beam = (
+                game.condition == "beam"
+                and actor == game.target_player
+                and int(obs.current.turn) > 0
+            )
+            if use_beam:
                 try:
                     inputs = determinize(
                         obs,
@@ -158,7 +166,7 @@ def run_game(
             raw_obs = engine.select(selected)
         if winner == 2:
             outcome = "draw"
-        elif winner == game.beam_player:
+        elif winner == game.target_player:
             outcome = "win"
         else:
             outcome = "loss"
@@ -174,9 +182,12 @@ def run_game(
                 outcome = "failed"
     return GameResult(
         game_id=game.game_id,
-        beam_deck=game.beam_deck.name,
-        greedy_deck=game.greedy_deck.name,
-        beam_player=game.beam_player,
+        condition=game.condition,
+        target_deck=game.target_deck.name,
+        opponent_deck=game.opponent_deck.name,
+        target_player=game.target_player,
+        player0_deck=decks[0].name,
+        player1_deck=decks[1].name,
         outcome=outcome,
         winner=winner,
         duration_seconds=time.perf_counter() - started_at,
@@ -192,4 +203,3 @@ def run_game(
         warnings=" | ".join(warning_messages),
         error=error,
     )
-

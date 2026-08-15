@@ -323,8 +323,10 @@ python beam_search/evaluate.py
 ```
 
 The checkpoint's saved `config` is the only source of model architecture
-parameters. `games_per_matchup` applies to every ordered matrix cell, including
-same-Deck mirrors. Beam and Greedy alternate player seats inside each cell.
+parameters. `target_deck` selects the Deck being evaluated. For every other
+configured Deck, `games_per_matchup` games use Beam for the target and another
+`games_per_matchup` games use Greedy as the baseline. The target alternates
+player seats independently in both conditions; mirror games are omitted.
 `runtime.workers` runs independent games in spawn-based processes; every worker
 owns its own model and CG state. With one GPU, start with two workers and compare
 against one. Four workers can help when the GPU remains idle, but every worker
@@ -343,10 +345,10 @@ sum(log(policy_probability)) / T**alpha
 
 Known cards match the observation; unknown Deck, Prize, and opponent-Hand
 cards are sampled reproducibly from the configured complete Decks. The output
-directory contains per-game and per-matchup CSV files, `summary.json`, a
-numeric win-rate matrix, and `beam_win_rate_matrix.png`. Matrix rows are Beam
-Decks, columns are Greedy Decks, and the primary win rate excludes draws and
-failed games.
+directory contains `games.csv`, two per-opponent comparison CSV files,
+`summary.json`, and `festival_win_rate_comparison.png`. All results use the
+target Deck's perspective. The primary win rate and Beam uplift exclude draws
+and failed games.
 
 ## Greedy Deck strength evaluation
 

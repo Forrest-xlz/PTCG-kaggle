@@ -40,6 +40,7 @@ class BeamSearchSettings:
     device: str
     seed: int
     games_per_matchup: int
+    target_deck: str
     output: Path
     runtime: RuntimeSettings
     search: SearchSettings
@@ -49,9 +50,10 @@ class BeamSearchSettings:
 @dataclass(frozen=True, slots=True)
 class GameSpec:
     game_id: int
-    beam_deck: DeckSpec
-    greedy_deck: DeckSpec
-    beam_player: int
+    condition: str
+    target_deck: DeckSpec
+    opponent_deck: DeckSpec
+    target_player: int
     seed: int
 
 
@@ -99,8 +101,8 @@ def load_settings(path: Path | None = None) -> BeamSearchSettings:
         raise ValueError("beam_search.search.alpha must be a finite number >= 0")
 
     raw_decks = _required(raw, "decks", "beam_search")
-    if not isinstance(raw_decks, list) or not raw_decks:
-        raise ValueError("beam_search.decks must be a non-empty list")
+    if not isinstance(raw_decks, list) or len(raw_decks) < 2:
+        raise ValueError("beam_search.decks must contain at least two decks")
     decks: list[DeckSpec] = []
     names: set[str] = set()
     for index, value in enumerate(raw_decks):
@@ -130,6 +132,11 @@ def load_settings(path: Path | None = None) -> BeamSearchSettings:
     seed = _required(raw, "seed", "beam_search")
     if type(seed) is not int:
         raise ValueError("beam_search.seed must be an integer")
+    target_deck = _required(raw, "target_deck", "beam_search")
+    if not isinstance(target_deck, str) or target_deck.strip() not in names:
+        raise ValueError(
+            "beam_search.target_deck must exactly match a configured deck name"
+        )
 
     return BeamSearchSettings(
         cg_path=_path(_required(raw, "cg_path", "beam_search"), "cg_path"),
@@ -142,6 +149,7 @@ def load_settings(path: Path | None = None) -> BeamSearchSettings:
             _required(raw, "games_per_matchup", "beam_search"),
             "beam_search.games_per_matchup",
         ),
+        target_deck=target_deck.strip(),
         output=_path(_required(raw, "output", "beam_search"), "output"),
         runtime=RuntimeSettings(
             workers=_positive_int(
@@ -181,15 +189,21 @@ def load_settings(path: Path | None = None) -> BeamSearchSettings:
 def schedule_games(settings: BeamSearchSettings) -> tuple[GameSpec, ...]:
     games: list[GameSpec] = []
     game_id = 0
-    for beam_deck in settings.decks:
-        for greedy_deck in settings.decks:
+    target_deck = next(
+        deck for deck in settings.decks if deck.name == settings.target_deck
+    )
+    for opponent_deck in settings.decks:
+        if opponent_deck.name == target_deck.name:
+            continue
+        for condition in ("beam", "greedy"):
             for cell_index in range(settings.games_per_matchup):
                 games.append(
                     GameSpec(
                         game_id=game_id,
-                        beam_deck=beam_deck,
-                        greedy_deck=greedy_deck,
-                        beam_player=cell_index % 2,
+                        condition=condition,
+                        target_deck=target_deck,
+                        opponent_deck=opponent_deck,
+                        target_player=cell_index % 2,
                         seed=settings.seed + game_id,
                     )
                 )

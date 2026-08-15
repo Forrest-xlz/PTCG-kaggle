@@ -4,6 +4,7 @@ beam_search:
   device: cuda
   seed: 42
   games_per_matchup: 100
+  target_deck: festival_lead
   output: outputs/beam_search
 
   runtime:

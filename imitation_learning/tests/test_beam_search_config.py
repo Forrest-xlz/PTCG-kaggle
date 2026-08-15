@@ -25,6 +25,7 @@ def _write_config(tmp_path: Path, *, games: int = 3) -> Path:
                     "device": "cpu",
                     "seed": 17,
                     "games_per_matchup": games,
+                    "target_deck": "b",
                     "output": "outputs/beam-test",
                     "runtime": {
                         "workers": 2,
@@ -39,6 +40,7 @@ def _write_config(tmp_path: Path, *, games: int = 3) -> Path:
                     "decks": [
                         {"name": "a", "cards": list(range(60))},
                         {"name": "b", "cards": list(reversed(range(60)))},
+                        {"name": "c", "cards": list(range(59, -1, -1))},
                     ],
                 }
             },
@@ -58,16 +60,17 @@ def test_load_settings_resolves_paths_and_values(tmp_path: Path) -> None:
     assert settings.device == "cpu"
     assert settings.seed == 17
     assert settings.games_per_matchup == 3
+    assert settings.target_deck == "b"
     assert settings.runtime.workers == 2
     assert settings.runtime.torch_threads_per_worker == 1
     assert settings.search.beam_width == 4
     assert settings.search.expansion_top_k == 3
     assert settings.search.alpha == pytest.approx(0.8)
     assert settings.search.max_depth == 40
-    assert [deck.name for deck in settings.decks] == ["a", "b"]
+    assert [deck.name for deck in settings.decks] == ["a", "b", "c"]
 
 
-def test_schedule_contains_every_ordered_cell_and_balances_seats(
+def test_schedule_contains_target_conditions_and_balances_seats(
     tmp_path: Path,
 ) -> None:
     settings = load_settings(_write_config(tmp_path, games=3))
@@ -75,22 +78,39 @@ def test_schedule_contains_every_ordered_cell_and_balances_seats(
 
     assert len(scheduled) == 12
     assert {
-        (game.beam_deck.name, game.greedy_deck.name)
+        (game.condition, game.target_deck.name, game.opponent_deck.name)
         for game in scheduled
-    } == {("a", "a"), ("a", "b"), ("b", "a"), ("b", "b")}
-    for beam_name in ("a", "b"):
-        for greedy_name in ("a", "b"):
+    } == {
+        ("beam", "b", "a"),
+        ("greedy", "b", "a"),
+        ("beam", "b", "c"),
+        ("greedy", "b", "c"),
+    }
+    for condition in ("beam", "greedy"):
+        for opponent_name in ("a", "c"):
             cell = [
                 game
                 for game in scheduled
-                if game.beam_deck.name == beam_name
-                and game.greedy_deck.name == greedy_name
+                if game.condition == condition
+                and game.opponent_deck.name == opponent_name
             ]
             assert len(cell) == 3
-            seats = [sum(game.beam_player == seat for game in cell) for seat in (0, 1)]
+            seats = [sum(game.target_player == seat for game in cell) for seat in (0, 1)]
             assert abs(seats[0] - seats[1]) <= 1
     assert [game.game_id for game in scheduled] == list(range(12))
     assert len({game.seed for game in scheduled}) == 12
+
+
+def test_load_settings_rejects_unknown_target_deck(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw["beam_search"]["target_deck"] = "missing"
+    config_path.write_text(
+        yaml.safe_dump(raw, sort_keys=False), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="target_deck"):
+        load_settings(config_path)
 
 
 @pytest.mark.parametrize(
