@@ -310,6 +310,41 @@ these architecture fields are not configured twice. It embeds the inference
 code, including the 26-token base encoder layout and optional history token, and creates
 `/kaggle/working/submission.tar.gz`.
 
+## Beam search evaluation
+
+The isolated `beam_search/` package compares the same compact policy checkpoint
+with turn-level Beam Search and Greedy Top-1 inference. It does not require
+replay extraction, feature caching, or retraining. Configure the checkpoint,
+device, Deck lists, number of games, and search parameters in
+`cfg/beam_search.yaml`, then run from the `imitation_learning` directory:
+
+```bash
+python beam_search/evaluate.py
+```
+
+The checkpoint's saved `config` is the only source of model architecture
+parameters. `games_per_matchup` applies to every ordered matrix cell, including
+same-Deck mirrors. Beam and Greedy alternate player seats inside each cell.
+The baseline is intentionally single-process so one CUDA model and the CG
+global Search state are not duplicated across workers.
+
+Search expands the Beam player's `expansion_top_k` policy actions, retains at
+most `beam_width` live trajectories, resolves any opponent selection with
+Greedy Top-1, and stops when the Beam player's current turn ends. Opponent
+actions advance the simulated state but do not enter the score. A trajectory
+with `T` Beam decisions is ranked by:
+
+```text
+sum(log(policy_probability)) / T**alpha
+```
+
+Known cards match the observation; unknown Deck, Prize, and opponent-Hand
+cards are sampled reproducibly from the configured complete Decks. The output
+directory contains per-game and per-matchup CSV files, `summary.json`, a
+numeric win-rate matrix, and `beam_win_rate_matrix.png`. Matrix rows are Beam
+Decks, columns are Greedy Decks, and the primary win rate excludes draws and
+failed games.
+
 ## Training records
 
 Each deck cache contains only two rows per replay: the two complete sorted
