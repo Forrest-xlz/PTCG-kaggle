@@ -4,8 +4,9 @@ import ast
 import json
 import sys
 import unittest
+from enum import IntEnum
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,7 @@ from model.revealed_hand import RevealedHandTracker
 from model.attack_features import ATTACK_FEATURE_DIM
 from model.card_features import CARD_FEATURE_DIM
 from model.network import ModelConfig, PTCGTransformer
+from model.features import damage_counter_action_eligibility
 
 import torch
 
@@ -27,6 +29,52 @@ def _main_source() -> str:
     payload = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
     source = "".join(payload["cells"][2]["source"])
     return source.removeprefix("%%writefile main.py\n")
+
+
+def _config_source() -> str:
+    payload = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    return "".join(payload["cells"][1]["source"])
+
+
+class _AreaType(IntEnum):
+    BENCH = 5
+
+
+def _counter_observation(context: int, hps: list[int]) -> SimpleNamespace:
+    return SimpleNamespace(
+        current=SimpleNamespace(
+            players=[
+                SimpleNamespace(bench=[]),
+                SimpleNamespace(
+                    bench=[SimpleNamespace(hp=hp) for hp in hps]
+                ),
+            ]
+        ),
+        select=SimpleNamespace(
+            context=context,
+            option=[
+                SimpleNamespace(
+                    area=_AreaType.BENCH,
+                    playerIndex=1,
+                    index=index,
+                )
+                for index in range(len(hps))
+            ],
+        ),
+    )
+
+
+def _notebook_counter_mask():
+    tree = ast.parse(_main_source())
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "damage_counter_action_eligibility"
+    )
+    namespace = {"np": __import__("numpy"), "AreaType": _AreaType}
+    exec(compile(ast.Module([function], []), str(NOTEBOOK), "exec"), namespace)
+    return namespace["damage_counter_action_eligibility"]
 
 
 def _notebook_tracker_class():
@@ -99,6 +147,51 @@ class SubmissionNotebookTests(unittest.TestCase):
             notebook_tracker.relative_cards(0),
             project_tracker.relative_cards(0),
         )
+
+    def test_damage_counter_mask_matches_project_behavior(self) -> None:
+        api = ModuleType("cg.api")
+        api.AreaType = _AreaType
+        cg = ModuleType("cg")
+        cg.api = api
+        previous_cg = sys.modules.get("cg")
+        previous_api = sys.modules.get("cg.api")
+        sys.modules["cg"] = cg
+        sys.modules["cg.api"] = api
+        try:
+            notebook_mask = _notebook_counter_mask()
+            for context, hps, actions in (
+                (14, [0, 40], [[0], [1]]),
+                (14, [0, -10], [[0], [1]]),
+                (14, [0, 40], [[0, 1], [1]]),
+                (13, [0, 40], [[0], [1]]),
+            ):
+                obs = _counter_observation(context, hps)
+                expected = damage_counter_action_eligibility(obs, actions)
+                actual = notebook_mask(obs, actions)
+                self.assertEqual(actual.tolist(), expected.tolist())
+        finally:
+            if previous_cg is None:
+                sys.modules.pop("cg", None)
+            else:
+                sys.modules["cg"] = previous_cg
+            if previous_api is None:
+                sys.modules.pop("cg.api", None)
+            else:
+                sys.modules["cg.api"] = previous_api
+
+    def test_config_cell_exposes_boolean_damage_counter_switch(self) -> None:
+        tree = ast.parse(_config_source())
+        assignments = {
+            target.id: node.value.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+            and target.id == "DAMAGE_COUNTER_KO_MASK"
+        }
+        self.assertIn("DAMAGE_COUNTER_KO_MASK", assignments)
+        self.assertIs(type(assignments["DAMAGE_COUNTER_KO_MASK"]), bool)
 
     def test_notebook_model_state_shapes_match_project_model(self) -> None:
         namespace = _notebook_model_namespace()

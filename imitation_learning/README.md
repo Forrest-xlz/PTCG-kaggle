@@ -54,8 +54,10 @@ ordinary CPU memory. Candidate selections cover every legal size from
 treat replay selection order as irrelevant. Each sample also stores a stable
 32-bit replay key used for validation splitting, a stable 64-bit key for
 its complete deck, the player's result, and the acting player's previous three
-actions. Cache schema 17 is required. Winner-only JSONL must be re-extracted;
-schema-16 and older feature caches only need to be rebuilt with
+actions. Each action also stores whether a freely placed damage-counter effect
+targets a Bench Pokemon whose current HP is already zero. Cache schema 18 is
+required. Winner-only JSONL must be re-extracted; schema-17 and older feature
+caches only need to be rebuilt with
 `training.cache_features`.
 
 Training has no command-line parameters. It reads `cfg/train.yaml`, whose
@@ -83,6 +85,16 @@ Wandb groups: `val_deck_isolation/*`, `val_archetype_isolation/*`, and
 `val_top_deck_archetype_isolation/*`. Latest-date and in-distribution
 validation retain their existing CE loss and Top-1/3/5 metrics. Training logs
 use cross-epoch exponential moving averages controlled by `ema_alpha`.
+
+`train.damage_counter_ko_mask` independently enables the policy mask during
+training and validation. When enabled, zero-HP Bench targets are excluded only
+for `DAMAGE_COUNTER_ANY` decisions that still have at least one live target.
+If every enumerated action would be excluded, all actions are restored so a
+mandatory engine effect can still finish. Cached rows whose demonstrated label
+is excluded do not contribute to policy loss or accuracy. The Kaggle notebook
+has a separate `DAMAGE_COUNTER_KO_MASK` inference switch in its parameter cell.
+Changing either switch after building a schema-18 cache does not require replay
+extraction or cache rebuilding.
 
 Each replay ZIP under `train.replay_episodes` must contain one `manifest.csv`.
 For every date independently, training reconstructs both player scores from
@@ -119,7 +131,7 @@ both sides. Draws and every replay assigned to any validation split remain
 excluded. Startup logs show each date's cutoff and the replay/sample counts
 after every filter stage. This ratio is independent of
 `expert_validation_ratio`. After the one-time two-player extraction and
-schema-17 cache rebuild, changing loser-augmentation settings requires only a
+schema-18 cache rebuild, changing loser-augmentation settings requires only a
 new training run.
 
 Standalone validation has no command-line parameters and reads
@@ -209,7 +221,7 @@ selects `token + MLP(token)` or `MLP(token)` globally for these modules.
 workspace token. The added independent Card ID ranges increase `encoder_size`
 from 22,000 to 25,000, so earlier checkpoints are not shape-compatible with
 this architecture. Changing the revealed-hand features requires rebuilding the
-feature cache (schema 17), but does not require replay extraction again.
+feature cache (schema 18), but does not require replay extraction again.
 
 The decoder stores each raw engine option once using eleven categorical fields:
 option type, selection context, candidate/target Card IDs, Attack ID, number,
@@ -238,7 +250,7 @@ Historical options in a combination action are summed, one shared
 and their concatenation is mapped by `history_sequence_mlp_layers` to one
 token. All trainable history parameters are independent from the current-action
 decoder. Switching among `basic`, `structural`, and `full` reuses the same
-schema-17 cache.
+schema-18 cache.
 
 When WandB is enabled, checkpoints and history are written to
 `local-output/` beside that run's `files/` directory, keeping them inside the
