@@ -91,7 +91,7 @@ def feature_signature(config: ModelConfig) -> dict[str, Any]:
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
         "encoder_tokens": ENCODER_WORDS,
-        "encoder_layout": "numeric-summary-27-known-deck-appear-v3",
+        "encoder_layout": "numeric-summary-27-known-deck-setup-v4",
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_layout": "routed-option-dynamics-plus-numeric-v7",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,
