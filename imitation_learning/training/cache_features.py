@@ -48,6 +48,7 @@ from model.features import (
     history_action_features,
 )
 from model.network import ModelConfig
+from model.known_deck import KnownDeckTracker
 from training.feature_cache import (
     CACHE_SCHEMA_VERSION,
     ENCODER_WORDS,
@@ -155,7 +156,7 @@ def feature_signature(config: ModelConfig) -> dict:
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
         "encoder_tokens": ENCODER_WORDS,
-        "encoder_layout": "numeric-summary-26-appear-v2",
+        "encoder_layout": "numeric-summary-27-known-deck-appear-v3",
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_layout": "routed-option-dynamics-plus-numeric-v7",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,
@@ -174,6 +175,7 @@ def _prepare_record(
     record: dict,
     config: ModelConfig,
     history: list[HistoryActionFeatures] | None = None,
+    known_deck_card_ids: tuple[int, ...] = (),
 ) -> tuple[
     FeatureRecord | None,
     str | None,
@@ -204,7 +206,12 @@ def _prepare_record(
             config.attack_count,
         )
         return None, "outside_first_64", current_history
-    encoder = encoder_features(obs, record["deck"], config.card_count)
+    encoder = encoder_features(
+        obs,
+        record["deck"],
+        config.card_count,
+        known_deck_card_ids=known_deck_card_ids,
+    )
     decoder = decoder_features(
         obs, actions, config.card_count, config.attack_count
     )
@@ -376,6 +383,7 @@ def process_source(job) -> dict:
     part_names = []
     current_episode = None
     player_histories: dict[int, deque[HistoryActionFeatures]] = {}
+    known_deck_trackers: dict[int, KnownDeckTracker] = {}
     try:
         with gzip.open(source, "rt", encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, start=1):
@@ -385,7 +393,17 @@ def process_source(job) -> dict:
                     if episode != current_episode:
                         current_episode = episode
                         player_histories.clear()
+                        known_deck_trackers.clear()
                     player = int(raw_record["player"])
+                    known_deck_tracker = known_deck_trackers.setdefault(
+                        player, KnownDeckTracker()
+                    )
+                    observation = raw_record.get("observation") or {}
+                    current = observation.get("current") or {}
+                    known_deck_tracker.update(
+                        observation.get("logs") or (),
+                        player_index=current.get("yourIndex", player),
+                    )
                     player_history = player_histories.setdefault(
                         player,
                         deque(maxlen=HISTORY_STEPS),
@@ -394,6 +412,7 @@ def process_source(job) -> dict:
                         raw_record,
                         config,
                         list(player_history),
+                        known_deck_tracker.card_ids(),
                     )
                     if current_action is not None:
                         player_history.append(current_action)

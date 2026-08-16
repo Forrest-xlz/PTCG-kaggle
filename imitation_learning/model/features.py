@@ -31,7 +31,7 @@ from model.card_features import (
 )
 
 
-ENCODER_TOKENS = 26
+ENCODER_TOKENS = 27
 POKEMON_ENCODER_TOKENS = 18
 OWN_SUMMARY_DIM = 69
 OPPONENT_SUMMARY_DIM = 71
@@ -79,6 +79,18 @@ class SparseVector:
     def add_single(self, value: float) -> None:
         self.add(0, value); self.pos += 1
     def word_start(self) -> None: self.offset.append(len(self.index))
+
+
+def _add_known_deck_token(
+    sparse: SparseVector,
+    card_ids: Iterable[int],
+    card_count: int,
+) -> None:
+    for card_id in card_ids:
+        card_id = int(card_id)
+        if 0 <= card_id < card_count:
+            sparse.add(card_id, 1.0)
+    sparse.add_pos(card_count)
 
 
 @dataclass(frozen=True)
@@ -523,6 +535,7 @@ def encoder_features(
     card_count: int,
     *,
     numeric_catalog: NumericFeatureCatalog | None = None,
+    known_deck_card_ids: Iterable[int] = (),
 ) -> EncoderFeatures:
     catalog = numeric_catalog or _default_numeric_catalog(card_count)
     state, yours, sparse = obs.current, obs.current.yourIndex, SparseVector()
@@ -577,6 +590,8 @@ def encoder_features(
     for card_id in deck:
         sparse.add(card_id, 0.25)
     sparse.add_pos(card_count)
+    sparse.word_start()
+    _add_known_deck_token(sparse, known_deck_card_ids, card_count)
     sparse.word_start()
     _add_cards(sparse, state.stadium, 1.0, card_count)
 
