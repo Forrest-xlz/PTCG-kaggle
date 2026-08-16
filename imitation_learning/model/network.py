@@ -9,7 +9,7 @@ from model.attack_features import ATTACK_FEATURE_DIM
 from model.card_features import CARD_FEATURE_DIM
 
 
-ENCODER_TOKENS = 26
+ENCODER_TOKENS = 27
 POKEMON_ENCODER_TOKENS = 18
 BENCH_SLOTS = 8
 PLAYER_BENCH_COUNT_INDEX = 10
@@ -58,6 +58,7 @@ CARD_REGION_NAMES = (
     "own_hand",
     "opponent_hand",
     "own_deck",
+    "own_known_deck",
     "opponent_deck",
     "own_prize",
     "opponent_prize",
@@ -107,7 +108,7 @@ _OPPONENT_AREA_REGIONS = (
 class ModelConfig:
     card_count: int
     attack_count: int
-    encoder_size: int = 22_000
+    encoder_size: int = 23_000
     d_model: int = 128
     num_heads: int = 2
     d_feedforward: int = 256
@@ -131,6 +132,7 @@ class ModelConfig:
     discard_token_mlp_layers: int = 0
     hand_token_mlp_layers: int = 0
     deck_token_mlp_layers: int = 0
+    known_deck_token_mlp_layers: int = 0
     region_token_mlp_residual: bool = True
     history_encoding: str = "off"
     history_action_mlp_layers: int = 1
@@ -179,6 +181,7 @@ class ModelConfig:
             "discard_token_mlp_layers",
             "hand_token_mlp_layers",
             "deck_token_mlp_layers",
+            "known_deck_token_mlp_layers",
         ):
             value = getattr(self, name)
             if type(value) is not int or value < 0:
@@ -282,12 +285,13 @@ def _encoder_card_mappings(
                 region,
             )
 
-    # Own discard, opponent discard, own hand, known deck, and stadium.
+    # Own discard, opponent discard, own hand, full deck, known-in-deck, stadium.
     zone_regions = (
         CARD_REGION_INDEX["own_discard"],
         CARD_REGION_INDEX["opponent_discard"],
         CARD_REGION_INDEX["own_hand"],
         CARD_REGION_INDEX["own_deck"],
+        CARD_REGION_INDEX["own_known_deck"],
         CARD_REGION_INDEX["stadium"],
     )
     for region in zone_regions:
@@ -635,6 +639,9 @@ class PTCGTransformer(torch.nn.Module):
         self.own_deck_token_mlp = self._make_token_mlp(
             config.deck_token_mlp_layers
         )
+        self.own_known_deck_token_mlp = self._make_token_mlp(
+            config.known_deck_token_mlp_layers
+        )
         self.register_buffer(
             "own_area_card_regions",
             torch.tensor(_OWN_AREA_REGIONS, dtype=torch.long),
@@ -926,7 +933,10 @@ class PTCGTransformer(torch.nn.Module):
                 self._apply_token_mlp(
                     encoded[:, 23:24], self.own_deck_token_mlp
                 ),
-                encoded[:, 24:26],
+                self._apply_token_mlp(
+                    encoded[:, 24:25], self.own_known_deck_token_mlp
+                ),
+                encoded[:, 25:27],
             ),
             dim=1,
         )
@@ -1368,7 +1378,7 @@ class PTCGTransformer(torch.nn.Module):
                 encoded[:, :18],
                 self.own_summary_projection(own_summary).unsqueeze(1),
                 self.opponent_summary_projection(opponent_summary).unsqueeze(1),
-                encoded[:, 20:25],
+                encoded[:, 20:26],
                 self.global_summary_projection(global_summary).unsqueeze(1),
             ),
             dim=1,

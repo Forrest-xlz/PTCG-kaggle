@@ -147,6 +147,7 @@ class ModelSettings:
     discard_token_mlp_layers: int = 0
     hand_token_mlp_layers: int = 0
     deck_token_mlp_layers: int = 0
+    known_deck_token_mlp_layers: int = 0
     region_token_mlp_residual: bool = True
     history_encoding: str = "off"
     history_action_mlp_layers: int = 1
@@ -470,6 +471,7 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         "discard_token_mlp_layers",
         "hand_token_mlp_layers",
         "deck_token_mlp_layers",
+        "known_deck_token_mlp_layers",
     ):
         value = getattr(model, name)
         if type(value) is not int or value < 0:
@@ -642,7 +644,7 @@ def feature_signature(config: ModelConfig) -> dict:
         "attack_count": config.attack_count,
         "encoder_size": config.encoder_size,
         "encoder_tokens": ENCODER_WORDS,
-        "encoder_layout": "numeric-summary-26-appear-v2",
+        "encoder_layout": "numeric-summary-27-known-deck-appear-v3",
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "decoder_layout": "routed-option-dynamics-plus-numeric-v7",
         "option_categorical_dim": OPTION_CATEGORICAL_DIM,
@@ -1003,6 +1005,9 @@ def main() -> None:
         discard_token_mlp_layers=model_cfg.discard_token_mlp_layers,
         hand_token_mlp_layers=model_cfg.hand_token_mlp_layers,
         deck_token_mlp_layers=model_cfg.deck_token_mlp_layers,
+        known_deck_token_mlp_layers=(
+            model_cfg.known_deck_token_mlp_layers
+        ),
         region_token_mlp_residual=model_cfg.region_token_mlp_residual,
         history_encoding=model_cfg.history_encoding,
         history_action_mlp_layers=model_cfg.history_action_mlp_layers,

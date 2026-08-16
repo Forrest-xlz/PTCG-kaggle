@@ -86,6 +86,7 @@ model:
   discard_token_mlp_layers: 2   # Separate own/opponent weights.
   hand_token_mlp_layers: 2      # Own hand token only.
   deck_token_mlp_layers: 2      # Own remaining-deck token only.
+  known_deck_token_mlp_layers: 1 # Known physical cards currently in own deck.
   region_token_mlp_residual: false
   history_encoding: full          # off, basic, structural, or full.
   history_action_mlp_layers: 1   # Shared by the three historical actions.
