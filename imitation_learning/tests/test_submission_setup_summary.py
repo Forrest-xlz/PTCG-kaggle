@@ -20,14 +20,16 @@ def generated_main_source() -> str:
 def test_submission_contains_setup_summary_parity() -> None:
     source = generated_main_source()
     for expected in (
-        "OWN_SUMMARY_DIM = 84",
-        "OPPONENT_SUMMARY_DIM = 82",
+        "OWN_SUMMARY_DIM = 86",
+        "OPPONENT_SUMMARY_DIM = 84",
         "class SetupFeatureCatalog:",
         "def build_setup_feature_catalog(",
         "def attack_energy_deficit(",
         "def public_setup_summary(",
         "def own_hand_setup_summary(",
         "value.energies",
+        "active_physical_energy / 32.0",
+        "active_effective_energy / 64.0",
         "own.extend(public_setup_summary(",
         "own.extend(own_hand_setup_summary(",
         "opponent.extend(public_setup_summary(",

@@ -32,13 +32,13 @@ from training.feature_cache import (  # noqa: E402
 
 class SetupSummaryIntegrationTests(unittest.TestCase):
     def test_widths_schema_and_projection_inputs_match(self):
-        self.assertEqual(FEATURE_OWN_DIM, 84)
-        self.assertEqual(FEATURE_OPPONENT_DIM, 82)
-        self.assertEqual(NETWORK_OWN_DIM, 84)
-        self.assertEqual(NETWORK_OPPONENT_DIM, 82)
-        self.assertEqual(CACHE_OWN_DIM, 84)
-        self.assertEqual(CACHE_OPPONENT_DIM, 82)
-        self.assertEqual(CACHE_SCHEMA_VERSION, 18)
+        self.assertEqual(FEATURE_OWN_DIM, 86)
+        self.assertEqual(FEATURE_OPPONENT_DIM, 84)
+        self.assertEqual(NETWORK_OWN_DIM, 86)
+        self.assertEqual(NETWORK_OPPONENT_DIM, 84)
+        self.assertEqual(CACHE_OWN_DIM, 86)
+        self.assertEqual(CACHE_OPPONENT_DIM, 84)
+        self.assertEqual(CACHE_SCHEMA_VERSION, 19)
 
         config = ModelConfig(
             card_count=10,
@@ -53,11 +53,11 @@ class SetupSummaryIntegrationTests(unittest.TestCase):
             torch.zeros((10, CARD_FEATURE_DIM)),
             torch.zeros((3, ATTACK_FEATURE_DIM)),
         )
-        self.assertEqual(model.own_summary_projection.in_features, 84)
-        self.assertEqual(model.opponent_summary_projection.in_features, 82)
+        self.assertEqual(model.own_summary_projection.in_features, 86)
+        self.assertEqual(model.opponent_summary_projection.in_features, 84)
 
-    def test_all_signature_producers_use_setup_v4(self):
-        expected = "numeric-summary-27-known-deck-setup-v4"
+    def test_all_signature_producers_use_setup_v5(self):
+        expected = "numeric-summary-27-known-deck-setup-v5"
         for relative in (
             "training/cache_features.py",
             "training/train.py",

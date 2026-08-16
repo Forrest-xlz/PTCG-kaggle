@@ -34,8 +34,8 @@ from model.card_features import (
 
 ENCODER_TOKENS = 27
 POKEMON_ENCODER_TOKENS = 18
-OWN_SUMMARY_DIM = 84
-OPPONENT_SUMMARY_DIM = 82
+OWN_SUMMARY_DIM = 86
+OPPONENT_SUMMARY_DIM = 84
 GLOBAL_SUMMARY_DIM = 73
 SELECT_TYPE_DIM = 11
 SELECT_CONTEXT_DIM = 49
@@ -435,6 +435,13 @@ def _public_setup_summary(
     attack_ready = sum(deficit == 0 for deficit in deficits)
     nearest = min(deficits) if deficits else 5
     empty_bench = max(int(player.benchMax) - len(player.bench), 0)
+    active = [value for value in (player.active or ()) if value is not None]
+    active_physical_energy = sum(
+        len(value.energyCards or ()) for value in active
+    )
+    active_effective_energy = sum(
+        len(value.energies or ()) for value in active
+    )
     return [
         physical_energy / 32.0,
         effective_energy / 64.0,
@@ -445,6 +452,8 @@ def _public_setup_summary(
         sum(deficits) / 45.0,
         min(nearest / 5.0, 1.0),
         empty_bench / 8.0,
+        active_physical_energy / 32.0,
+        active_effective_energy / 64.0,
     ]
 
 

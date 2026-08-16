@@ -111,11 +111,15 @@ def player(hand):
 
 class PlayerSetupSummaryTests(unittest.TestCase):
     def test_public_summary_describes_board_formation(self):
-        values = _public_setup_summary(player(None), DECK, catalog())
+        subject = player(None)
+        subject.active = [
+            pokemon(0, energies=(1, 1, 1), energy_cards=(4, 4))
+        ]
+        values = _public_setup_summary(subject, DECK, catalog())
 
-        self.assertEqual(len(values), 11)
-        self.assertAlmostEqual(values[0], 3 / 32)
-        self.assertAlmostEqual(values[1], 3 / 64)
+        self.assertEqual(len(values), 13)
+        self.assertAlmostEqual(values[0], 4 / 32)
+        self.assertAlmostEqual(values[1], 5 / 64)
         self.assertEqual(values[2:5], [2 / 9, 1 / 9, 1 / 9])
         self.assertAlmostEqual(values[5], 2 / 9)
         self.assertAlmostEqual(values[6], 1 / 9)
@@ -123,6 +127,16 @@ class PlayerSetupSummaryTests(unittest.TestCase):
         self.assertAlmostEqual(values[8], 3 / 45)
         self.assertEqual(values[9], 0.0)
         self.assertAlmostEqual(values[10], 2 / 8)
+        self.assertAlmostEqual(values[11], 2 / 32)
+        self.assertAlmostEqual(values[12], 3 / 64)
+
+    def test_public_summary_has_zero_active_energy_without_an_active(self):
+        subject = player(None)
+        subject.active = []
+
+        values = _public_setup_summary(subject, DECK, catalog())
+
+        self.assertEqual(values[-2:], [0.0, 0.0])
 
     def test_own_hand_summary_respects_turn_and_same_turn_stadium(self):
         own = player([card(1), card(2), card(3), card(4)])
@@ -145,7 +159,7 @@ class PlayerSetupSummaryTests(unittest.TestCase):
     def test_public_opponent_summary_does_not_require_a_hand(self):
         opponent = player(None)
         values = _public_setup_summary(opponent, DECK, catalog())
-        self.assertEqual(len(values), 11)
+        self.assertEqual(len(values), 13)
 
 
 if __name__ == "__main__":
