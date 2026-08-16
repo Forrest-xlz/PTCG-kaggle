@@ -34,8 +34,8 @@ from model.card_features import (
 
 ENCODER_TOKENS = 27
 POKEMON_ENCODER_TOKENS = 18
-OWN_SUMMARY_DIM = 69
-OPPONENT_SUMMARY_DIM = 71
+OWN_SUMMARY_DIM = 84
+OPPONENT_SUMMARY_DIM = 82
 GLOBAL_SUMMARY_DIM = 73
 SELECT_TYPE_DIM = 11
 SELECT_CONTEXT_DIM = 49
@@ -346,6 +346,166 @@ def _add_pokemon(sv: SparseVector, poke: Any, card_count: int) -> None:
 
 def _active(player: Any) -> Any | None:
     return player.active[0] if player.active else None
+
+
+def _in_play_pokemon(player: Any) -> list[Any]:
+    active = _active(player)
+    return ([] if active is None else [active]) + list(player.bench)
+
+
+@lru_cache(maxsize=None)
+def _deck_evolution_sets(
+    deck: tuple[int, ...],
+    card_names: tuple[str, ...],
+    evolves_from: tuple[str | None, ...],
+) -> tuple[frozenset[str], frozenset[str]]:
+    deck_ids = {card_id for card_id in deck if 0 <= card_id < len(card_names)}
+    names = {card_names[card_id] for card_id in deck_ids if card_names[card_id]}
+    parents = {
+        evolves_from[card_id]
+        for card_id in deck_ids
+        if evolves_from[card_id] in names
+    }
+    children = {
+        card_names[card_id]
+        for card_id in deck_ids
+        if evolves_from[card_id] in names and card_names[card_id]
+    }
+    participants = parents | children
+    terminals = participants - parents
+    return frozenset(parents), frozenset(terminals)
+
+
+def _pokemon_min_attack_deficit(
+    pokemon: Any,
+    catalog: NumericFeatureCatalog,
+) -> int | None:
+    card_id = _card_id(pokemon)
+    if not 0 <= card_id < len(catalog.card_attacks):
+        return None
+    deficits = [
+        _attack_energy_deficit(
+            pokemon.energies or (),
+            catalog.setup.attack_costs[attack_id],
+        )
+        for attack_id in catalog.card_attacks[card_id]
+        if 0 <= attack_id < len(catalog.setup.attack_costs)
+    ]
+    return min(deficits) if deficits else None
+
+
+def _public_setup_summary(
+    player: Any,
+    deck: Iterable[int],
+    catalog: NumericFeatureCatalog,
+) -> list[float]:
+    pokemon = _in_play_pokemon(player)
+    physical_energy = sum(len(value.energyCards or ()) for value in pokemon)
+    effective_energy = sum(len(value.energies or ()) for value in pokemon)
+    stage_counts = [0, 0, 0]
+    for value in pokemon:
+        card_id = _card_id(value)
+        if 0 <= card_id < len(catalog.setup.card_stages):
+            stage = int(catalog.setup.card_stages[card_id])
+            if 0 <= stage < 3:
+                stage_counts[stage] += 1
+    parents, terminals = _deck_evolution_sets(
+        tuple(int(card_id) for card_id in deck),
+        catalog.setup.card_names,
+        catalog.setup.evolves_from,
+    )
+    names = [
+        catalog.setup.card_names[_card_id(value)]
+        if 0 <= _card_id(value) < len(catalog.setup.card_names)
+        else ""
+        for value in pokemon
+    ]
+    incomplete = sum(name in parents for name in names)
+    completed = sum(name in terminals for name in names)
+    deficits = [
+        deficit
+        for value in pokemon
+        if (deficit := _pokemon_min_attack_deficit(value, catalog)) is not None
+    ]
+    attack_ready = sum(deficit == 0 for deficit in deficits)
+    nearest = min(deficits) if deficits else 5
+    empty_bench = max(int(player.benchMax) - len(player.bench), 0)
+    return [
+        physical_energy / 32.0,
+        effective_energy / 64.0,
+        *(count / 9.0 for count in stage_counts),
+        incomplete / 9.0,
+        completed / 9.0,
+        attack_ready / 9.0,
+        sum(deficits) / 45.0,
+        min(nearest / 5.0, 1.0),
+        empty_bench / 8.0,
+    ]
+
+
+def _stadium_same_turn_types(
+    state: Any,
+    catalog: NumericFeatureCatalog,
+) -> frozenset[int]:
+    result: set[int] = set()
+    for card in state.stadium or ():
+        card_id = _card_id(card)
+        if 0 <= card_id < len(catalog.setup.same_turn_evolution_types):
+            result.update(catalog.setup.same_turn_evolution_types[card_id])
+    return frozenset(result)
+
+
+def _own_hand_setup_summary(
+    state: Any,
+    player: Any,
+    deck: Iterable[int],
+    catalog: NumericFeatureCatalog,
+) -> list[float]:
+    del deck  # Evolution matching is direct and does not inspect hidden zones.
+    hand = list(player.hand or ())
+    pokemon = _in_play_pokemon(player)
+    board_by_name: dict[str, list[Any]] = {}
+    for value in pokemon:
+        card_id = _card_id(value)
+        if 0 <= card_id < len(catalog.setup.card_names):
+            board_by_name.setdefault(catalog.setup.card_names[card_id], []).append(value)
+    matching_cards = [
+        card
+        for card in hand
+        if 0 <= _card_id(card) < len(catalog.setup.evolves_from)
+        and catalog.setup.evolves_from[_card_id(card)] in board_by_name
+    ]
+    immediate_serials: set[int] = set()
+    if int(state.turn) >= 2:
+        stadium_types = _stadium_same_turn_types(state, catalog)
+        for evolution in matching_cards:
+            evolution_id = _card_id(evolution)
+            parent_name = catalog.setup.evolves_from[evolution_id]
+            evolution_type = int(catalog.setup.energy_types[evolution_id])
+            for target in board_by_name.get(parent_name or "", ()):
+                target_id = _card_id(target)
+                target_type = int(catalog.setup.energy_types[target_id])
+                same_turn_allowed = (
+                    target_type in stadium_types and evolution_type in stadium_types
+                )
+                if not bool(target.appearThisTurn) or same_turn_allowed:
+                    immediate_serials.add(int(getattr(target, "serial", id(target))))
+    basic_pokemon = sum(
+        0 <= _card_id(card) < len(catalog.setup.card_stages)
+        and int(catalog.setup.card_stages[_card_id(card)]) == 0
+        for card in hand
+    )
+    basic_energy = sum(
+        0 <= _card_id(card) < len(catalog.setup.basic_energy)
+        and bool(catalog.setup.basic_energy[_card_id(card)])
+        for card in hand
+    )
+    return [
+        len(immediate_serials) / 9.0,
+        len(matching_cards) / 20.0,
+        basic_pokemon / 20.0,
+        basic_energy / 20.0,
+    ]
 
 
 def _one_hot(index: int, size: int, name: str) -> list[float]:
@@ -744,14 +904,27 @@ def encoder_features(
     own_summary.extend(
         _deck_remaining_summary(deck, relative_players[0], catalog)
     )
+    own_summary.extend(
+        _public_setup_summary(relative_players[0], deck, catalog)
+    )
+    own_summary.extend(
+        _own_hand_setup_summary(state, relative_players[0], deck, catalog)
+    )
     opponent_summary = _player_summary(relative_players[1], catalog)
     opponent_summary.extend(
         _opponent_revealed_summary(relative_players[1], catalog)
     )
+    opponent_summary.extend(
+        _public_setup_summary(relative_players[1], deck, catalog)
+    )
     if len(own_summary) != OWN_SUMMARY_DIM:
-        raise RuntimeError("own summary must contain 60 values")
+        raise RuntimeError(
+            f"own summary must contain {OWN_SUMMARY_DIM} values"
+        )
     if len(opponent_summary) != OPPONENT_SUMMARY_DIM:
-        raise RuntimeError("opponent summary must contain 62 values")
+        raise RuntimeError(
+            f"opponent summary must contain {OPPONENT_SUMMARY_DIM} values"
+        )
     return EncoderFeatures(
         sparse=sparse,
         pokemon_appear=pokemon_appear,
