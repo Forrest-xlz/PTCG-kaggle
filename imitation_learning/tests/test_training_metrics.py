@@ -12,14 +12,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from training.expert_validation import ExpertLoserDateInfo
-from training.feature_cache import LoserAugmentationCounts
 from training.train import (
     ExponentialMovingAverage,
     policy_metrics,
-    format_loser_augmentation_line,
     load_settings,
-    select_loser_augmentation_dates,
 )
 
 
@@ -30,65 +26,30 @@ def test_ema_initializes_from_first_value_and_persists() -> None:
     assert ema.update(0.0) == pytest.approx(1.9701)
 
 
-def test_loser_augmentation_dates_include_latest_cached_date() -> None:
-    assert select_loser_augmentation_dates(
-        [(7, 20), (7, 22), (7, 24), (7, 22)], recent_dates=2
-    ) == ((7, 22), (7, 24))
-
-    with pytest.raises(ValueError, match="recent_dates=4"):
-        select_loser_augmentation_dates(
-            [(7, 20), (7, 22), (7, 24)], recent_dates=4
-        )
-
-
-def test_loser_augmentation_line_reports_each_filter_stage() -> None:
-    line = format_loser_augmentation_line(
-        ExpertLoserDateInfo(
-            date=(7, 21),
-            cutoff=1184.0,
-            participant_count=18_420,
-            episode_count=9_210,
-            eligible_episode_keys=frozenset({1, 2, 3}),
-        ),
-        LoserAugmentationCounts(
-            score_eligible_episodes=3,
-            after_validation_episodes=2,
-            selected_train_episodes=1,
-            loser_samples=17,
-        ),
-    )
-
-    assert line == (
-        "loser_aug_date=7.21 cutoff=1184 participant_scores=18,420 "
-        "episodes=9,210 score_eligible_episodes=3 "
-        "selected_train_episodes=1 loser_samples=17"
-    )
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "message"),
-    [
-        ("enabled", 1, "enabled"),
-        ("recent_dates", 0, "recent_dates"),
-        ("expert_ratio", 0.0, "expert_ratio"),
-        ("expert_ratio", 1.1, "expert_ratio"),
-    ],
-)
-def test_loser_augmentation_settings_validate_ranges(
+def test_training_config_force_includes_manual_replay_date(
     tmp_path: Path,
-    field: str,
-    value,
-    message: str,
 ) -> None:
     config_path = PROJECT_ROOT / "cfg" / "train.yaml"
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    config["train"]["loser_augmentation"][field] = value
+    assert "loser_augmentation" not in config["train"]
+    assert config["train"]["include_all_dates"] == ["8.16"]
+    copied_path = tmp_path / "train.yaml"
+    copied_path.write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
+    assert load_settings(copied_path).train.include_all_dates == ("8.16",)
+
+
+def test_training_config_rejects_invalid_included_date(tmp_path: Path) -> None:
+    config_path = PROJECT_ROOT / "cfg" / "train.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["train"]["include_all_dates"] = ["not-a-date"]
     invalid_path = tmp_path / "train.yaml"
     invalid_path.write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match="cannot parse month.day"):
         load_settings(invalid_path)
 
 

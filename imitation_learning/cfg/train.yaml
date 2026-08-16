@@ -3,7 +3,6 @@ version_name: ver_1.6.0
 train:
   cg_path: ../pokemon_tcg_ai_battle/sample_submission
   data: data/training_cache
-  replay_episodes: ../replay_episodes
   output: outputs/${version_name}
   resume: false
   resume_checkpoint: null  # Example: outputs/ver_1.6.0/checkpoints/epoch-002.pt
@@ -22,10 +21,7 @@ train:
   save_every_steps: 1000
   save_every_epoch: true
   ema_alpha: 0.99
-  loser_augmentation:
-    enabled: true
-    recent_dates: 3      # Latest cached dates.
-    expert_ratio: 0.05   # Daily top-player fraction used for the cutoff.
+  include_all_dates: ["8.16"] # Train every player result on these dates.
   train_replay_ratio: 1.0
   train_replay_seed: 42
   grad_clip_norm: 1.0

@@ -42,7 +42,6 @@ from cg.api import all_attack, all_card_data
 from model.attack_features import build_attack_feature_table
 from model.card_features import build_card_feature_table
 from model.network import ModelConfig, PTCGTransformer
-from training.expert_validation import ExpertLoserDateInfo, load_expert_loser_date_info
 from training.feature_cache import (
     CACHE_SCHEMA_VERSION,
     ENCODER_WORDS,
@@ -55,23 +54,15 @@ from training.feature_cache import (
     POKEMON_DYNAMIC_DIM,
     CachedBatch,
     MmapFeatureDataset,
-    LoserAugmentationCounts,
+    parse_source_date,
 )
 from training.precision import PrecisionContext
-
-
-@dataclass(frozen=True)
-class LoserAugmentationSettings:
-    enabled: bool
-    recent_dates: int
-    expert_ratio: float
 
 
 @dataclass(frozen=True)
 class TrainSettings:
     cg_path: str
     data: str
-    replay_episodes: str
     output: str
     resume: bool
     resume_checkpoint: str | None
@@ -90,7 +81,7 @@ class TrainSettings:
     save_every_steps: int
     save_every_epoch: bool
     ema_alpha: float
-    loser_augmentation: LoserAugmentationSettings
+    include_all_dates: tuple[str, ...]
     train_replay_ratio: float
     train_replay_seed: int
     grad_clip_norm: float
@@ -206,37 +197,6 @@ class ExponentialMovingAverage:
         self.value = None if value is None else float(value)
 
 
-def select_loser_augmentation_dates(
-    shard_dates: list[tuple[int, int]] | tuple[tuple[int, int], ...],
-    recent_dates: int,
-) -> tuple[tuple[int, int], ...]:
-    dates = sorted(set(shard_dates))
-    if not dates:
-        raise ValueError("cache contains no replay dates")
-    if len(dates) < recent_dates:
-        raise ValueError(
-            "loser augmentation requested "
-            f"recent_dates={recent_dates}, but cache contains only "
-            f"{len(dates)} dates"
-        )
-    return tuple(dates[-recent_dates:])
-
-
-def format_loser_augmentation_line(
-    info: ExpertLoserDateInfo,
-    counts: LoserAugmentationCounts,
-) -> str:
-    date = info.date
-    return (
-        f"loser_aug_date={date[0]}.{date[1]} cutoff={info.cutoff:g} "
-        f"participant_scores={info.participant_count:,} "
-        f"episodes={info.episode_count:,} "
-        f"score_eligible_episodes={counts.score_eligible_episodes:,} "
-        f"selected_train_episodes={counts.selected_train_episodes:,} "
-        f"loser_samples={counts.loser_samples:,}"
-    )
-
-
 def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
     if not path.exists():
         raise FileNotFoundError(f"Training config not found: {path}")
@@ -262,22 +222,13 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
 
     raw = interpolate(raw)
     train_raw = dict(raw["train"])
-    loser_raw = train_raw.pop("loser_augmentation", None)
-    if not isinstance(loser_raw, dict):
-        raise ValueError("train.loser_augmentation must be a mapping")
-    try:
-        loser_settings = LoserAugmentationSettings(**loser_raw)
-    except TypeError as exc:
-        raise ValueError(
-            "train.loser_augmentation must contain enabled, recent_dates, "
-            "and expert_ratio"
-        ) from exc
+    include_all_dates = train_raw.get("include_all_dates")
+    if not isinstance(include_all_dates, list):
+        raise ValueError("train.include_all_dates must be a list")
+    train_raw["include_all_dates"] = tuple(include_all_dates)
     settings = ExperimentSettings(
         version_name=version_name,
-        train=TrainSettings(
-            loser_augmentation=loser_settings,
-            **train_raw,
-        ),
+        train=TrainSettings(**train_raw),
         model=ModelSettings(**raw["model"]),
         wandb=WandbSettings(**raw["wandb"]),
     )
@@ -316,17 +267,10 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError("train.beta1 and train.beta2 must be in [0, 1)")
     if not 0 <= train.ema_alpha < 1:
         raise ValueError("train.ema_alpha must be in [0, 1)")
-    loser = train.loser_augmentation
-    if type(loser.enabled) is not bool:
-        raise ValueError("train.loser_augmentation.enabled must be true or false")
-    if type(loser.recent_dates) is not int or loser.recent_dates < 1:
-        raise ValueError(
-            "train.loser_augmentation.recent_dates must be an integer >= 1"
-        )
-    if not 0 < loser.expert_ratio <= 1:
-        raise ValueError(
-            "train.loser_augmentation.expert_ratio must be in (0, 1]"
-        )
+    for date in train.include_all_dates:
+        if not isinstance(date, str):
+            raise ValueError("train.include_all_dates entries must be strings")
+        parse_source_date(date)
     if not 0 < train.train_replay_ratio <= 1:
         raise ValueError("train.train_replay_ratio must be in (0, 1]")
     if type(train.train_replay_seed) is not int:
@@ -736,7 +680,6 @@ def main() -> None:
     data_path = project_path(train_cfg.data)
     if not data_path.exists():
         raise FileNotFoundError(f"Training cache directory not found: {data_path}")
-    replay_root = project_path(train_cfg.replay_episodes)
 
     random.seed(train_cfg.seed)
     np.random.seed(train_cfg.seed)
@@ -783,54 +726,19 @@ def main() -> None:
         expected_signature=feature_signature(config),
     )
     try:
-        if train_cfg.loser_augmentation.enabled:
-            loser_dates = select_loser_augmentation_dates(
-                dataset.shard_dates,
-                train_cfg.loser_augmentation.recent_dates,
-            )
-            loser_date_info = load_expert_loser_date_info(
-                replay_root=replay_root,
-                required_dates=loser_dates,
-                ratio=train_cfg.loser_augmentation.expert_ratio,
-            )
-            loser_episode_keys = {
-                date: info.eligible_episode_keys
-                for date, info in loser_date_info.items()
-            }
-        else:
-            loser_dates = ()
-            loser_date_info = {}
-            loser_episode_keys = None
+        include_all_dates = {
+            parse_source_date(date) for date in train_cfg.include_all_dates
+        }
         selection = dataset.build_training_indices(
             train_replay_ratio=train_cfg.train_replay_ratio,
             train_replay_seed=train_cfg.train_replay_seed,
-            loser_episode_keys=loser_episode_keys,
+            include_all_dates=include_all_dates,
         )
     except Exception:
         dataset.close()
         raise
     cache_open_seconds = time.perf_counter() - cache_started
-    if train_cfg.loser_augmentation.enabled:
-        for date in loser_dates:
-            print(
-                format_loser_augmentation_line(
-                    loser_date_info[date],
-                    selection.loser_augmentation_counts[date],
-                ),
-                flush=True,
-            )
-    else:
-        print("loser_augmentation=disabled", flush=True)
-    print(
-        f"loser_augmentation_dates={len(loser_dates):,} "
-        f"loser_augmentation_replays="
-        f"{selection.loser_augmentation_replays:,} "
-        f"loser_augmentation_samples="
-        f"{selection.loser_augmentation_samples:,} "
-        f"loser_fraction_in_train="
-        f"{selection.loser_fraction_in_train:.6f}",
-        flush=True,
-    )
+    included_date_labels = ",".join(train_cfg.include_all_dates)
     realized_train_sample_ratio = (
         len(selection.train) / selection.eligible_train_samples
     )
@@ -954,6 +862,7 @@ def main() -> None:
         f"selected_train={len(selection.train):,} "
         f"eligible_train_replays={selection.eligible_train_replays:,} "
         f"selected_train_replays={selection.selected_train_replays:,} "
+        f"include_all_dates={included_date_labels or 'none'} "
         f"train_sample_ratio={realized_train_sample_ratio:.4f} "
         f"train_replay_ratio={realized_train_replay_ratio:.4f} "
         f"steps_per_epoch={steps_per_epoch:,} total_steps={total_steps:,} "
@@ -961,37 +870,8 @@ def main() -> None:
         flush=True,
     )
     if wandb_run is not None:
-        loser_data_metrics = {
-            "data/loser_augmentation_dates": len(loser_dates),
-            "data/loser_augmentation_replays": (
-                selection.loser_augmentation_replays
-            ),
-            "data/loser_augmentation_samples": (
-                selection.loser_augmentation_samples
-            ),
-            "data/loser_fraction_in_train": selection.loser_fraction_in_train,
-        }
-        for date in loser_dates:
-            info = loser_date_info[date]
-            counts = selection.loser_augmentation_counts[date]
-            prefix = f"data/loser_aug_{date[0]}_{date[1]}"
-            loser_data_metrics.update(
-                {
-                    f"{prefix}_cutoff": info.cutoff,
-                    f"{prefix}_participant_scores": info.participant_count,
-                    f"{prefix}_episodes": info.episode_count,
-                    f"{prefix}_score_eligible_episodes": (
-                        counts.score_eligible_episodes
-                    ),
-                    f"{prefix}_selected_train_episodes": (
-                        counts.selected_train_episodes
-                    ),
-                    f"{prefix}_loser_samples": counts.loser_samples,
-                }
-            )
         wandb_run.log(
             {
-                **loser_data_metrics,
                 "data/cache_open_seconds": cache_open_seconds,
                 "data/cache_shards": len(dataset.shards),
                 "data/cache_samples": len(dataset),
