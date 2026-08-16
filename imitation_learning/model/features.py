@@ -9,6 +9,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from functools import lru_cache
 from itertools import combinations
+import re
 from typing import Any, Iterable
 
 import numpy as np
@@ -94,10 +95,140 @@ def _add_known_deck_token(
 
 
 @dataclass(frozen=True)
+class SetupFeatureCatalog:
+    card_names: tuple[str, ...]
+    card_stages: np.ndarray
+    card_types: np.ndarray
+    energy_types: np.ndarray
+    evolves_from: tuple[str | None, ...]
+    basic_energy: np.ndarray
+    attack_costs: tuple[tuple[int, ...], ...]
+    same_turn_evolution_types: tuple[tuple[int, ...], ...]
+
+    def __post_init__(self) -> None:
+        card_count = len(self.card_names)
+        for name, values in (
+            ("card_stages", self.card_stages),
+            ("card_types", self.card_types),
+            ("energy_types", self.energy_types),
+            ("basic_energy", self.basic_energy),
+        ):
+            if len(values) != card_count:
+                raise ValueError(f"{name} must align with cards")
+        if len(self.evolves_from) != card_count:
+            raise ValueError("evolves_from must align with cards")
+        if len(self.same_turn_evolution_types) != card_count:
+            raise ValueError("same_turn_evolution_types must align with cards")
+
+
+_ENERGY_TOKEN_TYPES = {
+    "C": 0,
+    "G": 1,
+    "R": 2,
+    "W": 3,
+    "L": 4,
+    "P": 5,
+    "F": 6,
+    "D": 7,
+    "M": 8,
+    "N": 9,
+}
+
+
+def _build_setup_feature_catalog(
+    cards: Iterable[Any],
+    attacks: Iterable[Any],
+    card_count: int,
+) -> SetupFeatureCatalog:
+    names = [""] * card_count
+    stages = np.full(card_count, -1, dtype=np.int8)
+    card_types = np.full(card_count, -1, dtype=np.int8)
+    energy_types = np.full(card_count, -1, dtype=np.int8)
+    evolves_from: list[str | None] = [None] * card_count
+    basic_energy = np.zeros(card_count, dtype=np.bool_)
+    same_turn_types: list[tuple[int, ...]] = [()] * card_count
+    for card in cards:
+        card_id = int(card.cardId)
+        if not 0 <= card_id < card_count:
+            continue
+        names[card_id] = str(card.name)
+        card_type = int(card.cardType)
+        card_types[card_id] = card_type
+        energy_types[card_id] = int(card.energyType)
+        if bool(card.basic):
+            stages[card_id] = 0
+        elif bool(card.stage1):
+            stages[card_id] = 1
+        elif bool(card.stage2):
+            stages[card_id] = 2
+        parent = getattr(card, "evolvesFrom", None)
+        evolves_from[card_id] = None if parent is None else str(parent)
+        basic_energy[card_id] = card_type == 5
+        if card_type == 4:
+            text = " ".join(
+                str(getattr(value, "text", ""))
+                for value in (getattr(card, "skills", None) or ())
+            )
+            lowered = text.lower()
+            if "can evolve" in lowered and "during the turn they play" in lowered:
+                types = {
+                    _ENERGY_TOKEN_TYPES[token]
+                    for token in re.findall(r"\{([A-Z]+)\}", text)
+                    if token in _ENERGY_TOKEN_TYPES
+                }
+                same_turn_types[card_id] = tuple(sorted(types))
+    attack_list = list(attacks)
+    attack_count = max(
+        (int(attack.attackId) for attack in attack_list),
+        default=-1,
+    ) + 1
+    attack_costs: list[tuple[int, ...]] = [()] * attack_count
+    for attack in attack_list:
+        attack_costs[int(attack.attackId)] = tuple(
+            int(value) for value in (attack.energies or ())
+        )
+    return SetupFeatureCatalog(
+        card_names=tuple(names),
+        card_stages=stages,
+        card_types=card_types,
+        energy_types=energy_types,
+        evolves_from=tuple(evolves_from),
+        basic_energy=basic_energy,
+        attack_costs=tuple(attack_costs),
+        same_turn_evolution_types=tuple(same_turn_types),
+    )
+
+
+def _attack_energy_deficit(
+    available: Iterable[int],
+    required: Iterable[int],
+) -> int:
+    remaining = [int(value) for value in available]
+    requirements = [int(value) for value in required]
+    deficit = 0
+    for energy_type in (value for value in requirements if value != 0):
+        compatible = [energy_type, 10]
+        if energy_type in {5, 7}:
+            compatible.append(11)
+        match = next(
+            (index for index, value in enumerate(remaining) if value in compatible),
+            None,
+        )
+        if match is None:
+            deficit += 1
+        else:
+            remaining.pop(match)
+    colorless = sum(value == 0 for value in requirements)
+    deficit += max(colorless - len(remaining), 0)
+    return deficit
+
+
+@dataclass(frozen=True)
 class NumericFeatureCatalog:
     card_features: np.ndarray
     attack_damage: np.ndarray
     card_attacks: tuple[tuple[int, ...], ...]
+    setup: SetupFeatureCatalog
 
     def __post_init__(self) -> None:
         if self.card_features.ndim != 2 or self.card_features.shape[1] != CARD_FEATURE_DIM:
@@ -106,6 +237,8 @@ class NumericFeatureCatalog:
             )
         if len(self.card_attacks) != len(self.card_features):
             raise ValueError("card_attacks must align with card_features")
+        if len(self.setup.card_names) != len(self.card_features):
+            raise ValueError("setup catalog must align with card features")
 
 
 @dataclass(frozen=True)
@@ -164,6 +297,7 @@ def _default_numeric_catalog(card_count: int) -> NumericFeatureCatalog:
         card_features=card_features,
         attack_damage=attack_damage,
         card_attacks=tuple(card_attacks),
+        setup=_build_setup_feature_catalog(cards, attacks, card_count),
     )
 
 
