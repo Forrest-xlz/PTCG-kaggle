@@ -25,7 +25,7 @@ def test_deck_extract_yaml_is_hierarchical() -> None:
     assert extract["force"] is False
 
 
-def test_train_yaml_uses_validation_and_step_configuration() -> None:
+def test_train_yaml_uses_full_data_and_step_configuration() -> None:
     config = yaml.safe_load(
         (PROJECT_ROOT / "cfg" / "train.yaml").read_text(encoding="utf-8")
     )
@@ -35,25 +35,22 @@ def test_train_yaml_uses_validation_and_step_configuration() -> None:
     assert "shuffle_mode" not in train
     assert "warmup_ratio" not in train
     assert train["warmup_steps"] >= 0
-    assert train["validation_ratio"] == pytest.approx(0.05)
-    assert train["expert_validation_ratio"] == pytest.approx(0.05)
+    validation_only = {
+        "eval_every_steps",
+        "validation_ratio",
+        "validation_seed",
+        "expert_validation_ratio",
+        "isolation_validation",
+        "top_decks",
+    }
+    assert validation_only.isdisjoint(train)
     loser_augmentation = train["loser_augmentation"]
     assert loser_augmentation["enabled"] is True
     assert loser_augmentation["recent_dates"] >= 1
     assert 0 < loser_augmentation["expert_ratio"] <= 1
     assert train["replay_episodes"]
-    isolation = train["isolation_validation"]
-    assert isolation["deck_data"] == "data/deck"
-    assert set(isolation["selections"]) == {
-        "deck_isolation",
-        "archetype_isolation",
-        "top_deck_archetype_isolation",
-    }
-    assert all(isolation["selections"].values())
     assert train["train_replay_ratio"] == pytest.approx(1.0)
     assert isinstance(train["train_replay_seed"], int)
-    assert train["top_decks"]
-    assert all(len(deck) == 60 for deck in train["top_decks"])
     assert train["ema_alpha"] == pytest.approx(0.99)
     assert config["model"]["norm_mode"] in {"prenorm", "postnorm"}
     assert config["model"]["card_mlp_layers"] >= 0
@@ -65,6 +62,7 @@ def test_train_yaml_uses_validation_and_step_configuration() -> None:
         "discard_token_mlp_layers",
         "hand_token_mlp_layers",
         "deck_token_mlp_layers",
+        "known_deck_token_mlp_layers",
     ):
         assert config["model"][name] >= 0
     assert isinstance(config["model"]["region_token_mlp_residual"], bool)

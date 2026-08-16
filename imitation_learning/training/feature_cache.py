@@ -196,6 +196,20 @@ class DatasetSplits:
 
 
 @dataclass(frozen=True, slots=True)
+class TrainingSelection:
+    train: np.ndarray
+    eligible_train_samples: int
+    eligible_train_replays: int
+    selected_train_replays: int
+    loser_augmentation_counts: dict[
+        tuple[int, int], "LoserAugmentationCounts"
+    ]
+    loser_augmentation_replays: int
+    loser_augmentation_samples: int
+    loser_fraction_in_train: float
+
+
+@dataclass(frozen=True, slots=True)
 class LoserAugmentationCounts:
     score_eligible_episodes: int
     after_validation_episodes: int
@@ -996,6 +1010,137 @@ class MmapFeatureDataset:
             np.random.default_rng(seed).shuffle(order)
         for start in range(0, limit, batch_size):
             yield IndexBatch(order[start : min(start + batch_size, limit)])
+
+    def build_training_indices(
+        self,
+        train_replay_ratio: float = 1.0,
+        train_replay_seed: int = 0,
+        loser_episode_keys: Mapping[
+            tuple[int, int], AbstractSet[int]
+        ]
+        | None = None,
+    ) -> TrainingSelection:
+        if not 0 < train_replay_ratio <= 1:
+            raise ValueError("train_replay_ratio must be in (0, 1]")
+        dtype = (
+            np.uint32
+            if self.total_samples <= np.iinfo(np.uint32).max
+            else np.uint64
+        )
+        train_threshold = int(train_replay_ratio * (1 << 32))
+        loser_count_parts: dict[
+            tuple[int, int], list[tuple[np.ndarray, np.ndarray, int]]
+        ] = {date: [] for date in (loser_episode_keys or {})}
+        unknown_loser_dates = set(loser_count_parts) - set(self.shard_dates)
+        if unknown_loser_dates:
+            labels = ", ".join(
+                f"{month}.{day}"
+                for month, day in sorted(unknown_loser_dates)
+            )
+            raise ValueError(
+                f"loser augmentation dates are absent from cache: {labels}"
+            )
+
+        train_parts: list[np.ndarray] = []
+        eligible_key_parts: list[np.ndarray] = []
+        selected_key_parts: list[np.ndarray] = []
+        eligible_train_samples = 0
+        for shard_id, shard in enumerate(self.shards):
+            date = self.shard_dates[shard_id]
+            global_ids = np.arange(
+                self.starts[shard_id], self.ends[shard_id], dtype=dtype
+            )
+            player_results = shard.arrays["player_result"]
+            winner_mask = player_results == PLAYER_RESULT_WIN
+            if date in loser_count_parts:
+                loser_keys = np.fromiter(
+                    loser_episode_keys[date], dtype=np.uint32
+                )
+                score_eligible_loss_mask = (
+                    (player_results == PLAYER_RESULT_LOSS)
+                    & np.isin(
+                        shard.arrays["episode_key"],
+                        loser_keys,
+                        assume_unique=False,
+                    )
+                )
+            else:
+                score_eligible_loss_mask = np.zeros(
+                    len(shard), dtype=np.bool_
+                )
+            eligible_mask = winner_mask | score_eligible_loss_mask
+            train_selection = (
+                _mix_episode_keys(
+                    shard.arrays["episode_key"],
+                    train_replay_seed ^ 0x9E3779B9,
+                ).astype(np.uint64)
+                < train_threshold
+            )
+            selected_mask = eligible_mask & train_selection
+            selected_loser_mask = score_eligible_loss_mask & train_selection
+            train_parts.append(global_ids[selected_mask])
+            eligible_train_samples += int(eligible_mask.sum())
+            eligible_key_parts.append(
+                np.unique(shard.arrays["episode_key"][eligible_mask])
+            )
+            selected_key_parts.append(
+                np.unique(shard.arrays["episode_key"][selected_mask])
+            )
+            if date in loser_count_parts:
+                loser_count_parts[date].append(
+                    (
+                        np.unique(
+                            shard.arrays["episode_key"][
+                                score_eligible_loss_mask
+                            ]
+                        ),
+                        np.unique(
+                            shard.arrays["episode_key"][selected_loser_mask]
+                        ),
+                        int(selected_loser_mask.sum()),
+                    )
+                )
+
+        def combine(parts: list[np.ndarray], name: str) -> np.ndarray:
+            nonempty = [part for part in parts if part.size]
+            if not nonempty:
+                raise ValueError(f"{name} is empty")
+            return np.concatenate(nonempty).astype(dtype, copy=False)
+
+        def unique_count(parts: list[np.ndarray]) -> int:
+            nonempty = [part for part in parts if part.size]
+            if not nonempty:
+                return 0
+            return int(np.unique(np.concatenate(nonempty)).size)
+
+        train = combine(train_parts, "training selection")
+        loser_counts = {}
+        for date, parts in loser_count_parts.items():
+            eligible_parts = [eligible for eligible, _, _ in parts]
+            selected_parts = [selected for _, selected, _ in parts]
+            eligible_replays = unique_count(eligible_parts)
+            loser_counts[date] = LoserAugmentationCounts(
+                score_eligible_episodes=eligible_replays,
+                after_validation_episodes=eligible_replays,
+                selected_train_episodes=unique_count(selected_parts),
+                loser_samples=sum(samples for _, _, samples in parts),
+            )
+        loser_replays = sum(
+            counts.selected_train_episodes for counts in loser_counts.values()
+        )
+        loser_samples = sum(
+            counts.loser_samples for counts in loser_counts.values()
+        )
+        return TrainingSelection(
+            train=train,
+            eligible_train_samples=eligible_train_samples,
+            eligible_train_replays=unique_count(eligible_key_parts),
+            selected_train_replays=unique_count(selected_key_parts),
+            loser_augmentation_counts=loser_counts,
+            loser_augmentation_replays=loser_replays,
+            loser_augmentation_samples=loser_samples,
+            loser_fraction_in_train=loser_samples / len(train),
+        )
 
     def build_splits(
         self,

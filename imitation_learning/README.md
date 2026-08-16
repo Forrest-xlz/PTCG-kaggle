@@ -54,73 +54,34 @@ ordinary CPU memory. Candidate selections cover every legal size from
 treat replay selection order as irrelevant. Each sample also stores a stable
 32-bit replay key used for validation splitting, a stable 64-bit key for
 its complete deck, the player's result, and the acting player's previous three
-actions. Cache schema 16 is required. Winner-only JSONL and older caches must
+actions. Cache schema 19 is required. Winner-only JSONL and older caches must
 both be rebuilt once with `training.extract` followed by
 `training.cache_features`.
 
 Training has no command-line parameters. It reads `cfg/train.yaml`, whose
 `train`, `model`, and `wandb` sections control cache paths, batching, network
-depth/width, precision, validation, and experiment tracking. Training always
+depth/width, precision, checkpointing, and experiment tracking. Training always
 uses a compact global permutation (about 120 MB for 30 million samples), and
 every eligible training sample is consumed once per epoch. Use
 `train.max_samples` for bounded trials before setting it to `null`.
 
-Training first reads the three reviewed exact-deck selections configured under
-`train.isolation_validation`. It scans `data/deck/*.decks.csv`, so a selected
-deck used by either player moves the entire replay into its isolation
-validation set. The three isolation sets may overlap with one another, but
-their replay union is removed before every later split. This lookup is
-performed at training startup and does not require rebuilding feature caches.
-
-After isolation, the numerically latest `month.day` source becomes the
-latest-date validation set. Validation arrays retain winner samples only.
-Older remaining replays are assigned as a group to
-training or in-distribution validation using `validation_ratio` and
-`validation_seed`; different states from the same replay can never cross
-these splits. Every `eval_every_steps` successful optimizer updates, the
-isolation union is forwarded once and accumulated into three independent
-Wandb groups: `val_deck_isolation/*`, `val_archetype_isolation/*`, and
-`val_top_deck_archetype_isolation/*`. Latest-date and in-distribution
-validation retain their existing CE loss and Top-1/3/5 metrics. Training logs
-use cross-epoch exponential moving averages controlled by `ema_alpha`.
-
-Each replay ZIP under `train.replay_episodes` must contain one `manifest.csv`.
-For every date independently, training reconstructs both player scores from
-`min_score` and `sum_score`, then uses `expert_validation_ratio` to find the
-top-score cutoff across all players. Ties at the cutoff are retained, and an
-episode is marked expert when either player reaches it. The existing
-winner-only samples from those episodes form expert subsets inside both
-validation sets. Base and expert metrics share one model forward pass and are
-logged separately as `val_in_distribution_expert/*` and
-`val_latest_expert/*`.
-
-`train.top_decks` accepts one or more complete 60-card lists. Card order is
-ignored but multiplicity is preserved. Configuration order defines `deck1`,
-`deck2`, and so on. Every deck receives separate in-distribution, latest-date,
-in-distribution expert, and latest-date expert validation groups, such as
-`val_in_distribution_deck1/*` and `val_in_distribution_expert_deck1/*`.
-Each group contains loss and top-1/3/5 accuracy. All subgroup metrics reuse
-their base validation batch's logits, so they do not add model forward passes.
-
-After isolation, latest-date, and in-distribution validation are fixed,
-`train.train_replay_ratio` selects a
-deterministic fraction of the remaining replays using `train_replay_seed`.
+Training does not create or evaluate validation splits. Winner samples from
+every cached date, including the latest `month.day` source, are eligible.
+`train.train_replay_ratio` selects a deterministic fraction of these replays
+using `train_replay_seed`.
 Every selected replay keeps all of its samples, and the fixed subset is reused
 for every epoch. The realized sample ratio can differ from the replay ratio
 because games contain different numbers of decisions.
 
 `train.loser_augmentation` optionally adds high-skill losing-player actions
-after all validation replays are fixed. `recent_dates` selects the newest
-training dates after excluding the latest-date validation date. For each date
+to the full winner dataset. `recent_dates` selects the newest cached dates,
+including the latest date. For each date
 independently, `expert_ratio` defines a participant-score cutoff; a replay's
 loser is eligible only when `min_score` reaches that cutoff, which ensures both
 players are above it. The same replay-level `train_replay_ratio` applies to
-both sides. Draws and every replay assigned to any validation split remain
-excluded. Startup logs show each date's cutoff and the replay/sample counts
-after every filter stage. This ratio is independent of
-`expert_validation_ratio`. After the one-time two-player extraction and
-schema-16 cache rebuild, changing loser-augmentation settings requires only a
-new training run.
+both sides. Draws remain excluded. Startup logs show each date's cutoff and
+the replay/sample counts. Changing loser-augmentation settings requires only
+a new training run and does not require rebuilding the feature cache.
 
 Standalone validation has no command-line parameters and reads
 `cfg/validation.yaml`. Configure `validation.ensemble.checkpoints` with
@@ -138,11 +99,10 @@ with equal weight before CE loss and Top-1/3/5 are computed. All models remain
 resident on the selected device, so required GPU memory is approximately the
 sum of their parameter and inference-activation memory.
 
-`validation.train_config` points to the training YAML that defines the cache,
-replay archives, expert ratio, replay-level validation ratio and seed, three
-isolation selections, and ordered top decks. The standalone command therefore
-rebuilds the same winner-only validation sets as training. It prints CE loss
-and Top-1/3/5 accuracy for the isolation groups, latest-date base and
+`validation.train_config` supplies the version name, engine path, cache path,
+and replay archive path. Validation-only ratios, isolation selections, and
+ordered top decks live in `cfg/validation.yaml`. The standalone command prints
+CE loss and Top-1/3/5 accuracy for the isolation groups, latest-date base and
 subgroups, and in-distribution base and subgroups. Subgroups reuse their parent
 split's logits. The evaluator does not change the cache or create result files
 or remote experiment runs.
@@ -159,8 +119,8 @@ The root `version_name` can be reused as `${version_name}` in values such as
 `train.output` and `wandb.name`. The AdamW optimizer supports configurable
 `beta1`/`beta2`; its learning rate warms up linearly for `warmup_steps`
 successful optimizer updates and then follows cosine decay to zero.
-`log_every_steps`, `eval_every_steps`, and `save_every_steps` all use successful
-optimizer steps. Epoch checkpointing remains controlled by
+`log_every_steps` and `save_every_steps` both use successful optimizer steps.
+Epoch checkpointing remains controlled by
 `save_every_epoch`.
 
 `model.norm_mode` accepts `postnorm` or `prenorm`. PreNorm applies
