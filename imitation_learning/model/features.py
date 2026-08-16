@@ -205,19 +205,24 @@ def _attack_energy_deficit(
 ) -> int:
     remaining = [int(value) for value in available]
     requirements = [int(value) for value in required]
-    deficit = 0
-    for energy_type in (value for value in requirements if value != 0):
-        compatible = [energy_type, 10]
-        if energy_type in {5, 7}:
-            compatible.append(11)
+    unmatched = [value for value in requirements if value != 0]
+    for energy_type in tuple(unmatched):
         match = next(
-            (index for index, value in enumerate(remaining) if value in compatible),
+            (index for index, value in enumerate(remaining) if value == energy_type),
             None,
         )
-        if match is None:
-            deficit += 1
-        else:
+        if match is not None:
             remaining.pop(match)
+            unmatched.remove(energy_type)
+    for energy_type in tuple(unmatched):
+        if energy_type in {5, 7} and 11 in remaining:
+            remaining.remove(11)
+            unmatched.remove(energy_type)
+    rainbow_count = remaining.count(10)
+    rainbow_used = min(rainbow_count, len(unmatched))
+    for _ in range(rainbow_used):
+        remaining.remove(10)
+    deficit = len(unmatched) - rainbow_used
     colorless = sum(value == 0 for value in requirements)
     deficit += max(colorless - len(remaining), 0)
     return deficit

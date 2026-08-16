@@ -88,6 +88,7 @@ class SetupFeatureCatalogTests(unittest.TestCase):
         self.assertEqual(_attack_energy_deficit([11], [1]), 1)
         self.assertEqual(_attack_energy_deficit([1, 2, 3], [0, 0]), 0)
         self.assertEqual(_attack_energy_deficit([1], [1, 0]), 1)
+        self.assertEqual(_attack_energy_deficit([10, 1], [1, 2]), 0)
 
 
 if __name__ == "__main__":
