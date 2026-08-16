@@ -330,6 +330,39 @@ def test_full_training_selection_uses_every_date_and_qualified_losses(
         dataset.close()
 
 
+def test_full_training_includes_every_result_on_configured_date(
+    tmp_path: Path,
+) -> None:
+    regular_path = tmp_path / "8.15-part.cache"
+    writer = PackedShardWriter(
+        regular_path, SIGNATURE, {"name": "8.15.jsonl.gz"}
+    )
+    writer.add(record(1, player_result=PLAYER_RESULT_WIN))
+    writer.add(record(2, player_result=PLAYER_RESULT_LOSS))
+    writer.finalize()
+
+    included_path = tmp_path / "8.16-part.cache"
+    writer = PackedShardWriter(
+        included_path, SIGNATURE, {"name": "8.16.jsonl.gz"}
+    )
+    writer.add(record(3, player_result=PLAYER_RESULT_WIN))
+    writer.add(record(4, player_result=PLAYER_RESULT_LOSS))
+    writer.add(record(5, player_result=PLAYER_RESULT_DRAW))
+    writer.finalize()
+
+    dataset = MmapFeatureDataset(tmp_path, SIGNATURE)
+    try:
+        selection = dataset.build_training_indices(
+            include_all_dates={(8, 16)}
+        )
+        np.testing.assert_array_equal(selection.train, [0, 2, 3, 4])
+
+        with pytest.raises(ValueError, match="absent from cache: 8.17"):
+            dataset.build_training_indices(include_all_dates={(8, 17)})
+    finally:
+        dataset.close()
+
+
 def test_writer_rejects_encoder_index_outside_uint16(tmp_path: Path) -> None:
     writer = PackedShardWriter(tmp_path / "bad.cache", SIGNATURE, {})
     bad = record(7)

@@ -1019,6 +1019,7 @@ class MmapFeatureDataset:
             tuple[int, int], AbstractSet[int]
         ]
         | None = None,
+        include_all_dates: AbstractSet[tuple[int, int]] | None = None,
     ) -> TrainingSelection:
         if not 0 < train_replay_ratio <= 1:
             raise ValueError("train_replay_ratio must be in (0, 1]")
@@ -1040,6 +1041,16 @@ class MmapFeatureDataset:
             raise ValueError(
                 f"loser augmentation dates are absent from cache: {labels}"
             )
+        included_dates = set(include_all_dates or ())
+        unknown_included_dates = included_dates - set(self.shard_dates)
+        if unknown_included_dates:
+            labels = ", ".join(
+                f"{month}.{day}"
+                for month, day in sorted(unknown_included_dates)
+            )
+            raise ValueError(
+                f"included training dates are absent from cache: {labels}"
+            )
 
         train_parts: list[np.ndarray] = []
         eligible_key_parts: list[np.ndarray] = []
@@ -1051,7 +1062,11 @@ class MmapFeatureDataset:
                 self.starts[shard_id], self.ends[shard_id], dtype=dtype
             )
             player_results = shard.arrays["player_result"]
-            winner_mask = player_results == PLAYER_RESULT_WIN
+            winner_mask = (
+                np.ones(len(shard), dtype=np.bool_)
+                if date in included_dates
+                else player_results == PLAYER_RESULT_WIN
+            )
             if date in loser_count_parts:
                 loser_keys = np.fromiter(
                     loser_episode_keys[date], dtype=np.uint32
