@@ -3,5 +3,5 @@ cache:
   input: data/training
   output: data/training_cache
   workers: 16
-  samples_per_shard: 25000
+  samples_per_shard: 250000
   force: false
