@@ -77,7 +77,7 @@ ISOLATION_SELECTION_NAMES = (
 @dataclass(frozen=True)
 class IsolationValidationSettings:
     deck_data: str
-    selections: dict[str, str]
+    selections: dict[str, str | None]
 
 
 @dataclass(frozen=True)
@@ -93,6 +93,7 @@ class TrainSettings:
     data: str
     replay_episodes: str
     output: str
+    data_selection_mode: str
     resume: bool
     resume_checkpoint: str | None
     epochs: int
@@ -242,11 +243,16 @@ class ExponentialMovingAverage:
 def select_loser_augmentation_dates(
     shard_dates: list[tuple[int, int]] | tuple[tuple[int, int], ...],
     recent_dates: int,
+    data_selection_mode: str = "holdout",
 ) -> tuple[tuple[int, int], ...]:
     dates = sorted(set(shard_dates))
     if not dates:
         raise ValueError("cache contains no replay dates")
-    training_dates = dates[:-1]
+    if data_selection_mode not in {"holdout", "full_data"}:
+        raise ValueError(
+            "data_selection_mode must be holdout or full_data"
+        )
+    training_dates = dates[:-1] if data_selection_mode == "holdout" else dates
     if len(training_dates) < recent_dates:
         raise ValueError(
             "loser augmentation requested "
@@ -259,14 +265,20 @@ def select_loser_augmentation_dates(
 def format_loser_augmentation_line(
     info: ExpertLoserDateInfo,
     counts: LoserAugmentationCounts,
+    data_selection_mode: str = "holdout",
 ) -> str:
     date = info.date
-    return (
+    line = (
         f"loser_aug_date={date[0]}.{date[1]} cutoff={info.cutoff:g} "
         f"participant_scores={info.participant_count:,} "
         f"episodes={info.episode_count:,} "
         f"score_eligible_episodes={counts.score_eligible_episodes:,} "
-        f"after_validation_episodes={counts.after_validation_episodes:,} "
+    )
+    if data_selection_mode == "holdout":
+        line += (
+            f"after_validation_episodes={counts.after_validation_episodes:,} "
+        )
+    return line + (
         f"selected_train_episodes={counts.selected_train_episodes:,} "
         f"loser_samples={counts.loser_samples:,}"
     )
@@ -325,17 +337,17 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
     invalid_path_types = sorted(
         str(name)
         for name, path in selections.items()
-        if not isinstance(path, str)
+        if path is not None and not isinstance(path, str)
     )
     if invalid_path_types:
         raise ValueError(
-            "isolation selection paths must be strings: "
+            "isolation selection paths must be strings or null: "
             f"{invalid_path_types}"
         )
     isolation_settings = IsolationValidationSettings(
         deck_data=deck_data_value.strip(),
         selections={
-            str(name): path.strip()
+            str(name): None if path is None else path.strip()
             for name, path in selections.items()
         },
     )
@@ -386,6 +398,10 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
         raise ValueError("train.ema_alpha must be in [0, 1)")
     if not 0 < train.validation_ratio < 1:
         raise ValueError("train.validation_ratio must be strictly between 0 and 1")
+    if train.data_selection_mode not in {"holdout", "full_data"}:
+        raise ValueError(
+            "train.data_selection_mode must be holdout or full_data"
+        )
     if not 0 < train.expert_validation_ratio <= 1:
         raise ValueError(
             "train.expert_validation_ratio must be in (0, 1]"
@@ -416,7 +432,7 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
     empty_selection_paths = sorted(
         name
         for name, path in isolation.selections.items()
-        if not path
+        if path is not None and not path
     )
     if empty_selection_paths:
         raise ValueError(
@@ -1033,33 +1049,45 @@ def main() -> None:
         data_path,
         expected_signature=feature_signature(config),
     )
+    use_holdout = train_cfg.data_selection_mode == "holdout"
     try:
-        isolation_cfg = train_cfg.isolation_validation
-        isolation_sets = load_isolation_replay_sets(
-            deck_data_dir=project_path(isolation_cfg.deck_data),
-            selection_paths={
+        if use_holdout:
+            isolation_cfg = train_cfg.isolation_validation
+            enabled_isolation_paths = {
                 f"val_{name}": project_path(path)
                 for name, path in isolation_cfg.selections.items()
-            },
-            required_dates=dataset.shard_dates,
-        )
-        expert_dates = load_expert_date_info(
-            replay_root=replay_root,
-            required_dates=dataset.shard_dates,
-            ratio=train_cfg.expert_validation_ratio,
-        )
-        for date in sorted(expert_dates):
-            info = expert_dates[date]
-            print(
-                f"expert_date={date[0]}.{date[1]} cutoff={info.cutoff:g} "
-                f"episodes={info.episode_count:,} "
-                f"expert_episodes={info.expert_episode_count:,}",
-                flush=True,
+                if path is not None
+            }
+            isolation_sets = (
+                load_isolation_replay_sets(
+                    deck_data_dir=project_path(isolation_cfg.deck_data),
+                    selection_paths=enabled_isolation_paths,
+                    required_dates=dataset.shard_dates,
+                )
+                if enabled_isolation_paths
+                else None
             )
+            expert_dates = load_expert_date_info(
+                replay_root=replay_root,
+                required_dates=dataset.shard_dates,
+                ratio=train_cfg.expert_validation_ratio,
+            )
+            for date in sorted(expert_dates):
+                info = expert_dates[date]
+                print(
+                    f"expert_date={date[0]}.{date[1]} cutoff={info.cutoff:g} "
+                    f"episodes={info.episode_count:,} "
+                    f"expert_episodes={info.expert_episode_count:,}",
+                    flush=True,
+                )
+        else:
+            isolation_sets = None
+            expert_dates = {}
         if train_cfg.loser_augmentation.enabled:
             loser_dates = select_loser_augmentation_dates(
                 dataset.shard_dates,
                 train_cfg.loser_augmentation.recent_dates,
+                train_cfg.data_selection_mode,
             )
             loser_date_info = load_expert_loser_date_info(
                 replay_root=replay_root,
@@ -1074,19 +1102,32 @@ def main() -> None:
             loser_dates = ()
             loser_date_info = {}
             loser_episode_keys = None
-        splits = dataset.build_splits(
-            validation_ratio=train_cfg.validation_ratio,
-            validation_seed=train_cfg.validation_seed,
-            expert_episode_keys={
-                date: info.expert_episode_keys
-                for date, info in expert_dates.items()
-            },
-            top_deck_keys=top_deck_keys,
-            train_replay_ratio=train_cfg.train_replay_ratio,
-            train_replay_seed=train_cfg.train_replay_seed,
-            isolation_episode_keys=isolation_sets.by_namespace,
-            loser_episode_keys=loser_episode_keys,
-        )
+        if use_holdout:
+            splits = dataset.build_splits(
+                validation_ratio=train_cfg.validation_ratio,
+                validation_seed=train_cfg.validation_seed,
+                expert_episode_keys={
+                    date: info.expert_episode_keys
+                    for date, info in expert_dates.items()
+                },
+                top_deck_keys=top_deck_keys,
+                train_replay_ratio=train_cfg.train_replay_ratio,
+                train_replay_seed=train_cfg.train_replay_seed,
+                isolation_episode_keys=(
+                    None
+                    if isolation_sets is None
+                    else isolation_sets.by_namespace
+                ),
+                loser_episode_keys=loser_episode_keys,
+            )
+            selection = splits
+        else:
+            splits = None
+            selection = dataset.build_training_indices(
+                train_replay_ratio=train_cfg.train_replay_ratio,
+                train_replay_seed=train_cfg.train_replay_seed,
+                loser_episode_keys=loser_episode_keys,
+            )
     except Exception:
         dataset.close()
         raise
@@ -1096,7 +1137,8 @@ def main() -> None:
             print(
                 format_loser_augmentation_line(
                     loser_date_info[date],
-                    splits.loser_augmentation_counts[date],
+                    selection.loser_augmentation_counts[date],
+                    train_cfg.data_selection_mode,
                 ),
                 flush=True,
             )
@@ -1105,20 +1147,20 @@ def main() -> None:
     print(
         f"loser_augmentation_dates={len(loser_dates):,} "
         f"loser_augmentation_replays="
-        f"{splits.loser_augmentation_replays:,} "
+        f"{selection.loser_augmentation_replays:,} "
         f"loser_augmentation_samples="
-        f"{splits.loser_augmentation_samples:,} "
+        f"{selection.loser_augmentation_samples:,} "
         f"loser_fraction_in_train="
-        f"{splits.loser_fraction_in_train:.6f}",
+        f"{selection.loser_fraction_in_train:.6f}",
         flush=True,
     )
     realized_train_sample_ratio = (
-        len(splits.train) / splits.eligible_train_samples
+        len(selection.train) / selection.eligible_train_samples
     )
     realized_train_replay_ratio = (
-        splits.selected_train_replays / splits.eligible_train_replays
+        selection.selected_train_replays / selection.eligible_train_replays
     )
-    samples_per_epoch = len(splits.train)
+    samples_per_epoch = len(selection.train)
     if train_cfg.max_samples is not None:
         samples_per_epoch = min(samples_per_epoch, train_cfg.max_samples)
     steps_per_epoch = math.ceil(samples_per_epoch / train_cfg.batch_size)
@@ -1210,27 +1252,29 @@ def main() -> None:
             },
         )
         wandb.define_metric("optimizer_step")
-        validation_namespaces = [
-            "train/*",
-            "epoch/*",
-            "val_in_distribution/*",
-            "val_in_distribution_expert/*",
-            "val_latest/*",
-            "val_latest_expert/*",
-            "val_deck_isolation/*",
-            "val_archetype_isolation/*",
-            "val_top_deck_archetype_isolation/*",
-        ]
-        for deck_index in range(1, len(top_deck_keys) + 1):
-            validation_namespaces.extend(
+        metric_namespaces = ["train/*", "epoch/*"]
+        if use_holdout:
+            metric_namespaces.extend(
                 [
-                    f"val_in_distribution_deck{deck_index}/*",
-                    f"val_in_distribution_expert_deck{deck_index}/*",
-                    f"val_latest_deck{deck_index}/*",
-                    f"val_latest_expert_deck{deck_index}/*",
+                    "val_in_distribution/*",
+                    "val_in_distribution_expert/*",
+                    "val_latest/*",
+                    "val_latest_expert/*",
+                    "val_deck_isolation/*",
+                    "val_archetype_isolation/*",
+                    "val_top_deck_archetype_isolation/*",
                 ]
             )
-        for namespace in validation_namespaces:
+            for deck_index in range(1, len(top_deck_keys) + 1):
+                metric_namespaces.extend(
+                    [
+                        f"val_in_distribution_deck{deck_index}/*",
+                        f"val_in_distribution_expert_deck{deck_index}/*",
+                        f"val_latest_deck{deck_index}/*",
+                        f"val_latest_expert_deck{deck_index}/*",
+                    ]
+                )
+        for namespace in metric_namespaces:
             wandb.define_metric(namespace, step_metric="optimizer_step")
 
     output_root = resolve_output_root(train_cfg, wandb_run)
@@ -1247,108 +1291,128 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    for namespace in sorted(isolation_sets.by_namespace):
+    if use_holdout and isolation_sets is not None:
+        for namespace in sorted(isolation_sets.by_namespace):
+            print(
+                f"{namespace} "
+                f"selected_decks="
+                f"{isolation_sets.selected_deck_counts[namespace]:,} "
+                f"replays={isolation_sets.replay_counts[namespace]:,} "
+                f"samples={splits.isolation_sample_counts[namespace]:,}",
+                flush=True,
+            )
         print(
-            f"{namespace} "
-            f"selected_decks="
-            f"{isolation_sets.selected_deck_counts[namespace]:,} "
-            f"replays={isolation_sets.replay_counts[namespace]:,} "
-            f"samples={splits.isolation_sample_counts[namespace]:,}",
+            f"isolation_union_replays={isolation_sets.union_replay_count:,} "
+            f"isolation_union_samples={len(splits.isolation):,} "
+            f"isolation_pairwise_overlaps="
+            f"{isolation_sets.pairwise_overlap_counts}",
             flush=True,
         )
-    print(
-        f"isolation_union_replays={isolation_sets.union_replay_count:,} "
-        f"isolation_union_samples={len(splits.isolation):,} "
-        f"isolation_pairwise_overlaps="
-        f"{isolation_sets.pairwise_overlap_counts}",
-        flush=True,
-    )
-    print(
+    startup_line = (
         f"version={settings.version_name} device={device} "
+        f"data_selection_mode={train_cfg.data_selection_mode} "
         f"precision={train_cfg.precision} norm={model_cfg.norm_mode} "
         f"cache_shards={len(dataset.shards)} cache_samples={len(dataset):,} "
-        f"eligible_train={splits.eligible_train_samples:,} "
-        f"selected_train={len(splits.train):,} "
-        f"eligible_train_replays={splits.eligible_train_replays:,} "
-        f"selected_train_replays={splits.selected_train_replays:,} "
+        f"eligible_train={selection.eligible_train_samples:,} "
+        f"selected_train={len(selection.train):,} "
+        f"eligible_train_replays={selection.eligible_train_replays:,} "
+        f"selected_train_replays={selection.selected_train_replays:,} "
         f"train_sample_ratio={realized_train_sample_ratio:.4f} "
         f"train_replay_ratio={realized_train_replay_ratio:.4f} "
-        f"val_isolation_union={len(splits.isolation):,} "
-        f"val_in_distribution={len(splits.in_distribution):,} "
-        f"val_in_distribution_expert="
-        f"{int(splits.in_distribution_expert_mask.sum()):,} "
-        f"val_latest={len(splits.latest):,} "
-        f"val_latest_expert={int(splits.latest_expert_mask.sum()):,} "
-        f"latest_date={splits.latest_date[0]}.{splits.latest_date[1]} "
         f"steps_per_epoch={steps_per_epoch:,} total_steps={total_steps:,} "
-        f"warmup_steps={train_cfg.warmup_steps:,}",
-        flush=True,
+        f"warmup_steps={train_cfg.warmup_steps:,}"
     )
+    if use_holdout:
+        startup_line += (
+            f" val_isolation_union={len(splits.isolation):,} "
+            f"val_in_distribution={len(splits.in_distribution):,} "
+            f"val_in_distribution_expert="
+            f"{int(splits.in_distribution_expert_mask.sum()):,} "
+            f"val_latest={len(splits.latest):,} "
+            f"val_latest_expert={int(splits.latest_expert_mask.sum()):,} "
+            f"latest_date={splits.latest_date[0]}.{splits.latest_date[1]}"
+        )
+    print(startup_line, flush=True)
     if wandb_run is not None:
-        isolation_data_metrics = {
-            "data/isolation_union_replays":
-                isolation_sets.union_replay_count,
-            "data/isolation_union_samples": len(splits.isolation),
-        }
-        for namespace in sorted(isolation_sets.by_namespace):
+        isolation_data_metrics = {}
+        top_deck_data_metrics = {}
+        validation_data_metrics = {}
+        if use_holdout and isolation_sets is not None:
+            isolation_data_metrics = {
+                "data/isolation_union_replays":
+                    isolation_sets.union_replay_count,
+                "data/isolation_union_samples": len(splits.isolation),
+            }
+            for namespace in sorted(isolation_sets.by_namespace):
+                isolation_data_metrics.update(
+                    {
+                        f"data/{namespace}_selected_decks":
+                            isolation_sets.selected_deck_counts[namespace],
+                        f"data/{namespace}_replays":
+                            isolation_sets.replay_counts[namespace],
+                        f"data/{namespace}_samples":
+                            splits.isolation_sample_counts[namespace],
+                    }
+                )
             isolation_data_metrics.update(
                 {
-                    f"data/{namespace}_selected_decks":
-                        isolation_sets.selected_deck_counts[namespace],
-                    f"data/{namespace}_replays":
-                        isolation_sets.replay_counts[namespace],
-                    f"data/{namespace}_samples":
-                        splits.isolation_sample_counts[namespace],
+                    f"data/isolation_overlap_{name}_replays": count
+                    for name, count
+                    in isolation_sets.pairwise_overlap_counts.items()
                 }
             )
-        isolation_data_metrics.update(
-            {
-                f"data/isolation_overlap_{name}_replays": count
-                for name, count
-                in isolation_sets.pairwise_overlap_counts.items()
+            for deck_index in range(1, len(top_deck_keys) + 1):
+                in_distribution_mask = (
+                    splits.in_distribution_top_deck_masks[deck_index - 1]
+                )
+                in_distribution_expert_mask = (
+                    splits.in_distribution_expert_top_deck_masks[deck_index - 1]
+                )
+                latest_mask = splits.latest_top_deck_masks[deck_index - 1]
+                latest_expert_mask = (
+                    splits.latest_expert_top_deck_masks[deck_index - 1]
+                )
+                top_deck_data_metrics.update(
+                    {
+                        f"data/val_in_distribution_deck{deck_index}_samples": int(
+                            in_distribution_mask.sum()
+                        ),
+                        f"data/val_in_distribution_expert_deck{deck_index}_samples": int(
+                            in_distribution_expert_mask.sum()
+                        ),
+                        f"data/val_latest_deck{deck_index}_samples": int(
+                            latest_mask.sum()
+                        ),
+                        f"data/val_latest_expert_deck{deck_index}_samples": int(
+                            latest_expert_mask.sum()
+                        ),
+                    }
+                )
+            validation_data_metrics = {
+                "data/val_in_distribution_samples": len(
+                    splits.in_distribution
+                ),
+                "data/val_in_distribution_expert_samples": int(
+                    splits.in_distribution_expert_mask.sum()
+                ),
+                "data/val_latest_samples": len(splits.latest),
+                "data/val_latest_expert_samples": int(
+                    splits.latest_expert_mask.sum()
+                ),
             }
-        )
-        top_deck_data_metrics = {}
-        for deck_index in range(1, len(top_deck_keys) + 1):
-            in_distribution_mask = (
-                splits.in_distribution_top_deck_masks[deck_index - 1]
-            )
-            in_distribution_expert_mask = (
-                splits.in_distribution_expert_top_deck_masks[deck_index - 1]
-            )
-            latest_mask = splits.latest_top_deck_masks[deck_index - 1]
-            latest_expert_mask = (
-                splits.latest_expert_top_deck_masks[deck_index - 1]
-            )
-            top_deck_data_metrics.update(
-                {
-                    f"data/val_in_distribution_deck{deck_index}_samples": int(
-                        in_distribution_mask.sum()
-                    ),
-                    f"data/val_in_distribution_expert_deck{deck_index}_samples": int(
-                        in_distribution_expert_mask.sum()
-                    ),
-                    f"data/val_latest_deck{deck_index}_samples": int(
-                        latest_mask.sum()
-                    ),
-                    f"data/val_latest_expert_deck{deck_index}_samples": int(
-                        latest_expert_mask.sum()
-                    ),
-                }
-            )
         loser_data_metrics = {
             "data/loser_augmentation_dates": len(loser_dates),
             "data/loser_augmentation_replays": (
-                splits.loser_augmentation_replays
+                selection.loser_augmentation_replays
             ),
             "data/loser_augmentation_samples": (
-                splits.loser_augmentation_samples
+                selection.loser_augmentation_samples
             ),
-            "data/loser_fraction_in_train": splits.loser_fraction_in_train,
+            "data/loser_fraction_in_train": selection.loser_fraction_in_train,
         }
         for date in loser_dates:
             info = loser_date_info[date]
-            counts = splits.loser_augmentation_counts[date]
+            counts = selection.loser_augmentation_counts[date]
             prefix = f"data/loser_aug_{date[0]}_{date[1]}"
             loser_data_metrics.update(
                 {
@@ -1371,31 +1435,22 @@ def main() -> None:
             {
                 **isolation_data_metrics,
                 **top_deck_data_metrics,
+                **validation_data_metrics,
                 **loser_data_metrics,
                 "data/cache_open_seconds": cache_open_seconds,
                 "data/cache_shards": len(dataset.shards),
                 "data/cache_samples": len(dataset),
-                "data/train_samples": len(splits.train),
+                "data/train_samples": len(selection.train),
                 "data/eligible_train_samples":
-                    splits.eligible_train_samples,
+                    selection.eligible_train_samples,
                 "data/eligible_train_replays":
-                    splits.eligible_train_replays,
+                    selection.eligible_train_replays,
                 "data/selected_train_replays":
-                    splits.selected_train_replays,
+                    selection.selected_train_replays,
                 "data/realized_train_sample_ratio":
                     realized_train_sample_ratio,
                 "data/realized_train_replay_ratio":
                     realized_train_replay_ratio,
-                "data/val_in_distribution_samples": len(
-                    splits.in_distribution
-                ),
-                "data/val_in_distribution_expert_samples": int(
-                    splits.in_distribution_expert_mask.sum()
-                ),
-                "data/val_latest_samples": len(splits.latest),
-                "data/val_latest_expert_samples": int(
-                    splits.latest_expert_mask.sum()
-                ),
                 "schedule/steps_per_epoch": steps_per_epoch,
                 "schedule/total_steps": total_steps,
                 "schedule/warmup_steps": train_cfg.warmup_steps,
@@ -1428,31 +1483,32 @@ def main() -> None:
 
     def run_validation() -> None:
         nonlocal last_eval_step
-        isolation_result = evaluate_dataset(
-            model=model,
-            dataset=dataset,
-            indices=splits.isolation,
-            batch_size=train_cfg.batch_size,
-            device=device,
-            precision=precision,
-            subgroup_masks=splits.isolation_masks,
-        )
-        print(
-            f"isolation_union step={global_step:,} "
-            f"samples={len(splits.isolation):,} "
-            f"seconds={isolation_result.seconds:.2f}",
-            flush=True,
-        )
-        for namespace, metrics in sorted(
-            isolation_result.subgroups.items()
-        ):
-            _log_validation(
-                namespace,
-                metrics,
-                None,
-                global_step,
-                wandb_run,
+        if isolation_sets is not None:
+            isolation_result = evaluate_dataset(
+                model=model,
+                dataset=dataset,
+                indices=splits.isolation,
+                batch_size=train_cfg.batch_size,
+                device=device,
+                precision=precision,
+                subgroup_masks=splits.isolation_masks,
             )
+            print(
+                f"isolation_union step={global_step:,} "
+                f"samples={len(splits.isolation):,} "
+                f"seconds={isolation_result.seconds:.2f}",
+                flush=True,
+            )
+            for namespace, metrics in sorted(
+                isolation_result.subgroups.items()
+            ):
+                _log_validation(
+                    namespace,
+                    metrics,
+                    None,
+                    global_step,
+                    wandb_run,
+                )
         for namespace, indices, subgroup_masks in (
             (
                 "val_latest",
@@ -1514,7 +1570,7 @@ def main() -> None:
             epoch_loss_sum = 0.0
             epoch_top1 = epoch_top3 = epoch_top5 = epoch_samples = 0
             for batch in dataset.iter_batches(
-                indices=splits.train,
+                indices=selection.train,
                 batch_size=train_cfg.batch_size,
                 seed=train_cfg.seed + epoch_index,
                 shuffle=True,
@@ -1583,7 +1639,9 @@ def main() -> None:
                     if wandb_run is not None:
                         wandb_run.log(payload)
 
-                if should_trigger(train_cfg.eval_every_steps, global_step):
+                if use_holdout and should_trigger(
+                    train_cfg.eval_every_steps, global_step
+                ):
                     run_validation()
                 if should_trigger(train_cfg.save_every_steps, global_step):
                     save_checkpoint(f"step-{global_step:08d}.pt", epoch)
@@ -1629,7 +1687,7 @@ def main() -> None:
                 json.dumps(history, indent=2), encoding="utf-8"
             )
 
-        if last_eval_step != global_step:
+        if use_holdout and last_eval_step != global_step:
             run_validation()
     finally:
         dataset.close()

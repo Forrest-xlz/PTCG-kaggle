@@ -48,15 +48,79 @@ def test_ema_initializes_from_first_value_and_persists() -> None:
     assert ema.update(0.0) == pytest.approx(1.9701)
 
 
-def test_loser_augmentation_dates_exclude_latest_validation_date() -> None:
+def test_loser_augmentation_dates_follow_data_selection_mode() -> None:
     assert select_loser_augmentation_dates(
-        [(7, 20), (7, 22), (7, 24), (7, 22)], recent_dates=2
+        [(7, 20), (7, 22), (7, 24), (7, 22)],
+        recent_dates=2,
+        data_selection_mode="holdout",
     ) == ((7, 20), (7, 22))
+    assert select_loser_augmentation_dates(
+        [(7, 20), (7, 22), (7, 24), (7, 22)],
+        recent_dates=2,
+        data_selection_mode="full_data",
+    ) == ((7, 22), (7, 24))
 
     with pytest.raises(ValueError, match="recent_dates=3"):
         select_loser_augmentation_dates(
-            [(7, 20), (7, 22), (7, 24)], recent_dates=3
+            [(7, 20), (7, 22), (7, 24)],
+            recent_dates=3,
+            data_selection_mode="holdout",
         )
+
+
+@pytest.mark.parametrize("mode", ["holdout", "full_data"])
+def test_training_data_selection_mode_accepts_supported_values(
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    config_path = PROJECT_ROOT / "cfg" / "train.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["train"]["data_selection_mode"] = mode
+    candidate = tmp_path / "train.yaml"
+    candidate.write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
+
+    assert load_settings(candidate).train.data_selection_mode == mode
+
+
+def test_training_data_selection_mode_rejects_unknown_value(
+    tmp_path: Path,
+) -> None:
+    config_path = PROJECT_ROOT / "cfg" / "train.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["train"]["data_selection_mode"] = "latest_only"
+    candidate = tmp_path / "train.yaml"
+    candidate.write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="data_selection_mode"):
+        load_settings(candidate)
+
+
+def test_training_settings_allow_disabled_isolation_selections(
+    tmp_path: Path,
+) -> None:
+    config_path = PROJECT_ROOT / "cfg" / "train.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    selections = config["train"]["isolation_validation"]["selections"]
+    selections.update(
+        deck_isolation=None,
+        archetype_isolation=None,
+        top_deck_archetype_isolation=None,
+    )
+    candidate = tmp_path / "train.yaml"
+    candidate.write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
+
+    settings = load_settings(candidate)
+
+    assert all(
+        path is None
+        for path in settings.train.isolation_validation.selections.values()
+    )
 
 
 def test_loser_augmentation_line_reports_each_filter_stage() -> None:
@@ -82,6 +146,28 @@ def test_loser_augmentation_line_reports_each_filter_stage() -> None:
         "after_validation_episodes=2 selected_train_episodes=1 "
         "loser_samples=17"
     )
+
+
+def test_full_data_loser_augmentation_line_has_no_holdout_stage() -> None:
+    line = format_loser_augmentation_line(
+        ExpertLoserDateInfo(
+            date=(7, 24),
+            cutoff=1200.0,
+            participant_count=20,
+            episode_count=10,
+            eligible_episode_keys=frozenset({1, 2}),
+        ),
+        LoserAugmentationCounts(
+            score_eligible_episodes=2,
+            after_validation_episodes=2,
+            selected_train_episodes=2,
+            loser_samples=8,
+        ),
+        data_selection_mode="full_data",
+    )
+
+    assert "after_validation_episodes" not in line
+    assert "selected_train_episodes=2" in line
 
 
 @pytest.mark.parametrize(

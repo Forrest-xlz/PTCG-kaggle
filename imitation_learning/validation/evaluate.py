@@ -154,17 +154,22 @@ def evaluation_specs(splits) -> tuple[EvaluationSpec, ...]:
             splits.in_distribution_expert_top_deck_masks,
         ),
     }
-    return (
-        EvaluationSpec(
-            "isolation_union", splits.isolation, splits.isolation_masks
-        ),
+    specs = [
         EvaluationSpec("val_latest", splits.latest, latest_masks),
         EvaluationSpec(
             "val_in_distribution",
             splits.in_distribution,
             in_distribution_masks,
         ),
-    )
+    ]
+    if len(splits.isolation):
+        specs.insert(
+            0,
+            EvaluationSpec(
+                "isolation_union", splits.isolation, splits.isolation_masks
+            ),
+        )
+    return tuple(specs)
 
 
 def _configure_engine(settings: ValidationSettings) -> None:
@@ -199,13 +204,18 @@ def _build_splits(
     dataset: MmapFeatureDataset,
     settings: ValidationSettings,
 ):
-    isolation_sets = load_isolation_replay_sets(
-        deck_data_dir=settings.isolation_deck_data,
-        selection_paths={
-            f"val_{name}": path
-            for name, path in settings.isolation_selections.items()
-        },
-        required_dates=dataset.shard_dates,
+    selection_paths = {
+        f"val_{name}": path
+        for name, path in settings.isolation_selections.items()
+    }
+    isolation_sets = (
+        load_isolation_replay_sets(
+            deck_data_dir=settings.isolation_deck_data,
+            selection_paths=selection_paths,
+            required_dates=dataset.shard_dates,
+        )
+        if selection_paths
+        else None
     )
     expert_dates = load_expert_date_info(
         replay_root=settings.replay_episodes,
@@ -225,7 +235,9 @@ def _build_splits(
         top_deck_keys=top_deck_keys,
         train_replay_ratio=1.0,
         train_replay_seed=0,
-        isolation_episode_keys=isolation_sets.by_namespace,
+        isolation_episode_keys=(
+            None if isolation_sets is None else isolation_sets.by_namespace
+        ),
     )
     return splits, isolation_sets, expert_dates
 
@@ -239,14 +251,15 @@ def _print_split_context(splits, isolation_sets, expert_dates) -> None:
             f"expert_episodes={info.expert_episode_count:,}",
             flush=True,
         )
-    for namespace in sorted(isolation_sets.by_namespace):
-        print(
-            f"{namespace} selected_decks="
-            f"{isolation_sets.selected_deck_counts[namespace]:,} "
-            f"replays={isolation_sets.replay_counts[namespace]:,} "
-            f"samples={splits.isolation_sample_counts[namespace]:,}",
-            flush=True,
-        )
+    if isolation_sets is not None:
+        for namespace in sorted(isolation_sets.by_namespace):
+            print(
+                f"{namespace} selected_decks="
+                f"{isolation_sets.selected_deck_counts[namespace]:,} "
+                f"replays={isolation_sets.replay_counts[namespace]:,} "
+                f"samples={splits.isolation_sample_counts[namespace]:,}",
+                flush=True,
+            )
     print(
         f"validation_splits isolation_union={len(splits.isolation):,} "
         f"in_distribution={len(splits.in_distribution):,} "

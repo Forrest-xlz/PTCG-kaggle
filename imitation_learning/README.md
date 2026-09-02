@@ -65,12 +65,25 @@ uses a compact global permutation (about 120 MB for 30 million samples), and
 every eligible training sample is consumed once per epoch. Use
 `train.max_samples` for bounded trials before setting it to `null`.
 
+`train.data_selection_mode` selects one of two competition training flows.
+`holdout` preserves the original validation-aware behavior described below:
+isolation, latest-date, and deterministic in-distribution validation replays
+are excluded from training and evaluated during training. `full_data` matches
+the final full-data run: winner samples from every cached date are eligible,
+qualified loser augmentation may include the latest date, and training-time
+validation is skipped. Both modes use the same model, optimizer, batching,
+checkpoint, and replay-level sampling code.
+
 Training first reads the three reviewed exact-deck selections configured under
 `train.isolation_validation`. It scans `data/deck/*.decks.csv`, so a selected
 deck used by either player moves the entire replay into its isolation
 validation set. The three isolation sets may overlap with one another, but
 their replay union is removed before every later split. This lookup is
 performed at training startup and does not require rebuilding feature caches.
+Set an individual path under `train.isolation_validation.selections` to
+`null` to disable that isolation group. If all three are `null`, training and
+standalone validation skip the isolation union while retaining latest-date
+and in-distribution validation.
 
 After isolation, the numerically latest `month.day` source becomes the
 latest-date validation set. Validation arrays retain winner samples only.
@@ -139,9 +152,9 @@ resident on the selected device, so required GPU memory is approximately the
 sum of their parameter and inference-activation memory.
 
 `validation.train_config` points to the training YAML that defines the cache,
-replay archives, expert ratio, replay-level validation ratio and seed, three
-isolation selections, and ordered top decks. The standalone command therefore
-rebuilds the same winner-only validation sets as training. It prints CE loss
+replay archives, validation ratios and seed, isolation selections, and ordered
+top decks. The standalone command therefore rebuilds exactly the same holdout
+sets without duplicating their definitions in `cfg/validation.yaml`. It prints CE loss
 and Top-1/3/5 accuracy for the isolation groups, latest-date base and
 subgroups, and in-distribution base and subgroups. Subgroups reuse their parent
 split's logits. The evaluator does not change the cache or create result files

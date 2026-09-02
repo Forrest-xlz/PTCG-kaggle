@@ -192,6 +192,7 @@ def load_settings(path: Path = CONFIG_PATH) -> ValidationSettings:
             f"train.isolation_validation.selections.{name}",
         )
         for name in ISOLATION_SELECTION_NAMES
+        if raw_selections[name] is not None
     }
 
     raw_top_decks = _required(train, "top_decks", "train")

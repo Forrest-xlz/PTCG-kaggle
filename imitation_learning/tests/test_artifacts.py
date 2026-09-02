@@ -49,7 +49,10 @@ def test_train_yaml_uses_validation_and_step_configuration() -> None:
         "archetype_isolation",
         "top_deck_archetype_isolation",
     }
-    assert all(isolation["selections"].values())
+    assert all(
+        value is None or (isinstance(value, str) and value)
+        for value in isolation["selections"].values()
+    )
     assert train["train_replay_ratio"] == pytest.approx(1.0)
     assert isinstance(train["train_replay_seed"], int)
     assert train["top_decks"]
@@ -149,19 +152,19 @@ def test_deck_eda_notebook_starts_with_census_and_similarity() -> None:
     assert "deck_similarity_pairs.csv" in source
     for text in (
         "DECK_MIN_REPLAYS = 100",
-        "DECK_MIN_COUNT = 3",
-        "DECK_TOTAL_REPLAYS_MIN = 1000",
-        "DECK_TOTAL_REPLAYS_MAX = 3000",
+        "DECK_MIN_COUNT = 10",
+        "DECK_TOTAL_REPLAYS_MIN = 4000",
+        "DECK_TOTAL_REPLAYS_MAX = 6000",
         "DECK_ROLL_ID = 0",
         "ARCHETYPE_MIN_REPLAYS = 100",
         "ARCHETYPE_MIN_COUNT = 3",
-        "ARCHETYPE_TOTAL_REPLAYS_MIN = 1000",
-        "ARCHETYPE_TOTAL_REPLAYS_MAX = 3000",
+        "ARCHETYPE_TOTAL_REPLAYS_MIN = 2000",
+        "ARCHETYPE_TOTAL_REPLAYS_MAX = 4000",
         "ARCHETYPE_ROLL_ID = 0",
         "TOP_DECK_ARCHETYPE = 'Marnie Grimmsnarl'",
         "TOP_DECK_MIN_REPLAYS = 100",
-        "TOP_DECK_MIN_COUNT = 3",
-        "TOP_DECK_TOTAL_REPLAYS_MIN = 1000",
+        "TOP_DECK_MIN_COUNT = 5",
+        "TOP_DECK_TOTAL_REPLAYS_MIN = 1500",
         "TOP_DECK_TOTAL_REPLAYS_MAX = 3000",
         "TOP_DECK_ROLL_ID = 0",
         "deck_isolation_selection.csv",

@@ -5,6 +5,7 @@ train:
   data: data/training_cache
   replay_episodes: ../replay_episodes
   output: outputs/${version_name}
+  data_selection_mode: holdout  # holdout or full_data
   resume: false
   resume_checkpoint: null  # Example: outputs/ver_1.6.0/checkpoints/epoch-002.pt
   epochs: 5
@@ -28,11 +29,12 @@ train:
   expert_validation_ratio: 0.05
   loser_augmentation:
     enabled: true
-    recent_dates: 25      # Latest training dates after latest-date validation.
+    recent_dates: 25      # Latest eligible dates; holdout excludes latest date.
     expert_ratio: 0.06   # Daily top-player fraction used for the cutoff.
   isolation_validation:
     deck_data: data/deck
     selections:
+      # Set any selection to null to disable that isolation validation group.
       deck_isolation: data/deck_isolation_selection.csv
       archetype_isolation: data/archetype_isolation_selection.csv
       top_deck_archetype_isolation: data/top_deck_archetype_isolation_selection.csv
