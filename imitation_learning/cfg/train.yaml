@@ -1,4 +1,4 @@
-version_name: ver_1.6.1
+version_name: ver_
 
 train:
   cg_path: ../pokemon_tcg_ai_battle/sample_submission
