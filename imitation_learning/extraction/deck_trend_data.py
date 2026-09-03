@@ -18,11 +18,11 @@ import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = PROJECT_ROOT / "cfg" / "deck_trend.yaml"
+CONFIG_PATH = PROJECT_ROOT / "cfg" / "analyze_deck_trends.yaml"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from deck.extract import extract_decks
+from extraction.deck_lists import extract_decks
 
 
 SCHEMA_VERSION = 1

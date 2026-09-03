@@ -14,15 +14,15 @@ from pathlib import Path
 
 import yaml
 
-# Support both `python -m training.extract` and direct script execution.
+# Support both `python -m extraction.training_samples` and direct execution.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from deck.extract import extract_decks
+from extraction.deck_lists import extract_decks
 
 
-CONFIG_PATH = PROJECT_ROOT / "cfg" / "extract.yaml"
+CONFIG_PATH = PROJECT_ROOT / "cfg" / "extract_training_samples.yaml"
 SCHEMA_VERSION = 4
 
 

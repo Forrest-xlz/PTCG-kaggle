@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from deck.trend_extract import (
+from extraction.deck_trend_data import (
     SCHEMA_VERSION,
     extract_team_names,
     load_settings,

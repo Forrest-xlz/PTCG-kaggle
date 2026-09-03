@@ -8,7 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from training.extract import _iter_player_records, _player_results
+from extraction.training_samples import _iter_player_records, _player_results
 
 
 def state(status: str, marker: int, action: list[int]) -> dict:
