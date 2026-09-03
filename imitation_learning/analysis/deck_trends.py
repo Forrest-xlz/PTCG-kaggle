@@ -8,7 +8,7 @@ from typing import Any, Iterable, Sequence
 
 import pandas as pd
 
-from deck.analysis import (
+from analysis.deck_statistics import (
     ARCHETYPE_RULES,
     CardCatalog,
     normalize_card_name,

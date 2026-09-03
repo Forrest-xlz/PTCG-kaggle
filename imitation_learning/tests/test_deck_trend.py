@@ -12,8 +12,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from deck.analysis import CardCatalog
-from deck.trend import (
+from analysis.deck_statistics import CardCatalog
+from analysis.deck_trends import (
     add_trend_archetypes,
     build_daily_metrics,
     build_matchups,
