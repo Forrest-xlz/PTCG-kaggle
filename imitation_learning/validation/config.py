@@ -9,7 +9,7 @@ import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = PROJECT_ROOT / "cfg" / "validation.yaml"
+CONFIG_PATH = PROJECT_ROOT / "cfg" / "validate_policy.yaml"
 ISOLATION_SELECTION_NAMES = (
     "deck_isolation",
     "archetype_isolation",

@@ -8,11 +8,14 @@ value head is intentionally removed for pure behavioral cloning.
 ## Layout
 
 ```text
-deck/       parallel deck extraction and deck EDA
-model/      sparse features and the notebook transformer
-training/   replay extraction and model training CLIs
-validation/ standalone, read-only checkpoint evaluation
-data/       generated caches (gitignored)
+analysis/    reusable deck statistics, validation selection, and trend logic
+extraction/  replay, deck-list, and trend-data extraction entrypoints
+model/       sparse features and the Transformer policy
+notebooks/   focused exploratory and validation-selection notebooks
+training/    feature-cache construction and model training
+validation/  standalone checkpoint evaluation and isolation-set loading
+cfg/         purpose-named workflow configurations
+data/        generated caches and selections (gitignored)
 ```
 
 ## Setup
@@ -23,18 +26,18 @@ sample-submission directory to `PYTHONPATH`).
 
 ```bash
 pip install -r requirements.txt
-python -m deck.extract
-python -m training.extract
-python -m training.cache_features
+python -m extraction.deck_lists
+python -m extraction.training_samples
+python -m training.build_feature_cache
 python -m training.train
 python -m validation.evaluate
 ```
 
 Both extractors create one output shard and one metadata file per ZIP. Existing
 valid shards are skipped, so interrupted runs are resumable. Deck extraction
-has no command-line parameters and reads `cfg/deck_extract.yaml`; its input,
+has no command-line parameters and reads `cfg/extract_deck_lists.yaml`; its input,
 output, worker count, smoke-test limit, and rebuild behavior are configured
-there. Training extraction reads `cfg/extract.yaml`; its
+there. Training extraction reads `cfg/extract_training_samples.yaml`; its
 `workers`, `limit_members`, and `force` fields control parallelism, smoke tests,
 and rebuilding. Both players are written with an explicit `win`, `loss`, or
 `draw` result so training can select losing-player actions without extracting
@@ -43,7 +46,7 @@ extractor pairs `steps[t]` observations with `steps[t + 1]` actions and keeps
 only states whose player status is `ACTIVE`. Keep the worker count modest because ZIP decompression and JSON
 parsing are both CPU- and memory-intensive.
 
-`training.cache_features` reads `cfg/cache.yaml` and converts the two-player
+`training.build_feature_cache` reads `cfg/build_feature_cache.yaml` and converts the two-player
 JSONL records into model-ready mmap shards. `samples_per_shard` bounds the
 number of samples in each physical shard; completed compatible source caches
 are skipped, so cache construction is resumable. Encoder indices/offsets and
@@ -55,10 +58,10 @@ treat replay selection order as irrelevant. Each sample also stores a stable
 32-bit replay key used for validation splitting, a stable 64-bit key for
 its complete deck, the player's result, and the acting player's previous three
 actions. Cache schema 16 is required. Winner-only JSONL and older caches must
-both be rebuilt once with `training.extract` followed by
-`training.cache_features`.
+both be rebuilt once with `extraction.training_samples` followed by
+`training.build_feature_cache`.
 
-Training has no command-line parameters. It reads `cfg/train.yaml`, whose
+Training has no command-line parameters. It reads `cfg/train_policy.yaml`, whose
 `train`, `model`, and `wandb` sections control cache paths, batching, network
 depth/width, precision, validation, and experiment tracking. Training always
 uses a compact global permutation (about 120 MB for 30 million samples), and
@@ -136,7 +139,7 @@ schema-16 cache rebuild, changing loser-augmentation settings requires only a
 new training run.
 
 Standalone validation has no command-line parameters and reads
-`cfg/validation.yaml`. Configure `validation.ensemble.checkpoints` with
+`cfg/validate_policy.yaml`. Configure `validation.ensemble.checkpoints` with
 complete epoch checkpoints or inference-only checkpoints; every file must
 contain `model` and `config`. With `enabled: false`, exactly one path is
 required. With `enabled: true`, provide at least two distinct paths. Each
@@ -154,7 +157,7 @@ sum of their parameter and inference-activation memory.
 `validation.train_config` points to the training YAML that defines the cache,
 replay archives, validation ratios and seed, isolation selections, and ordered
 top decks. The standalone command therefore rebuilds exactly the same holdout
-sets without duplicating their definitions in `cfg/validation.yaml`. It prints CE loss
+sets without duplicating their definitions in `cfg/validate_policy.yaml`. It prints CE loss
 and Top-1/3/5 accuracy for the isolation groups, latest-date base and
 subgroups, and in-distribution base and subgroups. Subgroups reuse their parent
 split's logits. The evaluator does not change the cache or create result files
@@ -270,7 +273,7 @@ without RNG state remain usable, but their dropout sequence is not bit-for-bit
 identical to an uninterrupted run. Inference-only and `step-*.pt` checkpoints
 cannot be used for resume.
 
-Open `deck/deck_eda.ipynb` after deck extraction. Set the extracted-deck and
+Open `notebooks/deck_eda.ipynb` after deck extraction. It reads the extracted-deck and
 `EN_Card_Data.csv` paths in its setup cell, then run top-to-bottom. The
 notebook classifies rule-based archetypes, assigns stable SHA-256 exact-deck
 IDs, and saves:
@@ -281,7 +284,16 @@ IDs, and saves:
 The similarity table contains every unordered exact-deck pair. It reports the
 minimum changed card slots and count-aware Weighted Jaccard similarity.
 
-Open `eda/replay_timing.ipynb` to analyze agent startup time and mean
+Open `notebooks/select_validation_decks.ipynb` to inspect and roll the three
+isolation-validation groups. Its parameters live in
+`cfg/select_validation_decks.yaml`; it displays candidate and selected tables,
+runs the combined audit, and writes the existing files under `data/`:
+
+- `deck_isolation_selection.csv`
+- `archetype_isolation_selection.csv`
+- `top_deck_archetype_isolation_selection.csv`
+
+Open `notebooks/replay_timing.ipynb` to analyze agent startup time and mean
 subsequent-action time from the numerically latest dated replay ZIP. Configure
 `SCORE_MODE` (`avg`, `min`, or `max`) and `SCORE_THRESHOLD` in the parameter
 cell. The notebook caches replay-player timings and exports the team-level
@@ -292,11 +304,11 @@ To analyze Deck usage, matchup, and team-switching trends, first build the
 incremental per-date cache and then open the trend notebook:
 
 ```bash
-python imitation_learning/deck/trend_extract.py
-python -m jupyter notebook imitation_learning/eda/deck_trend.ipynb
+python -m extraction.deck_trend_data
+python -m jupyter notebook notebooks/deck_trends.ipynb
 ```
 
-Configure extraction and analysis in `cfg/deck_trend.yaml`. Changing the date
+Configure extraction and analysis in `cfg/analyze_deck_trends.yaml`. Changing the date
 interval, chart threshold, mirror handling, or a Deck-Card-ID-only archetype
 classifier requires only rerunning the notebook. Rerun the extractor after
 adding or replacing replay ZIP archives; with `force: false`, unchanged complete

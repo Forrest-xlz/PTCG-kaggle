@@ -16,14 +16,16 @@ import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = PROJECT_ROOT / "cfg" / "cache.yaml"
+CONFIG_PATH = PROJECT_ROOT / "cfg" / "build_feature_cache.yaml"
 if not CONFIG_PATH.exists():
     raise FileNotFoundError(f"Cache config not found: {CONFIG_PATH}")
 with CONFIG_PATH.open("r", encoding="utf-8") as _handle:
     _bootstrap = yaml.safe_load(_handle) or {}
 _cg_value = _bootstrap.get("cache", {}).get("cg_path")
 if not _cg_value:
-    raise ValueError("cache.cg_path is required in cfg/cache.yaml")
+    raise ValueError(
+        "cache.cg_path is required in cfg/build_feature_cache.yaml"
+    )
 _cg_path = Path(_cg_value)
 if not _cg_path.is_absolute():
     _cg_path = (PROJECT_ROOT / _cg_path).resolve()
@@ -138,7 +140,9 @@ def project_path(value: str) -> Path:
 def load_settings(path: Path = CONFIG_PATH) -> CacheSettings:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or not isinstance(raw.get("cache"), dict):
-        raise ValueError("cfg/cache.yaml must contain a cache mapping")
+        raise ValueError(
+            "cfg/build_feature_cache.yaml must contain a cache mapping"
+        )
     settings = CacheSettings(**raw["cache"])
     if settings.workers < 1:
         raise ValueError("cache.workers must be >= 1")
@@ -261,11 +265,12 @@ def _source_meta(path: Path) -> dict:
     if payload.get("player_results") != "win-loss-draw":
         raise ValueError(
             f"{path.name} does not contain win/loss/draw player results; "
-            "rerun training.extract"
+            "rerun extraction.training_samples"
         )
     if int(payload.get("schema_version", 0)) < 4:
         raise ValueError(
-            f"{path.name} uses the old action alignment; rerun training.extract"
+            f"{path.name} uses the old action alignment; "
+            "rerun extraction.training_samples"
         )
     return payload
 

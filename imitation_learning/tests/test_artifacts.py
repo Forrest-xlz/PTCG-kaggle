@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 
@@ -125,7 +124,7 @@ def test_submission_notebook_is_valid_json() -> None:
 
 def test_deck_eda_notebook_starts_with_census_and_similarity() -> None:
     notebook = json.loads(
-        (PROJECT_ROOT / "deck" / "deck_eda.ipynb").read_text(
+        (PROJECT_ROOT / "notebooks" / "deck_eda.ipynb").read_text(
             encoding="utf-8"
         )
     )
@@ -139,80 +138,30 @@ def test_deck_eda_notebook_starts_with_census_and_similarity() -> None:
         "## Deck Census",
         "## Pairwise Similarity",
         "## Checks",
-        "## Top-Deck Archetype Isolation Roll",
-        "## Deck Isolation Candidates",
-        "## Deck Isolation Roll",
-        "## Archetype Isolation Candidates",
-        "## Archetype Isolation Roll",
-        "## Combined Audit",
-        "## Next Steps",
     ):
         assert heading in source
     assert "deck_summary.csv" in source
     assert "deck_similarity_pairs.csv" in source
-    for text in (
-        "DECK_MIN_REPLAYS = 100",
-        "DECK_MIN_COUNT = 10",
-        "DECK_TOTAL_REPLAYS_MIN = 4000",
-        "DECK_TOTAL_REPLAYS_MAX = 6000",
-        "DECK_ROLL_ID = 0",
-        "ARCHETYPE_MIN_REPLAYS = 100",
-        "ARCHETYPE_MIN_COUNT = 3",
-        "ARCHETYPE_TOTAL_REPLAYS_MIN = 2000",
-        "ARCHETYPE_TOTAL_REPLAYS_MAX = 4000",
-        "ARCHETYPE_ROLL_ID = 0",
-        "TOP_DECK_ARCHETYPE = 'Marnie Grimmsnarl'",
-        "TOP_DECK_MIN_REPLAYS = 100",
-        "TOP_DECK_MIN_COUNT = 5",
-        "TOP_DECK_TOTAL_REPLAYS_MIN = 1500",
-        "TOP_DECK_TOTAL_REPLAYS_MAX = 3000",
-        "TOP_DECK_ROLL_ID = 0",
+    assert "isolation_selection.csv" not in source
+    assert "analysis.deck_statistics" in source
+
+
+def test_validation_deck_notebook_displays_audits_and_exports() -> None:
+    notebook = json.loads(
+        (PROJECT_ROOT / "notebooks" / "select_validation_decks.ipynb").read_text(
+            encoding="utf-8"
+        )
+    )
+    source = "\n".join(
+        "".join(cell.get("source", [])) for cell in notebook["cells"]
+    )
+    assert "cfg' / 'select_validation_decks.yaml" in source
+    assert "analysis.deck_selection" in source
+    assert "display(" in source
+    assert "audit_deck_archetype_selection" in source
+    for filename in (
         "deck_isolation_selection.csv",
         "archetype_isolation_selection.csv",
         "top_deck_archetype_isolation_selection.csv",
     ):
-        assert text in source
-    assert "CARD_ISOLATION_ARCHETYPE_COUNT" not in source
-    assert "isolation_recommendation.json" not in source
-    assert "HIGH_SIM_MAX_CHANGED_SLOTS" not in source
-    assert "MODERATE_SIM_MAX_CHANGED_SLOTS" not in source
-    for text in (
-        "reference_train_deck_id",
-        "reference_changed_slots",
-        "Automatic similarity cut points",
-        "sampling_method_allowed",
-        "build_top_deck_archetype_candidates",
-        "roll_top_deck_archetype_selection",
-        "excluded_archetypes=(TOP_DECK_ARCHETYPE,)",
-        "PROJECT_ROOT / 'data' / 'deck_isolation_selection.csv'",
-        "PROJECT_ROOT / 'data' / 'archetype_isolation_selection.csv'",
-    ):
-        assert text in source
-    assert "PROJECT_ROOT / 'deck' / 'deck_isolation_selection.csv'" not in source
-    assert (
-        "PROJECT_ROOT / 'deck' / 'archetype_isolation_selection.csv'"
-        not in source
-    )
-    top_deck_source = next(
-        "".join(cell.get("source", []))
-        for cell in notebook["cells"]
-        if cell.get("cell_type") == "code"
-        and "TOP_DECK_CARD_IDS =" in "".join(cell.get("source", []))
-    )
-    tree = ast.parse(top_deck_source)
-    top_deck_assignment = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name)
-            and target.id == "TOP_DECK_CARD_IDS"
-            for target in node.targets
-        )
-    )
-    top_deck_card_ids = ast.literal_eval(top_deck_assignment.value)
-    assert len(top_deck_card_ids) == 60
-    assert all(
-        type(card_id) is int and card_id >= 0
-        for card_id in top_deck_card_ids
-    )
+        assert filename in source

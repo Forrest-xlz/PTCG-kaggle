@@ -26,7 +26,7 @@ from model.features import (
     POKEMON_DYNAMIC_DIM,
 )
 from model.network import ModelConfig, PTCGTransformer
-from training.expert_validation import load_expert_date_info
+from training.expert_replays import load_expert_date_info
 from training.feature_cache import (
     CACHE_SCHEMA_VERSION,
     ENCODER_WORDS,
@@ -34,7 +34,7 @@ from training.feature_cache import (
     MmapFeatureDataset,
     stable_deck_key,
 )
-from training.isolation_validation import load_isolation_replay_sets
+from validation.isolation import load_isolation_replay_sets
 from training.precision import PrecisionContext
 from validation.config import ValidationSettings, load_settings
 from validation.metrics import (

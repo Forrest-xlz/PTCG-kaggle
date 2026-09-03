@@ -16,14 +16,14 @@ import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = PROJECT_ROOT / "cfg" / "train.yaml"
+CONFIG_PATH = PROJECT_ROOT / "cfg" / "train_policy.yaml"
 if not CONFIG_PATH.exists():
     raise FileNotFoundError(f"Training config not found: {CONFIG_PATH}")
 with CONFIG_PATH.open("r", encoding="utf-8") as _config_handle:
     _bootstrap_config = yaml.safe_load(_config_handle) or {}
 _cg_value = _bootstrap_config.get("train", {}).get("cg_path")
 if not _cg_value:
-    raise ValueError("train.cg_path is required in cfg/train.yaml")
+    raise ValueError("train.cg_path is required in cfg/train_policy.yaml")
 _cg_path = Path(_cg_value)
 if not _cg_path.is_absolute():
     _cg_path = (PROJECT_ROOT / _cg_path).resolve()
@@ -42,7 +42,7 @@ from cg.api import all_attack, all_card_data
 from model.attack_features import build_attack_feature_table
 from model.card_features import build_card_feature_table
 from model.network import ModelConfig, PTCGTransformer
-from training.expert_validation import (
+from training.expert_replays import (
     ExpertLoserDateInfo,
     load_expert_date_info,
     load_expert_loser_date_info,
@@ -63,7 +63,7 @@ from training.feature_cache import (
     LoserAugmentationCounts,
     stable_deck_key,
 )
-from training.isolation_validation import load_isolation_replay_sets
+from validation.isolation import load_isolation_replay_sets
 from training.precision import PrecisionContext
 
 

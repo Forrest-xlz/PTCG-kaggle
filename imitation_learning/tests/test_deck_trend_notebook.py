@@ -6,7 +6,7 @@ import nbformat
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-NOTEBOOK_PATH = PROJECT_ROOT / "eda" / "deck_trend.ipynb"
+NOTEBOOK_PATH = PROJECT_ROOT / "notebooks" / "deck_trends.ipynb"
 
 
 def test_deck_trend_notebook_is_valid_and_complete() -> None:

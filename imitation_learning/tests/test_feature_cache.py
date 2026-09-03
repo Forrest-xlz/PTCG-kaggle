@@ -36,7 +36,7 @@ from training.feature_cache import (
     stable_deck_key,
     stable_episode_key,
 )
-from training.expert_validation import load_expert_date_info
+from training.expert_replays import load_expert_date_info
 
 
 SIGNATURE = {

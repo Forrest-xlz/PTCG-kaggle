@@ -1,0 +1,91 @@
+inputs:
+  deck_data: data/deck
+  card_table: ../pokemon_tcg_ai_battle/EN_Card_Data.csv
+
+outputs:
+  deck_isolation: data/deck_isolation_selection.csv
+  archetype_isolation: data/archetype_isolation_selection.csv
+  top_deck_archetype_isolation: data/top_deck_archetype_isolation_selection.csv
+
+deck_isolation:
+  min_validation_replays: 100
+  min_count: 10
+  total_replays_min: 4000
+  total_replays_max: 6000
+  roll_id: 0
+
+archetype_isolation:
+  min_validation_replays: 100
+  min_count: 3
+  total_replays_min: 2000
+  total_replays_max: 4000
+  roll_id: 0
+
+top_deck_archetype_isolation:
+  archetype: Marnie Grimmsnarl
+  card_ids:
+    - 7
+    - 7
+    - 7
+    - 7
+    - 7
+    - 7
+    - 7
+    - 7
+    - 7
+    - 7
+    - 104
+    - 104
+    - 112
+    - 112
+    - 112
+    - 112
+    - 646
+    - 646
+    - 646
+    - 646
+    - 647
+    - 647
+    - 647
+    - 648
+    - 648
+    - 648
+    - 860
+    - 860
+    - 1079
+    - 1079
+    - 1079
+    - 1080
+    - 1086
+    - 1086
+    - 1086
+    - 1086
+    - 1097
+    - 1097
+    - 1097
+    - 1122
+    - 1137
+    - 1152
+    - 1152
+    - 1152
+    - 1152
+    - 1182
+    - 1182
+    - 1219
+    - 1219
+    - 1219
+    - 1219
+    - 1227
+    - 1227
+    - 1227
+    - 1227
+    - 1231
+    - 1259
+    - 1259
+    - 1259
+    - 1259
+  min_validation_replays: 100
+  min_count: 5
+  total_replays_min: 1500
+  total_replays_max: 3000
+  roll_id: 0

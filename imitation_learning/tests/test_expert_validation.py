@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from training.expert_validation import load_expert_loser_date_info
+from training.expert_replays import load_expert_loser_date_info
 from training.feature_cache import stable_episode_key
 
 

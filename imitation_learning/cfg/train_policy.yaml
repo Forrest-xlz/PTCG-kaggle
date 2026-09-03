@@ -7,9 +7,9 @@ train:
   output: outputs/${version_name}
   data_selection_mode: holdout  # holdout or full_data
   resume: false
-  resume_checkpoint: null  # Example: outputs/ver_1.6.0/checkpoints/epoch-002.pt
+  resume_checkpoint: null  # only epoch checkpoints are supported; set to null to disable.
   epochs: 5
-  batch_size: 4096
+  batch_size: 512
   learning_rate: 0.0003
   weight_decay: 0.01
   beta1: 0.9

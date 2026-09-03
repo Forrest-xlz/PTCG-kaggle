@@ -1,6 +1,6 @@
 validation:
   # Relative paths are resolved from imitation_learning/.
-  train_config: cfg/train.yaml
+  train_config: cfg/train_policy.yaml
   ensemble:
     enabled: false
     checkpoints:
