@@ -1,0 +1,11 @@
+analysis:
+  input: data/replay_timing
+  output: outputs/replay_timing
+  date: latest
+  score_filter:
+    mode: min  # min, max, or avg
+    threshold: 1100
+  clustering:
+    n_clusters: 4
+    random_state: 42
+    n_init: 10
