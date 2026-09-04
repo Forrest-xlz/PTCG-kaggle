@@ -305,12 +305,15 @@ incremental per-date cache and then open the trend notebook:
 
 ```bash
 python -m extraction.deck_trend_data
-python -m jupyter notebook notebooks/deck_trends.ipynb
+python notebooks/deck_trends_eda.py
 ```
 
-Configure extraction and analysis in `cfg/analyze_deck_trends.yaml`. Changing the date
-interval, chart threshold, mirror handling, or a Deck-Card-ID-only archetype
-classifier requires only rerunning the notebook. Rerun the extractor after
+Configure extraction in `cfg/extract_deck_trend_data.yaml` and the three figures
+in `cfg/deck_trends_eda.yaml`. The line chart, Sankey, and matchup matrix each
+have independent date, interval, share, and score settings; line and matchup
+also configure mirror handling. Score mode accepts `all`, `min`, `max`, or
+`avg`. The script writes three PNGs plus line and matchup audit tables beneath
+`outputs/deck_trends/`. Rerun the extractor after
 adding or replacing replay ZIP archives; with `force: false`, unchanged complete
 date shards are reused.
 

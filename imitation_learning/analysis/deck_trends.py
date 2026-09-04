@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Iterable, Sequence
@@ -25,6 +26,63 @@ PLAYER_ROW_COLUMNS = {
     "reward",
     "result",
 }
+
+
+@dataclass(frozen=True)
+class ScoreFilter:
+    mode: str = "all"
+    threshold: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"all", "min", "max", "avg"}:
+            raise ValueError("score mode must be all, min, max, or avg")
+        if self.mode == "all":
+            if self.threshold is not None:
+                raise ValueError("score_threshold must be null for score_mode=all")
+            return
+        if isinstance(self.threshold, bool) or self.threshold is None:
+            raise ValueError(f"score_threshold is required for score_mode={self.mode}")
+        threshold = float(self.threshold)
+        if not math.isfinite(threshold):
+            raise ValueError("score_threshold must be finite")
+        object.__setattr__(self, "threshold", threshold)
+
+
+def filter_replays_by_score(
+    rows: pd.DataFrame,
+    scores: pd.DataFrame | None,
+    score_filter: ScoreFilter,
+) -> pd.DataFrame:
+    """Filter complete replay pairs using one manifest-level score measure."""
+    if score_filter.mode == "all":
+        return rows.copy()
+    if scores is None:
+        raise ValueError("manifest scores are required for score filtering")
+    required = {"date", "episode_id", "avg_score", "min_score", "sum_score"}
+    missing = required - set(scores.columns)
+    if missing:
+        raise ValueError(f"manifest scores are missing columns: {sorted(missing)}")
+    values = scores[list(required)].copy()
+    values["date"] = values["date"].astype(str)
+    values["episode_id"] = values["episode_id"].astype(str)
+    if values.duplicated(["date", "episode_id"]).any():
+        raise ValueError("manifest contains duplicate date/episode_id rows")
+    for column in ("avg_score", "min_score", "sum_score"):
+        values[column] = pd.to_numeric(values[column], errors="raise")
+        if not values[column].map(math.isfinite).all():
+            raise ValueError("manifest scores must be finite")
+    score = {
+        "min": values["min_score"],
+        "max": values["sum_score"] - values["min_score"],
+        "avg": values["avg_score"],
+    }[score_filter.mode]
+    allowed = values.loc[
+        score.ge(float(score_filter.threshold)), ["date", "episode_id"]
+    ]
+    keyed = rows.copy()
+    keyed["date"] = keyed["date"].astype(str)
+    keyed["episode_id"] = keyed["episode_id"].astype(str)
+    return keyed.merge(allowed, on=["date", "episode_id"], how="inner")
 
 SANKEY_PALETTE = (
     "#8e44ad",
