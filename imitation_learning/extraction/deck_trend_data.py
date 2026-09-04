@@ -18,7 +18,7 @@ import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = PROJECT_ROOT / "cfg" / "analyze_deck_trends.yaml"
+CONFIG_PATH = PROJECT_ROOT / "cfg" / "extract_deck_trend_data.yaml"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

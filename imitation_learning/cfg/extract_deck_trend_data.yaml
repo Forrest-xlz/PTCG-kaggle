@@ -1,0 +1,7 @@
+extract:
+  input: ../replay_episodes
+  output: data/deck_trend
+  workers: 16
+  limit_members: null  # Set an integer only for a smoke extraction.
+  force: false         # Rebuild every archive when true.
+
