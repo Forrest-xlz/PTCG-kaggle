@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import re
 import os
+import shutil
 import sys
-import tempfile
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -352,6 +354,16 @@ def publish_artifacts(staging: Path, output: Path) -> None:
         os.replace(staging / "tables" / name, output / "tables" / name)
 
 
+@contextmanager
+def _staging_directory(output: Path):
+    staging = output.parent / f".{output.name}-staging-{uuid.uuid4().hex}"
+    staging.mkdir()
+    try:
+        yield staging
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 def run(settings: AnalysisSettings) -> tuple[str, Path]:
     date, path = resolve_timing_csv(settings.input, settings.date)
     players = pd.read_csv(path, dtype={"episode_id": "string", "team_name": "string"})
@@ -359,8 +371,7 @@ def run(settings: AnalysisSettings) -> tuple[str, Path]:
     filtered = filter_team_timings(teams, settings.score_filter)
     all_result, filtered_result, summary = assign_timing_clusters(teams, filtered, settings.clustering)
     settings.output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="replay-timing-", dir=settings.output.parent) as temporary:
-        staging = Path(temporary)
+    with _staging_directory(settings.output) as staging:
         _write_artifacts(staging, all_result, filtered_result, summary, settings.score_filter)
         publish_artifacts(staging, settings.output)
     return date, settings.output

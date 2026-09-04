@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
 import sys
-import tempfile
+import uuid
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -170,6 +172,16 @@ def _publish_artifacts(staging: Path, output: Path) -> None:
         os.replace(staging / "tables" / name, output / "tables" / name)
 
 
+@contextmanager
+def _staging_directory(output: Path):
+    staging = output.parent / f".{output.name}-staging-{uuid.uuid4().hex}"
+    staging.mkdir()
+    try:
+        yield staging
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 def main(config_path: Path = CONFIG_PATH) -> None:
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))["analysis"]
     configs = {"line": _chart_settings(raw, "line_chart", mirrors=True), "sankey": _chart_settings(raw, "sankey", mirrors=False), "matrix": _chart_settings(raw, "matchup_matrix", mirrors=True)}
@@ -185,8 +197,7 @@ def main(config_path: Path = CONFIG_PATH) -> None:
     scores = _load_scores(_path(raw["replay_episodes"]), required_dates) if required_dates else None
     output = _path(raw["output"])
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="deck-trends-", dir=output.parent) as temporary:
-        staging = Path(temporary)
+    with _staging_directory(output) as staging:
         (staging / "tables").mkdir(parents=True, exist_ok=True)
         line_rows, line_dates = _prepare(rows, catalog, configs["line"], scores)
         _save_line(line_rows, line_dates, configs["line"], staging / FIGURE_FILENAMES["line_chart"], staging / "tables" / TABLE_FILENAMES[0])

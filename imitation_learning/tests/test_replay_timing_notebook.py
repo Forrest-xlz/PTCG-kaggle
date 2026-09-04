@@ -188,3 +188,15 @@ def test_render_failure_preserves_previous_owned_outputs(
 
 def test_obsolete_replay_timing_notebook_is_removed() -> None:
     assert not (PROJECT_ROOT / "notebooks" / "replay_timing.ipynb").exists()
+
+
+def test_staging_directory_is_created_beside_output_and_cleaned(tmp_path: Path) -> None:
+    output = tmp_path / "results" / "replay_timing"
+    output.parent.mkdir(parents=True)
+
+    with replay_timing_eda._staging_directory(output) as staging:
+        assert staging.parent == output.parent
+        assert staging.is_dir()
+        (staging / "artifact.txt").write_text("temporary", encoding="utf-8")
+
+    assert not staging.exists()
