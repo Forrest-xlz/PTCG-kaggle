@@ -12,7 +12,6 @@ analysis:
     exclude_mirror_matches: false
     score_mode: all  # all, min, max, or avg
     score_threshold: null
-    filename: archetype_share_and_win_rate.png
 
   sankey:
     start_date: 8.12
@@ -21,7 +20,6 @@ analysis:
     min_share_percent: 1.0
     score_mode: min
     score_threshold: 1060
-    filename: archetype_sankey.png
 
   matchup_matrix:
     start_date: 8.12
@@ -31,4 +29,3 @@ analysis:
     exclude_mirror_matches: true
     score_mode: min
     score_threshold: 1000
-    filename: archetype_matchup_matrix.png

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import io
+import os
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,12 @@ from analysis.deck_trends import (
 )
 
 CONFIG_PATH = PROJECT_ROOT / "cfg" / "deck_trends_eda.yaml"
+FIGURE_FILENAMES = {
+    "line_chart": "archetype_share_and_win_rate.png",
+    "sankey": "archetype_sankey.png",
+    "matchup_matrix": "archetype_matchup_matrix.png",
+}
+TABLE_FILENAMES = ("line_chart_daily_metrics.csv", "matchup_matrix.csv")
 
 
 def _path(value: str) -> Path:
@@ -50,9 +58,6 @@ def _chart_settings(raw: dict[str, Any], name: str, *, mirrors: bool) -> dict[st
     if cfg["interval_days"] < 1 or not 0 <= cfg["min_share_percent"] <= 100:
         raise ValueError(f"invalid {name} interval/share setting")
     cfg["score_filter"] = ScoreFilter(cfg["score_mode"], cfg["score_threshold"])
-    filename = Path(cfg["filename"])
-    if filename.name != str(filename) or filename.suffix.lower() != ".png":
-        raise ValueError(f"{name}.filename must be a plain .png filename")
     if mirrors and type(cfg["exclude_mirror_matches"]) is not bool:
         raise ValueError(f"{name}.exclude_mirror_matches must be boolean")
     return cfg
@@ -94,7 +99,7 @@ def _prepare(rows: pd.DataFrame, catalog: CardCatalog, cfg: dict[str, Any], scor
     return add_trend_archetypes(selected, catalog), dates
 
 
-def _save_line(rows: pd.DataFrame, dates: list[str], cfg: dict[str, Any], output: Path) -> None:
+def _save_line(rows: pd.DataFrame, dates: list[str], cfg: dict[str, Any], figure_path: Path, table_path: Path) -> None:
     metrics = build_daily_metrics(rows, exclude_mirrors=cfg["exclude_mirror_matches"]).rename(columns={"non_mirror_win_rate": "win_rate", "non_mirror_games": "evaluated_games"})
     visible_names = sorted(set(metrics.loc[daily_share_visibility(metrics, cfg["min_share_percent"]), "archetype"]))
     fig, axes = plt.subplots(2, 1, figsize=(14, 11), sharex=True)
@@ -111,12 +116,12 @@ def _save_line(rows: pd.DataFrame, dates: list[str], cfg: dict[str, Any], output
     axes[1].set(title="Archetype Win Rate Across Selected Snapshots", ylabel="Win rate", xlabel="Snapshot",
                 xticks=positions, xticklabels=dates)
     fig.tight_layout()
-    fig.savefig(output / cfg["filename"], dpi=180, bbox_inches="tight")
+    fig.savefig(figure_path, dpi=180, bbox_inches="tight")
     plt.close(fig)
-    metrics.to_csv(output / "tables" / "line_chart_daily_metrics.csv", index=False, encoding="utf-8-sig")
+    metrics.to_csv(table_path, index=False, encoding="utf-8-sig")
 
 
-def _save_sankey(rows: pd.DataFrame, dates: list[str], cfg: dict[str, Any], output: Path) -> None:
+def _save_sankey(rows: pd.DataFrame, dates: list[str], cfg: dict[str, Any], figure_path: Path) -> None:
     metrics = build_daily_metrics(rows)
     shares = metrics.set_index(["date", "archetype"])["share_percent"].to_dict()
     display_rows = rows[["date", "archetype"]].copy()
@@ -127,11 +132,11 @@ def _save_sankey(rows: pd.DataFrame, dates: list[str], cfg: dict[str, Any], outp
     modal["modal_archetype"] = modal.apply(lambda r: r["modal_archetype"] if shares.get((r["date"], r["modal_archetype"]), 0) >= cfg["min_share_percent"] else "Other", axis=1)
     flows, _ = build_team_flows(modal, dates)
     fig = plot_archetype_sankey(display_shares, flows, dates)
-    fig.savefig(output / cfg["filename"], dpi=180, bbox_inches="tight")
+    fig.savefig(figure_path, dpi=180, bbox_inches="tight")
     plt.close(fig)
 
 
-def _save_matrix(rows: pd.DataFrame, cfg: dict[str, Any], output: Path) -> None:
+def _save_matrix(rows: pd.DataFrame, cfg: dict[str, Any], figure_path: Path, table_path: Path) -> None:
     matchups = build_matchups(rows, exclude_mirrors=cfg["exclude_mirror_matches"])
     shares = build_pooled_archetype_shares(build_daily_metrics(rows))
     names = sorted(shares.loc[shares["share_percent"] >= cfg["min_share_percent"], "archetype"])
@@ -147,16 +152,27 @@ def _save_matrix(rows: pd.DataFrame, cfg: dict[str, Any], output: Path) -> None:
     fig, ax = plt.subplots(figsize=(max(10, len(names) * .85), max(8, len(names) * .7)))
     sns.heatmap(rates, annot=labels, fmt="", cmap="RdYlGn", vmin=0, vmax=1, center=.5, linewidths=.5, ax=ax)
     ax.set(title="Pooled Archetype Matchups (Row Beats Column)", xlabel="Opponent archetype", ylabel="Player archetype")
-    fig.tight_layout(); fig.savefig(output / cfg["filename"], dpi=180, bbox_inches="tight"); plt.close(fig)
-    table.to_csv(output / "tables" / "matchup_matrix.csv", index=False, encoding="utf-8-sig")
+    fig.tight_layout(); fig.savefig(figure_path, dpi=180, bbox_inches="tight"); plt.close(fig)
+    table.to_csv(table_path, index=False, encoding="utf-8-sig")
+
+
+def _publish_artifacts(staging: Path, output: Path) -> None:
+    sources = [staging / name for name in FIGURE_FILENAMES.values()]
+    sources.extend(staging / "tables" / name for name in TABLE_FILENAMES)
+    missing = [str(path) for path in sources if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"Missing staged Deck Trends artifacts: {missing}")
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "tables").mkdir(parents=True, exist_ok=True)
+    for name in FIGURE_FILENAMES.values():
+        os.replace(staging / name, output / name)
+    for name in TABLE_FILENAMES:
+        os.replace(staging / "tables" / name, output / "tables" / name)
 
 
 def main(config_path: Path = CONFIG_PATH) -> None:
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))["analysis"]
     configs = {"line": _chart_settings(raw, "line_chart", mirrors=True), "sankey": _chart_settings(raw, "sankey", mirrors=False), "matrix": _chart_settings(raw, "matchup_matrix", mirrors=True)}
-    filenames = [cfg["filename"] for cfg in configs.values()]
-    if len(filenames) != len(set(filenames)):
-        raise ValueError("chart filenames must be distinct")
     rows = _load_rows(_path(raw["input"]))
     catalog = CardCatalog.from_csv(_path(raw["card_table"]))
     required_dates: set[str] = set()
@@ -167,10 +183,18 @@ def main(config_path: Path = CONFIG_PATH) -> None:
                 start_date=cfg.get("start_date"), end_date=cfg.get("end_date"),
             ))
     scores = _load_scores(_path(raw["replay_episodes"]), required_dates) if required_dates else None
-    output = _path(raw["output"]); (output / "tables").mkdir(parents=True, exist_ok=True)
-    line_rows, line_dates = _prepare(rows, catalog, configs["line"], scores); _save_line(line_rows, line_dates, configs["line"], output)
-    sankey_rows, sankey_dates = _prepare(rows, catalog, configs["sankey"], scores); _save_sankey(sankey_rows, sankey_dates, configs["sankey"], output)
-    matrix_rows, _ = _prepare(rows, catalog, configs["matrix"], scores); _save_matrix(matrix_rows, configs["matrix"], output)
+    output = _path(raw["output"])
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="deck-trends-", dir=output.parent) as temporary:
+        staging = Path(temporary)
+        (staging / "tables").mkdir(parents=True, exist_ok=True)
+        line_rows, line_dates = _prepare(rows, catalog, configs["line"], scores)
+        _save_line(line_rows, line_dates, configs["line"], staging / FIGURE_FILENAMES["line_chart"], staging / "tables" / TABLE_FILENAMES[0])
+        sankey_rows, sankey_dates = _prepare(rows, catalog, configs["sankey"], scores)
+        _save_sankey(sankey_rows, sankey_dates, configs["sankey"], staging / FIGURE_FILENAMES["sankey"])
+        matrix_rows, _ = _prepare(rows, catalog, configs["matrix"], scores)
+        _save_matrix(matrix_rows, configs["matrix"], staging / FIGURE_FILENAMES["matchup_matrix"], staging / "tables" / TABLE_FILENAMES[1])
+        _publish_artifacts(staging, output)
     print(f"Saved Deck Trends EDA to {output}")
 
 
