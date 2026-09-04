@@ -21,6 +21,7 @@ from notebooks.replay_timing_eda import (
     filter_team_timings,
     resolve_timing_csv,
 )
+import notebooks.replay_timing_eda as replay_timing_eda
 
 
 def _player_rows() -> pd.DataFrame:
@@ -92,3 +93,94 @@ def test_filtered_clusters_use_labels_from_global_cluster_space() -> None:
     assert filtered_labels.to_dict() == {"A": global_labels["A"], "D": global_labels["D"]}
     assert summary["all_team_count"].sum() == 4
     assert summary["filtered_team_count"].sum() == 2
+
+
+def _analysis_settings(tmp_path: Path):
+    rows = []
+    for index, (team, startup, action) in enumerate(
+        [("A", 1.0, 0.1), ("B", 1.2, 0.2), ("C", 8.0, 2.0), ("D", 9.0, 2.2)]
+    ):
+        rows.append(
+            {
+                "date": "8.15",
+                "episode_id": str(index),
+                "player_index": 0,
+                "team_name": team,
+                "startup_time_seconds": startup,
+                "subsequent_time_seconds": action * 2,
+                "subsequent_action_count": 2,
+                "mean_step_time_seconds": action,
+                "avg_score": 1200.0,
+                "min_score": 1100.0,
+                "max_score": 1300.0,
+                "sum_score": 2400.0,
+            }
+        )
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    pd.DataFrame(rows).to_csv(input_dir / "8.15.player_timings.csv", index=False)
+    return replay_timing_eda.AnalysisSettings(
+        input=input_dir,
+        output=tmp_path / "output",
+        date="latest",
+        score_filter=ScoreFilter("min", 1100.0),
+        clustering=ClusteringSettings(2, 42, 10),
+    )
+
+
+def test_run_writes_six_fixed_figures_and_three_tables(tmp_path: Path) -> None:
+    settings = _analysis_settings(tmp_path)
+
+    resolved_date, output = replay_timing_eda.run(settings)
+
+    assert resolved_date == "8.15"
+    assert {path.name for path in output.glob("*.png")} == set(replay_timing_eda.FIGURE_FILENAMES)
+    assert {path.name for path in (output / "tables").glob("*.csv")} == set(replay_timing_eda.TABLE_FILENAMES)
+    assert "cluster" in pd.read_csv(output / "tables" / "all_team_timings.csv")
+    assert "cluster" in pd.read_csv(output / "tables" / "score_filtered_team_timings.csv")
+
+
+def test_publish_replaces_owned_outputs_and_preserves_unrelated_file(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    staging = tmp_path / "staging"
+    (output / "tables").mkdir(parents=True)
+    (staging / "tables").mkdir(parents=True)
+    unrelated = output / "notes.txt"
+    unrelated.write_text("keep", encoding="utf-8")
+    for filename in replay_timing_eda.FIGURE_FILENAMES:
+        (output / filename).write_bytes(b"old")
+        (staging / filename).write_bytes(b"new")
+    for filename in replay_timing_eda.TABLE_FILENAMES:
+        (output / "tables" / filename).write_bytes(b"old")
+        (staging / "tables" / filename).write_bytes(b"new")
+
+    replay_timing_eda.publish_artifacts(staging, output)
+
+    assert all((output / name).read_bytes() == b"new" for name in replay_timing_eda.FIGURE_FILENAMES)
+    assert unrelated.read_text(encoding="utf-8") == "keep"
+
+
+def test_render_failure_preserves_previous_owned_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _analysis_settings(tmp_path)
+    replay_timing_eda.run(settings)
+    previous = {
+        path.relative_to(settings.output): path.read_bytes()
+        for path in settings.output.rglob("*")
+        if path.is_file()
+    }
+
+    def fail_render(*args, **kwargs):
+        raise RuntimeError("render failed")
+
+    monkeypatch.setattr(replay_timing_eda, "_save_scatter", fail_render)
+    with pytest.raises(RuntimeError, match="render failed"):
+        replay_timing_eda.run(settings)
+
+    current = {
+        path.relative_to(settings.output): path.read_bytes()
+        for path in settings.output.rglob("*")
+        if path.is_file()
+    }
+    assert current == previous

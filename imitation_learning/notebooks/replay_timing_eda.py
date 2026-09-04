@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import re
+import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,6 +12,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import yaml
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 
@@ -22,6 +28,19 @@ CONFIG_PATH = PROJECT_ROOT / "cfg" / "replay_timing_eda.yaml"
 DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})$")
 SCORE_COLUMNS = {"min": "min_score", "max": "max_score", "avg": "avg_score"}
 FEATURE_COLUMNS = ("startup_time_mean_seconds", "mean_step_time_seconds")
+FIGURE_FILENAMES = (
+    "all_teams_startup_distribution.png",
+    "all_teams_action_distribution.png",
+    "score_filtered_startup_distribution.png",
+    "score_filtered_action_distribution.png",
+    "all_teams_startup_vs_action.png",
+    "score_filtered_startup_vs_action.png",
+)
+TABLE_FILENAMES = (
+    "all_team_timings.csv",
+    "score_filtered_team_timings.csv",
+    "cluster_summary.csv",
+)
 REQUIRED_PLAYER_COLUMNS = {
     "episode_id",
     "team_name",
@@ -204,14 +223,153 @@ def assign_timing_clusters(
     return all_result, filtered_result, summary
 
 
-def main(config_path: Path = CONFIG_PATH) -> None:
-    settings = load_settings(config_path)
+def _add_figure_header(fig: plt.Figure, title: str, subtitle: str) -> None:
+    fig.suptitle(title, x=0.08, y=0.98, ha="left", va="top", fontsize=15, fontweight="semibold")
+    fig.text(0.08, 0.91, subtitle, ha="left", va="top", color="#5B6472", fontsize=10)
+
+
+def _save_histogram(
+    frame: pd.DataFrame,
+    column: str,
+    title: str,
+    xlabel: str,
+    color: str,
+    destination: Path,
+) -> None:
+    values = frame.loc[frame[column].gt(0), column]
+    if values.empty:
+        raise ValueError(f"No positive values available for {title}")
+    fig, ax = plt.subplots(figsize=(9, 5))
+    try:
+        sns.histplot(values, bins=35, color=color, edgecolor="white", linewidth=0.6, ax=ax)
+        ax.set_xscale("log")
+        _add_figure_header(fig, title, f"Unique teams: {len(values):,} | Unit: seconds | Log-scaled x-axis")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Teams")
+        sns.despine(ax=ax)
+        fig.tight_layout(rect=(0, 0, 1, 0.84))
+        fig.savefig(destination, dpi=180, bbox_inches="tight")
+    finally:
+        plt.close(fig)
+
+
+def _save_scatter(
+    frame: pd.DataFrame,
+    centers: pd.DataFrame,
+    title: str,
+    subtitle: str,
+    destination: Path,
+) -> None:
+    plotted = frame.loc[
+        frame["mean_step_time_seconds"].gt(0) & frame["startup_time_mean_seconds"].gt(0)
+    ].copy()
+    if plotted.empty:
+        raise ValueError(f"No positive timing pairs available for {title}")
+    fig, ax = plt.subplots(figsize=(10, 7))
+    try:
+        palette = sns.color_palette("tab10", n_colors=max(1, len(centers)))
+        for cluster in centers["cluster"].astype(int):
+            rows = plotted.loc[plotted["cluster"].eq(cluster)]
+            if rows.empty:
+                continue
+            ax.scatter(
+                rows["mean_step_time_seconds"],
+                rows["startup_time_mean_seconds"],
+                s=38,
+                alpha=0.72,
+                color=palette[cluster % len(palette)],
+                label=f"Cluster {cluster}",
+                edgecolors="white",
+                linewidths=0.35,
+            )
+        ax.scatter(
+            centers["center_step_seconds"],
+            centers["center_startup_seconds"],
+            s=190,
+            marker="X",
+            color="#111827",
+            edgecolors="white",
+            linewidths=0.9,
+            label="Global centers",
+            zorder=5,
+        )
+        for row in centers.itertuples(index=False):
+            ax.annotate(
+                str(row.cluster),
+                (row.center_step_seconds, row.center_startup_seconds),
+                xytext=(7, 6),
+                textcoords="offset points",
+                color="#111827",
+                fontsize=10,
+                weight="bold",
+            )
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        _add_figure_header(fig, title, subtitle)
+        ax.set_xlabel("Mean subsequent action time (seconds)")
+        ax.set_ylabel("Mean startup time (seconds)")
+        ax.legend(frameon=False, ncol=3, loc="best")
+        sns.despine(ax=ax)
+        fig.tight_layout(rect=(0, 0, 1, 0.84))
+        fig.savefig(destination, dpi=180, bbox_inches="tight")
+    finally:
+        plt.close(fig)
+
+
+def _write_artifacts(
+    staging: Path,
+    all_teams: pd.DataFrame,
+    filtered: pd.DataFrame,
+    summary: pd.DataFrame,
+    score_filter: ScoreFilter,
+) -> None:
+    (staging / "tables").mkdir(parents=True, exist_ok=True)
+    filter_label = f"{score_filter.mode}_score >= {score_filter.threshold:g}"
+    _save_histogram(all_teams, "startup_time_mean_seconds", "All Teams: Startup Time Distribution", "Mean startup time (seconds)", "#2F6BFF", staging / FIGURE_FILENAMES[0])
+    _save_histogram(all_teams, "mean_step_time_seconds", "All Teams: Mean Subsequent Action Time Distribution", "Mean subsequent action time (seconds)", "#2F6BFF", staging / FIGURE_FILENAMES[1])
+    _save_histogram(filtered, "startup_time_mean_seconds", f"Score-Filtered Teams: Startup Time Distribution ({filter_label})", "Mean startup time (seconds)", "#D97706", staging / FIGURE_FILENAMES[2])
+    _save_histogram(filtered, "mean_step_time_seconds", f"Score-Filtered Teams: Mean Subsequent Action Time Distribution ({filter_label})", "Mean subsequent action time (seconds)", "#D97706", staging / FIGURE_FILENAMES[3])
+    _save_scatter(all_teams, summary, "All Teams: Startup vs Mean Subsequent Action Time", f"Teams: {len(all_teams):,} | Global K-Means ({len(summary)} clusters) | Log-scaled axes", staging / FIGURE_FILENAMES[4])
+    _save_scatter(filtered, summary, f"Score-Filtered Teams: Startup vs Mean Subsequent Action Time ({filter_label})", f"Teams: {len(filtered):,} | Assigned with global centers | Log-scaled axes", staging / FIGURE_FILENAMES[5])
+    all_teams.sort_values(["cluster", "team_name"], kind="stable").to_csv(staging / "tables" / TABLE_FILENAMES[0], index=False, encoding="utf-8-sig")
+    filtered_output = filtered.copy()
+    filtered_output.insert(1, "score_mode", score_filter.mode)
+    filtered_output.sort_values(["score_value", "team_name"], ascending=[False, True], kind="stable").to_csv(staging / "tables" / TABLE_FILENAMES[1], index=False, encoding="utf-8-sig")
+    summary.to_csv(staging / "tables" / TABLE_FILENAMES[2], index=False, encoding="utf-8-sig")
+
+
+def publish_artifacts(staging: Path, output: Path) -> None:
+    sources = [staging / name for name in FIGURE_FILENAMES]
+    sources.extend(staging / "tables" / name for name in TABLE_FILENAMES)
+    missing = [str(path) for path in sources if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"Missing staged Replay Timing artifacts: {missing}")
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "tables").mkdir(parents=True, exist_ok=True)
+    for name in FIGURE_FILENAMES:
+        os.replace(staging / name, output / name)
+    for name in TABLE_FILENAMES:
+        os.replace(staging / "tables" / name, output / "tables" / name)
+
+
+def run(settings: AnalysisSettings) -> tuple[str, Path]:
     date, path = resolve_timing_csv(settings.input, settings.date)
     players = pd.read_csv(path, dtype={"episode_id": "string", "team_name": "string"})
     teams = aggregate_team_timings(players)
     filtered = filter_team_timings(teams, settings.score_filter)
-    assign_timing_clusters(teams, filtered, settings.clustering)
-    print(f"Prepared Replay Timing EDA for date={date}")
+    all_result, filtered_result, summary = assign_timing_clusters(teams, filtered, settings.clustering)
+    settings.output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="replay-timing-", dir=settings.output.parent) as temporary:
+        staging = Path(temporary)
+        _write_artifacts(staging, all_result, filtered_result, summary, settings.score_filter)
+        publish_artifacts(staging, settings.output)
+    return date, settings.output
+
+
+def main(config_path: Path = CONFIG_PATH) -> None:
+    settings = load_settings(config_path)
+    date, output = run(settings)
+    print(f"Saved Replay Timing EDA for date={date} to {output}")
 
 
 if __name__ == "__main__":
