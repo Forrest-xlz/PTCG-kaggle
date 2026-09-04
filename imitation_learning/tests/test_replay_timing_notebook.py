@@ -184,3 +184,7 @@ def test_render_failure_preserves_previous_owned_outputs(
         if path.is_file()
     }
     assert current == previous
+
+
+def test_obsolete_replay_timing_notebook_is_removed() -> None:
+    assert not (PROJECT_ROOT / "notebooks" / "replay_timing.ipynb").exists()

@@ -293,12 +293,20 @@ runs the combined audit, and writes the existing files under `data/`:
 - `archetype_isolation_selection.csv`
 - `top_deck_archetype_isolation_selection.csv`
 
-Open `notebooks/replay_timing.ipynb` to analyze agent startup time and mean
-subsequent-action time from the numerically latest dated replay ZIP. Configure
-`SCORE_MODE` (`avg`, `min`, or `max`) and `SCORE_THRESHOLD` in the parameter
-cell. The notebook caches replay-player timings and exports the team-level
-analysis under `data/replay_timing/`, then plots timing distributions and four
-global K-Means timing clusters.
+Extract replay-player timing data using `cfg/extract_replay_timing.yaml`, then
+generate the Replay Timing EDA using `cfg/replay_timing_eda.yaml`:
+
+```bash
+python -m extraction.replay_timing
+python notebooks/replay_timing_eda.py
+```
+
+Both configurations accept `date: latest` or an explicit date such as `8.15`.
+Extraction writes the dated player cache under `data/replay_timing/` and writes
+a dated error CSV only when replay errors occur. The EDA writes six fixed plots
+and three useful tables under `outputs/replay_timing/`. A successful rerun
+replaces those fixed outputs; a failed render leaves the previous complete
+results intact.
 
 To analyze Deck usage, matchup, and team-switching trends, first build the
 incremental per-date cache and then open the trend notebook:
@@ -313,7 +321,9 @@ in `cfg/deck_trends_eda.yaml`. The line chart, Sankey, and matchup matrix each
 have independent date, interval, share, and score settings; line and matchup
 also configure mirror handling. Score mode accepts `all`, `min`, `max`, or
 `avg`. The script writes three PNGs plus line and matchup audit tables beneath
-`outputs/deck_trends/`. Rerun the extractor after
+`outputs/deck_trends/`. Their filenames are fixed, and a successful rerun
+replaces the existing outputs only after the complete set has rendered. Rerun
+the extractor after
 adding or replacing replay ZIP archives; with `force: false`, unchanged complete
 date shards are reused.
 
