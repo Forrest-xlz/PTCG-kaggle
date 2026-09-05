@@ -251,15 +251,17 @@ def top_deck_subgroup_masks(
     scope: str,
     deck_masks: tuple[np.ndarray, ...],
     expert_deck_masks: tuple[np.ndarray, ...],
+    names: tuple[str, ...] = (),
 ) -> dict[str, np.ndarray]:
     if len(deck_masks) != len(expert_deck_masks):
         raise ValueError("top-deck and expert top-deck masks must align")
+    from validation.deck_names import deck_label
     result: dict[str, np.ndarray] = {}
     for deck_index, (deck_mask, expert_mask) in enumerate(
         zip(deck_masks, expert_deck_masks), start=1
     ):
-        result[f"{scope}_deck{deck_index}"] = deck_mask
-        result[f"{scope}_expert_deck{deck_index}"] = expert_mask
+        result[f"{scope}_{deck_label(deck_index, names)}"] = deck_mask
+        result[f"{scope}_expert_{deck_label(deck_index, names)}"] = expert_mask
     return result
 
 

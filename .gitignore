@@ -17,9 +17,6 @@ __pycache__/
 # wandb logs
 wandb/
 
-# docs
-docs/
-
 # tests 
 tests/
 

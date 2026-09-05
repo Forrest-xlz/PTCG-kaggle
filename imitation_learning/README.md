@@ -1,361 +1,156 @@
-# PTCG imitation learning
+# PTCG Imitation Learning
 
-This subproject turns Kaggle replay archives into cached deck statistics and
-supervised imitation-learning samples. The sparse feature encoder and
-Transformer policy decoder are adapted from the MCTS sample notebook; the
-value head is intentionally removed for pure behavioral cloning.
+A behavior-cloning project built from Pokémon TCG competition replays: extract observations and actions, train a Transformer policy, evaluate checkpoints, analyze data coverage, and package Kaggle inference submissions.
 
-## Layout
+The policy predicts legal actions through supervised learning; it has no value head or reinforcement-learning training loop. Its encoder and policy architecture are adapted from the competition MCTS example notebook. The current implementation supports both **holdout training** and **full-data training**. This guide describes the current workflow, not historical development iterations.
+
+## Layout and documentation
 
 ```text
-analysis/    reusable deck statistics, validation selection, and trend logic
-extraction/  replay, deck-list, and trend-data extraction entrypoints
-model/       sparse features and the Transformer policy
-notebooks/   focused exploratory and validation-selection notebooks
-training/    feature-cache construction and model training
-validation/  standalone checkpoint evaluation and isolation-set loading
-cfg/         purpose-named workflow configurations
-data/        generated caches and selections (gitignored)
+imitation_learning/
+├─ cfg/          Extraction, training, validation, and EDA configurations
+├─ extraction/   Replay extraction entrypoints
+├─ training/     Cache construction, validation selection, training, and export
+├─ validation/   Standalone validation and ensemble evaluation
+├─ eda/          EDA scripts and the Deck EDA notebook
+├─ analysis/     Reusable statistics and deck-selection logic
+├─ model/        Feature encoding and policy architecture
+├─ data/         Generated datasets, caches, and selection CSVs
+└─ outputs/      Analysis results and training output when WandB is disabled
 ```
 
-## Setup
+Detailed guides live in the repository-level [docs](../docs/README.md) directory: [data preparation](../docs/data-pipeline.md), [training and validation](../docs/training-validation.md), [model architecture](../docs/model.md), [EDA](../docs/eda.md), and [inference submission](../docs/submission.md).
 
-Run commands from this directory.  Python 3.10+ is required.  To construct
-features, make the competition `cg` package importable (for example, add the
-sample-submission directory to `PYTHONPATH`).
+## 1. Prepare the environment and data
+
+Python 3.10+ is required. A CUDA GPU is recommended for full training; CPU execution is useful for small checks. Runtime and memory requirements depend on model size and batch size. Use a PyTorch installation compatible with your local CUDA environment.
+
+Activate your existing `orbit_wars` environment, or create one:
 
 ```bash
-pip install -r requirements.txt
+conda create -n orbit_wars python=3.11
+conda activate orbit_wars
+cd imitation_learning
+python -m pip install -r requirements.txt
+```
+
+**Run all commands below from `imitation_learning/`.** Relative data paths in the YAML configurations generally resolve from this directory as well.
+
+Prepare the competition resources using the default layout:
+
+```text
+repository/
+├─ replay_episodes/                # Dated replay ZIP archives; supply separately
+├─ pokemon_tcg_ai_battle/
+│  ├─ EN_Card_Data.csv             # Card table for deck analysis
+│  └─ sample_submission/cg/        # Competition engine Python package
+├─ imitation_learning/
+└─ docs/
+```
+
+These commands do not download replays, the competition engine, or pretrained checkpoints. Each dated archive should contain its replays; expert filtering also requires one `manifest.csv` per ZIP. See [data preparation](../docs/data-pipeline.md).
+
+Review these configurations before running; the defaults may not suit your machine:
+
+| Configuration | Check first |
+|---|---|
+| `cfg/extract_deck_lists.yaml` | Replay input, deck output, workers |
+| `cfg/extract_training_samples.yaml` | Replay input, sample output, workers |
+| `cfg/build_feature_cache.yaml` | cg_path, sample input, cache output, workers |
+| `cfg/train_policy.yaml` | cg_path, data, replay_episodes, device, precision, batch_size, wandb |
+
+Start with fewer workers and a smaller batch size. Do not retain `precision: bf16` without compatible hardware. For CPU checks, use `device: cpu` and `precision: fp32`. Set `wandb.enabled: false` if you do not want WandB logging.
+
+## 2. Extract data and build the cache
+
+Run in order:
+
+```bash
 python -m extraction.deck_lists
 python -m extraction.training_samples
 python -m training.build_feature_cache
+```
+
+These produce `data/deck/`, `data/training/`, and `data/training_cache/`, respectively. Large datasets require substantial time and disk space. Extraction and cache construction reuse completed, compatible shards.
+
+For an extraction smoke test, set a small `limit_members` in both extraction YAML files. Use separate output directories for test data. Restore `null` for full extraction, and do not mistake a small test cache for the complete dataset. See [data preparation](../docs/data-pipeline.md).
+
+## 3. Choose a training mode and train
+
+Edit the existing fields in `cfg/train_policy.yaml`:
+
+- `data_selection_mode: holdout`: reserves isolation, latest-date, and in-distribution validation sets; use it to compare models and settings.
+- `data_selection_mode: full_data`: includes all cache dates in training selection and skips training-time validation; use it for final training after selecting a configuration. Result filtering, loser augmentation, and replay sampling still apply.
+
+### Holdout: prepare validation selections first
+
+Configure `cfg/select_validation_decks.yaml`, then run:
+
+```bash
+python training/select_validation_decks.py
+```
+
+Review `outputs/select_validation_decks/selection_report.html`. The three selection CSVs under `data/` are updated only after selection and the combined audit succeed.
+
+To run without isolation validation, set all three paths to `null` in the training YAML. This does not disable latest-date or in-distribution validation:
+
+```yaml
+  isolation_validation:
+    deck_data: data/deck
+    selections:
+      deck_isolation: null
+      archetype_isolation: null
+      top_deck_archetype_isolation: null
+```
+
+`train.top_decks` contains named, complete 60-card lists for subgroup metrics. **All four validation subsets for each configured deck must be nonempty.** With limited data, remove unsuitable top-deck entries instead of treating an empty subset as a valid evaluation.
+
+### Start training
+
+```bash
 python -m training.train
+```
+
+The training entrypoint reads YAML rather than command-line hyperparameters. Start with a small model, a small batch, and a bounded `max_samples` trial. Keep `warmup_steps` below the total number of optimizer steps. For small datasets, disable loser augmentation or reduce its `recent_dates` to the available date range.
+
+With WandB disabled, checkpoints go to `train.output`. With WandB enabled, they go to the local run's `local-output/` directory. Resume supports complete epoch checkpoints only, not step or inference-only checkpoints.
+
+See [training and validation](../docs/training-validation.md) for the full rules and troubleshooting.
+
+## 4. Run standalone validation
+
+Edit `cfg/validate_policy.yaml`:
+
+- Point `validation.train_config` to the training YAML that defines the validation sets.
+- Fill `validation.ensemble.checkpoints` with actual checkpoint paths; the repository default list is not populated.
+- For one model, set `enabled: false` and provide one path. For an ensemble, set `true` and provide at least two distinct paths.
+
+```bash
 python -m validation.evaluate
 ```
 
-Both extractors create one output shard and one metadata file per ZIP. Existing
-valid shards are skipped, so interrupted runs are resumable. Deck extraction
-has no command-line parameters and reads `cfg/extract_deck_lists.yaml`; its input,
-output, worker count, smoke-test limit, and rebuild behavior are configured
-there. Training extraction reads `cfg/extract_training_samples.yaml`; its
-`workers`, `limit_members`, and `force` fields control parallelism, smoke tests,
-and rebuilding. Both players are written with an explicit `win`, `loss`, or
-`draw` result so training can select losing-player actions without extracting
-again. Replay actions are stored one step after the observation that produced them, so the
-extractor pairs `steps[t]` observations with `steps[t + 1]` actions and keeps
-only states whose player status is `ACTIVE`. Keep the worker count modest because ZIP decompression and JSON
-parsing are both CPU- and memory-intensive.
+The command prints CE loss and Top-1/3/5 accuracy. Standalone validation reconstructs holdout sets. Evaluating a full-data model on data it already trained on is not an independent generalization test.
 
-`training.build_feature_cache` reads `cfg/build_feature_cache.yaml` and converts the two-player
-JSONL records into model-ready mmap shards. `samples_per_shard` bounds the
-number of samples in each physical shard; completed compatible source caches
-are skipped, so cache construction is resumable. Encoder indices/offsets and
-values use compact 16-bit storage where safe, decoder values are omitted
-because they are always one, and only the current batch is materialized in
-ordinary CPU memory. Candidate selections cover every legal size from
-`maxCount` down to `minCount`, retain at most the first 64 combinations, and
-treat replay selection order as irrelevant. Each sample also stores a stable
-32-bit replay key used for validation splitting, a stable 64-bit key for
-its complete deck, the player's result, and the acting player's previous three
-actions. Cache schema 16 is required. Winner-only JSONL and older caches must
-both be rebuilt once with `extraction.training_samples` followed by
-`training.build_feature_cache`.
+## 5. Analyze the data (optional)
 
-Training has no command-line parameters. It reads `cfg/train_policy.yaml`, whose
-`train`, `model`, and `wandb` sections control cache paths, batching, network
-depth/width, precision, validation, and experiment tracking. Training always
-uses a compact global permutation (about 120 MB for 30 million samples), and
-every eligible training sample is consumed once per epoch. Use
-`train.max_samples` for bounded trials before setting it to `null`.
+| Analysis | Workflow | Configuration / output |
+|---|---|---|
+| Deck coverage | Open `eda/deck_eda.ipynb` and run all cells | Reuses `cfg/train_policy.yaml`; writes `outputs/deck_eda/` |
+| Deck trends | Run `python -m extraction.deck_trend_data`, then `python eda/deck_trends_eda.py` | Separate extraction and EDA YAML files; writes `outputs/deck_trends/` |
+| Replay timing | Run `python -m extraction.replay_timing`, then `python eda/replay_timing_eda.py` | Separate extraction and EDA YAML files; writes `outputs/replay_timing/` |
 
-`train.data_selection_mode` selects one of two competition training flows.
-`holdout` preserves the original validation-aware behavior described below:
-isolation, latest-date, and deterministic in-distribution validation replays
-are excluded from training and evaluated during training. `full_data` matches
-the final full-data run: winner samples from every cached date are eligible,
-qualified loser augmentation may include the latest date, and training-time
-validation is skipped. Both modes use the same model, optimizer, batching,
-checkpoint, and replay-level sampling code.
+Deck EDA needs deck CSVs, the training cache, replay manifests, and any selection CSVs enabled by the current holdout configuration. Trends and timing analysis do not require a trained model. Output filenames are fixed; rerunning replaces the corresponding results. See [EDA](../docs/eda.md) for metric definitions.
 
-Training first reads the three reviewed exact-deck selections configured under
-`train.isolation_validation`. It scans `data/deck/*.decks.csv`, so a selected
-deck used by either player moves the entire replay into its isolation
-validation set. The three isolation sets may overlap with one another, but
-their replay union is removed before every later split. This lookup is
-performed at training startup and does not require rebuilding feature caches.
-Set an individual path under `train.isolation_validation.selections` to
-`null` to disable that isolation group. If all three are `null`, training and
-standalone validation skip the isolation union while retaining latest-date
-and in-distribution validation.
+## 6. Export and submit
 
-After isolation, the numerically latest `month.day` source becomes the
-latest-date validation set. Validation arrays retain winner samples only.
-Older remaining replays are assigned as a group to
-training or in-distribution validation using `validation_ratio` and
-`validation_seed`; different states from the same replay can never cross
-these splits. Every `eval_every_steps` successful optimizer updates, the
-isolation union is forwarded once and accumulated into three independent
-Wandb groups: `val_deck_isolation/*`, `val_archetype_isolation/*`, and
-`val_top_deck_archetype_isolation/*`. Latest-date and in-distribution
-validation retain their existing CE loss and Top-1/3/5 metrics. Training logs
-use cross-epoch exponential moving averages controlled by `ema_alpha`.
-
-Each replay ZIP under `train.replay_episodes` must contain one `manifest.csv`.
-For every date independently, training reconstructs both player scores from
-`min_score` and `sum_score`, then uses `expert_validation_ratio` to find the
-top-score cutoff across all players. Ties at the cutoff are retained, and an
-episode is marked expert when either player reaches it. The existing
-winner-only samples from those episodes form expert subsets inside both
-validation sets. Base and expert metrics share one model forward pass and are
-logged separately as `val_in_distribution_expert/*` and
-`val_latest_expert/*`.
-
-`train.top_decks` accepts one or more complete 60-card lists. Card order is
-ignored but multiplicity is preserved. Configuration order defines `deck1`,
-`deck2`, and so on. Every deck receives separate in-distribution, latest-date,
-in-distribution expert, and latest-date expert validation groups, such as
-`val_in_distribution_deck1/*` and `val_in_distribution_expert_deck1/*`.
-Each group contains loss and top-1/3/5 accuracy. All subgroup metrics reuse
-their base validation batch's logits, so they do not add model forward passes.
-
-After isolation, latest-date, and in-distribution validation are fixed,
-`train.train_replay_ratio` selects a
-deterministic fraction of the remaining replays using `train_replay_seed`.
-Every selected replay keeps all of its samples, and the fixed subset is reused
-for every epoch. The realized sample ratio can differ from the replay ratio
-because games contain different numbers of decisions.
-
-`train.loser_augmentation` optionally adds high-skill losing-player actions
-after all validation replays are fixed. `recent_dates` selects the newest
-training dates after excluding the latest-date validation date. For each date
-independently, `expert_ratio` defines a participant-score cutoff; a replay's
-loser is eligible only when `min_score` reaches that cutoff, which ensures both
-players are above it. The same replay-level `train_replay_ratio` applies to
-both sides. Draws and every replay assigned to any validation split remain
-excluded. Startup logs show each date's cutoff and the replay/sample counts
-after every filter stage. This ratio is independent of
-`expert_validation_ratio`. After the one-time two-player extraction and
-schema-16 cache rebuild, changing loser-augmentation settings requires only a
-new training run.
-
-Standalone validation has no command-line parameters and reads
-`cfg/validate_policy.yaml`. Configure `validation.ensemble.checkpoints` with
-complete epoch checkpoints or inference-only checkpoints; every file must
-contain `model` and `config`. With `enabled: false`, exactly one path is
-required. With `enabled: true`, provide at least two distinct paths. Each
-architecture is reconstructed independently from its saved config, so model
-settings do not need to be duplicated in the validation YAML.
-
-Ensemble models may use different widths, depths, normalization modes, and
-projection settings, but their cache feature signatures and action spaces must
-match. For each batch, invalid actions are masked independently, each model's
-softmax is computed in FP32, and the legal-action probabilities are averaged
-with equal weight before CE loss and Top-1/3/5 are computed. All models remain
-resident on the selected device, so required GPU memory is approximately the
-sum of their parameter and inference-activation memory.
-
-`validation.train_config` points to the training YAML that defines the cache,
-replay archives, validation ratios and seed, isolation selections, and ordered
-top decks. The standalone command therefore rebuilds exactly the same holdout
-sets without duplicating their definitions in `cfg/validate_policy.yaml`. It prints CE loss
-and Top-1/3/5 accuracy for the isolation groups, latest-date base and
-subgroups, and in-distribution base and subgroups. Subgroups reuse their parent
-split's logits. The evaluator does not change the cache or create result files
-or remote experiment runs.
-
-`train.precision` accepts `fp32`, `fp16`, or `bf16`. FP16 uses autocast and
-gradient scaling; BF16 uses autocast without a scaler and requires a supported
-CUDA GPU. Model parameters and saved checkpoints remain FP32.
-
-`train.cg_path` must point to the parent directory containing the competition
-`cg` package. The default repository layout uses
-`../pokemon_tcg_ai_battle/sample_submission`.
-
-The root `version_name` can be reused as `${version_name}` in values such as
-`train.output` and `wandb.name`. The AdamW optimizer supports configurable
-`beta1`/`beta2`; its learning rate warms up linearly for `warmup_steps`
-successful optimizer updates and then follows cosine decay to zero.
-`log_every_steps`, `eval_every_steps`, and `save_every_steps` all use successful
-optimizer steps. Epoch checkpointing remains controlled by
-`save_every_epoch`.
-
-`model.norm_mode` accepts `postnorm` or `prenorm`. PreNorm applies
-normalization before every encoder/decoder sublayer and adds a final encoder
-LayerNorm; PostNorm preserves the original notebook residual ordering.
-`model.transformer_activation` selects `relu`, tanh-approximate `gelu`, or
-`geglu` for Transformer FFNs only; all ordinary model MLPs retain ReLU.
-`model.transformer_dropout` supplies one probability to four independent
-switches. `dropout_embedding` applies LayerNorm and dropout to completed
-encoder tokens and decoder action queries. `dropout_attention_probs` applies
-dropout after attention softmax, `dropout_attention_output` applies it after
-the attention output projection and before the residual, and
-`dropout_ffn_output` applies it after the second FFN linear and before the
-residual. The custom encoder preserves the former TransformerEncoderLayer
-PreNorm/PostNorm ordering. ReLU with probability zero and all switches false
-is checkpoint-compatible with the old architecture; GEGLU changes the first
-FFN weight shape. These settings do not require feature-cache rebuilding.
-`model.summary_mlp_layers` and `model.card_mlp_layers` control the projection
-depths for numeric-summary tokens and static-card features. The first layer
-maps the input width to `d_model`; additional layers are
-`ReLU -> Linear(d_model, d_model)`. `model.card_mlp_scope: shared` keeps one
-static-card MLP for the whole model. `model.card_mlp_scope: region` gives each
-semantic card region its own MLP while sharing it among Pokemon, Tools, and
-Energy cards inside that region; decoder cards reuse the corresponding encoder
-region MLP. Setting `card_mlp_layers` to zero disables static-card embeddings
-while preserving all learned Card ID embeddings.
-
-The encoder has a 26-token base layout: eight bench slots per player, two
-active Pokémon, three dense summary tokens, separate discard tokens for both
-players, the own hand, remaining-deck estimate, and stadium. The own-player
-(69), opponent-player (71), and global/select (73) numeric summaries replace
-the old sparse summaries through independent `Linear(n, d_model)` projections.
-Missing bench slots remain in the fixed layout but are excluded from encoder
-self-attention and decoder cross-attention by a boolean key-padding mask.
-Prize counts, selection type, and selection context are one-hot encoded.
-`pokemon_appear_embedding` adds one shared three-state embedding (absent,
-present from an earlier turn, present this turn) to the 18 Bench/Active Pokemon
-tokens. Five `*_token_mlp_layers` settings control eight independent post-token
-MLPs: own/opponent Bench, Active, and discard plus own hand and own deck. The
-two sides share configured depths but not weights. `region_token_mlp_residual`
-selects `token + MLP(token)` or `MLP(token)` globally for these modules.
-Changing these features requires rebuilding the feature cache (schema 15), but
-does not require replay extraction again.
-
-The decoder stores each raw engine option once using eleven categorical fields:
-option type, selection context, candidate/target Card IDs, Attack ID, number,
-Energy count, player relation, area, in-play area, and special condition. Two
-routed Pokemon dynamic blocks (46 values total) and six attack-matchup values
-are projected separately and masked to exact zero when absent. Five remaining
-numeric values (index, Tool index, Energy index, in-play index, and relative
-option position) are projected by `model.option_numeric_mlp_layers`. Learned
-ID and categorical embeddings, static Card/Attack projections, and these
-numeric/dynamic projections are summed in `d_model` space.
-`model.option_token_mlp_layers: 0`
-uses that sum directly; positive values apply the standard projection MLP to
-each completed option token. Exact candidate action combinations are still
-enumerated up to 64, and their option tokens are summed before the
-cross-attention-only decoder. Rebuild the feature cache after feature-layout
-changes.
-
-`model.history_encoding` optionally appends one action-history token to the
-encoder. `basic` uses the previous three decisions' select type, select
-context, and selected option types; `structural` additionally uses normalized
-source/target areas, player relations, number/count, and special condition;
-`full` uses independent decoder-like Card, Attack, static, and dynamic
-features, while deliberately excluding all five option-position numerics.
-Historical options in a combination action are summed, one shared
-`history_action_mlp_layers` projection is applied at each of `[t-3,t-2,t-1]`,
-and their concatenation is mapped by `history_sequence_mlp_layers` to one
-token. All trainable history parameters are independent from the current-action
-decoder. Switching among `basic`, `structural`, and `full` reuses the same
-schema-16 cache.
-
-When WandB is enabled, checkpoints and history are written to
-`local-output/` beside that run's `files/` directory, keeping them inside the
-local run-ID folder without uploading model artifacts. When WandB is disabled,
-they are written under `train.output`.
-
-To continue an interrupted run from a completed epoch checkpoint, configure:
-
-```yaml
-train:
-  resume: true
-  resume_checkpoint: outputs/ver_1.6.0/checkpoints/epoch-002.pt
-  epochs: 5
-```
-
-Only `epoch-*.pt` training checkpoints are accepted. The checkpoint epoch is
-already complete, so the example continues with epochs 3 through 5; `epochs`
-is the final total rather than a number of additional epochs. Model, optimizer,
-learning-rate scheduler, FP16 scaler, EMA metrics, history, and optimizer step
-are restored. New checkpoints also preserve RNG state. Older epoch checkpoints
-without RNG state remain usable, but their dropout sequence is not bit-for-bit
-identical to an uninterrupted run. Inference-only and `step-*.pt` checkpoints
-cannot be used for resume.
-
-Open `notebooks/deck_eda.ipynb` after deck extraction. It reads the extracted-deck and
-`EN_Card_Data.csv` paths in its setup cell, then run top-to-bottom. The
-notebook classifies rule-based archetypes, assigns stable SHA-256 exact-deck
-IDs, and saves:
-
-- `data/deck_analysis/deck_summary.csv`
-- `data/deck_analysis/deck_similarity_pairs.csv`
-
-The similarity table contains every unordered exact-deck pair. It reports the
-minimum changed card slots and count-aware Weighted Jaccard similarity.
-
-Open `notebooks/select_validation_decks.ipynb` to inspect and roll the three
-isolation-validation groups. Its parameters live in
-`cfg/select_validation_decks.yaml`; it displays candidate and selected tables,
-runs the combined audit, and writes the existing files under `data/`:
-
-- `deck_isolation_selection.csv`
-- `archetype_isolation_selection.csv`
-- `top_deck_archetype_isolation_selection.csv`
-
-Extract replay-player timing data using `cfg/extract_replay_timing.yaml`, then
-generate the Replay Timing EDA using `cfg/replay_timing_eda.yaml`:
-
-```bash
-python -m extraction.replay_timing
-python notebooks/replay_timing_eda.py
-```
-
-Both configurations accept `date: latest` or an explicit date such as `8.15`.
-Extraction writes the dated player cache under `data/replay_timing/` and writes
-a dated error CSV only when replay errors occur. The EDA writes six fixed plots
-and three useful tables under `outputs/replay_timing/`. A successful rerun
-replaces those fixed outputs; a failed render leaves the previous complete
-results intact.
-
-To analyze Deck usage, matchup, and team-switching trends, first build the
-incremental per-date cache and then open the trend notebook:
-
-```bash
-python -m extraction.deck_trend_data
-python notebooks/deck_trends_eda.py
-```
-
-Configure extraction in `cfg/extract_deck_trend_data.yaml` and the three figures
-in `cfg/deck_trends_eda.yaml`. The line chart, Sankey, and matchup matrix each
-have independent date, interval, share, and score settings; line and matchup
-also configure mirror handling. Score mode accepts `all`, `min`, `max`, or
-`avg`. The script writes three PNGs plus line and matchup audit tables beneath
-`outputs/deck_trends/`. Their filenames are fixed, and a successful rerun
-replaces the existing outputs only after the complete set has rendered. Rerun
-the extractor after
-adding or replacing replay ZIP archives; with `force: false`, unchanged complete
-date shards are reused.
-
-Before Kaggle submission, edit `CHECKPOINT_PATH`, `OUTPUT_PATH`, and
-`PRECISION` at the top of `training/export_inference.py`, then strip the
-optimizer and other training-only state:
+Edit `CHECKPOINT_PATH`, `OUTPUT_PATH`, and `PRECISION` at the top of `training/export_inference.py`, then run:
 
 ```bash
 python training/export_inference.py
 ```
 
-The command writes `epoch-003.inference-fp16.pt` beside the source checkpoint
-when `OUTPUT_PATH` is `None`, and prints both sizes. `PRECISION` accepts
-`fp16`, `bf16`, or `fp32`. Upload this inference checkpoint as a Kaggle
-Dataset, then attach it to
-`kaggle_submission_imitation_agent.ipynb` together with a Dataset containing
-the `cg` directory. In the first code cell, set the exact `MODEL_PATH`,
-`CG_PATH`, and the agent's 60-card `DECK`, then run all cells.
-The notebook reads width, FFN size, attention heads, encoder/decoder depth,
-normalization mode, static-card projections, and action-history mode from the checkpoint;
-these architecture fields are not configured twice. It embeds the inference
-code, including the 26-token base encoder layout and optional history token, and creates
-`/kaggle/working/submission.tar.gz`.
+Attach the inference checkpoint and competition `cg` package as Kaggle Datasets to the [submission notebook](kaggle_submission_imitation_agent.ipynb). Set the model path, engine path, and 60-card deck, then run it to generate `submission.tar.gz`. See [inference submission](../docs/submission.md) for details and limitations.
 
-## Training records
+## Interpreting results
 
-Each deck cache contains only two rows per replay: the two complete sorted
-60-card lists plus the final reward/result needed by deck win-rate EDA. It
-does not save observations, steps, actions, or per-card rows.
-
-Each line in `data/training/<date>.jsonl.gz` contains the episode id, player,
-full 60-card deck, active observation, and the selected option indices recorded
-in the following replay step. Extraction schema 3 is required by the cache
-builder; older JSONL files and all feature caches built from them must be
-rebuilt.
+Validation action accuracy is not the same as game win rate, and data-volume statistics alone cannot establish a model bottleneck. This guide does not claim a final competition score or ablation outcome; interpret results using the corresponding checkpoint, configuration, and experiment records.

@@ -124,7 +124,7 @@ def test_submission_notebook_is_valid_json() -> None:
 
 def test_deck_eda_notebook_starts_with_census_and_similarity() -> None:
     notebook = json.loads(
-        (PROJECT_ROOT / "notebooks" / "deck_eda.ipynb").read_text(
+        (PROJECT_ROOT / "eda" / "deck_eda.ipynb").read_text(
             encoding="utf-8"
         )
     )

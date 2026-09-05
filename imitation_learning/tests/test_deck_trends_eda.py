@@ -11,7 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import pytest
 
-from notebooks.deck_trends_eda import (
+from eda.deck_trends_eda import (
     CONFIG_PATH,
     FIGURE_FILENAMES,
     TABLE_FILENAMES,
@@ -71,7 +71,7 @@ def test_missing_staged_artifact_preserves_previous_outputs(tmp_path: Path) -> N
 
 
 def test_pure_python_eda_replaces_notebook() -> None:
-    assert (PROJECT_ROOT / "notebooks" / "deck_trends_eda.py").is_file()
+    assert (PROJECT_ROOT / "eda" / "deck_trends_eda.py").is_file()
     assert not (PROJECT_ROOT / "notebooks" / "deck_trends.ipynb").exists()
     assert (PROJECT_ROOT / "cfg" / "extract_deck_trend_data.yaml").is_file()
     assert (PROJECT_ROOT / "cfg" / "deck_trends_eda.yaml").is_file()

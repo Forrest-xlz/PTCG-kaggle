@@ -1160,7 +1160,9 @@ class MmapFeatureDataset:
             tuple[int, int], AbstractSet[int]
         ]
         | None = None,
+        top_deck_names: tuple[str, ...] = (),
     ) -> DatasetSplits:
+        from validation.deck_names import deck_label
         if not 0 < validation_ratio < 1:
             raise ValueError("validation_ratio must be strictly between 0 and 1")
         if not 0 < train_replay_ratio <= 1:
@@ -1490,25 +1492,25 @@ class MmapFeatureDataset:
                 )
             named_masks = {
                 **{
-                    f"in-distribution deck{index}": mask
+                    f"in-distribution {deck_label(index, top_deck_names)}": mask
                     for index, mask in enumerate(
                         in_distribution_top_deck_masks, start=1
                     )
                 },
                 **{
-                    f"in-distribution expert deck{index}": mask
+                    f"in-distribution expert {deck_label(index, top_deck_names)}": mask
                     for index, mask in enumerate(
                         in_distribution_expert_top_deck_masks, start=1
                     )
                 },
                 **{
-                    f"latest-date deck{index}": mask
+                    f"latest-date {deck_label(index, top_deck_names)}": mask
                     for index, mask in enumerate(
                         latest_top_deck_masks, start=1
                     )
                 },
                 **{
-                    f"latest-date expert deck{index}": mask
+                    f"latest-date expert {deck_label(index, top_deck_names)}": mask
                     for index, mask in enumerate(
                         latest_expert_top_deck_masks, start=1
                     )

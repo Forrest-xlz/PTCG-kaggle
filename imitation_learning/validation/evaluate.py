@@ -137,13 +137,14 @@ def resolve_device(value: str) -> torch.device:
     return device
 
 
-def evaluation_specs(splits) -> tuple[EvaluationSpec, ...]:
+def evaluation_specs(splits, top_deck_names=()) -> tuple[EvaluationSpec, ...]:
     latest_masks = {
         "val_latest_expert": splits.latest_expert_mask,
         **top_deck_subgroup_masks(
             "val_latest",
             splits.latest_top_deck_masks,
             splits.latest_expert_top_deck_masks,
+            top_deck_names,
         ),
     }
     in_distribution_masks = {
@@ -152,6 +153,7 @@ def evaluation_specs(splits) -> tuple[EvaluationSpec, ...]:
             "val_in_distribution",
             splits.in_distribution_top_deck_masks,
             splits.in_distribution_expert_top_deck_masks,
+            top_deck_names,
         ),
     }
     specs = [
@@ -233,6 +235,7 @@ def _build_splits(
             for date, info in expert_dates.items()
         },
         top_deck_keys=top_deck_keys,
+        top_deck_names=settings.top_deck_names,
         train_replay_ratio=1.0,
         train_replay_seed=0,
         isolation_episode_keys=(
@@ -325,7 +328,7 @@ def main() -> None:
     try:
         splits, isolation_sets, expert_dates = _build_splits(dataset, settings)
         _print_split_context(splits, isolation_sets, expert_dates)
-        for spec in evaluation_specs(splits):
+        for spec in evaluation_specs(splits, settings.top_deck_names):
             result = evaluate_dataset(
                 models=models,
                 ensemble_enabled=settings.ensemble_enabled,

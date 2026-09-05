@@ -121,6 +121,7 @@ class TrainSettings:
     train_replay_ratio: float
     train_replay_seed: int
     grad_clip_norm: float
+    top_deck_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -309,6 +310,8 @@ def load_settings(path: Path = CONFIG_PATH) -> ExperimentSettings:
 
     raw = interpolate(raw)
     train_raw = dict(raw["train"])
+    from validation.deck_names import parse_top_decks
+    train_raw["top_decks"], train_raw["top_deck_names"] = parse_top_decks(train_raw["top_decks"])
     loser_raw = train_raw.pop("loser_augmentation", None)
     if not isinstance(loser_raw, dict):
         raise ValueError("train.loser_augmentation must be a mapping")
@@ -963,19 +966,22 @@ def top_deck_subgroup_masks(
     scope: str,
     deck_masks: tuple[np.ndarray, ...],
     expert_deck_masks: tuple[np.ndarray, ...],
+    names: tuple[str, ...] = (),
 ) -> dict[str, np.ndarray]:
     if len(deck_masks) != len(expert_deck_masks):
         raise ValueError("top-deck and expert top-deck masks must align")
+    from validation.deck_names import deck_label
     result: dict[str, np.ndarray] = {}
     for deck_index, (deck_mask, expert_mask) in enumerate(
         zip(deck_masks, expert_deck_masks), start=1
     ):
-        result[f"{scope}_deck{deck_index}"] = deck_mask
-        result[f"{scope}_expert_deck{deck_index}"] = expert_mask
+        result[f"{scope}_{deck_label(deck_index, names)}"] = deck_mask
+        result[f"{scope}_expert_{deck_label(deck_index, names)}"] = expert_mask
     return result
 
 
 def main() -> None:
+    from validation.deck_names import deck_label
     settings = load_settings()
     train_cfg, model_cfg, wandb_cfg = (
         settings.train,
@@ -1111,6 +1117,7 @@ def main() -> None:
                     for date, info in expert_dates.items()
                 },
                 top_deck_keys=top_deck_keys,
+                top_deck_names=train_cfg.top_deck_names,
                 train_replay_ratio=train_cfg.train_replay_ratio,
                 train_replay_seed=train_cfg.train_replay_seed,
                 isolation_episode_keys=(
@@ -1268,14 +1275,17 @@ def main() -> None:
             for deck_index in range(1, len(top_deck_keys) + 1):
                 metric_namespaces.extend(
                     [
-                        f"val_in_distribution_deck{deck_index}/*",
-                        f"val_in_distribution_expert_deck{deck_index}/*",
-                        f"val_latest_deck{deck_index}/*",
-                        f"val_latest_expert_deck{deck_index}/*",
+                        f"val_in_distribution_{deck_label(deck_index, train_cfg.top_deck_names)}/*",
+                        f"val_in_distribution_expert_{deck_label(deck_index, train_cfg.top_deck_names)}/*",
+                        f"val_latest_{deck_label(deck_index, train_cfg.top_deck_names)}/*",
+                        f"val_latest_expert_{deck_label(deck_index, train_cfg.top_deck_names)}/*",
                     ]
                 )
         for namespace in metric_namespaces:
             wandb.define_metric(namespace, step_metric="optimizer_step")
+        if use_holdout and isolation_sets is not None:
+            for namespace in isolation_sets.by_namespace:
+                wandb.define_metric(f"{namespace}/*", step_metric="optimizer_step")
 
     output_root = resolve_output_root(train_cfg, wandb_run)
     checkpoint_dir = output_root / "checkpoints"
@@ -1374,16 +1384,16 @@ def main() -> None:
                 )
                 top_deck_data_metrics.update(
                     {
-                        f"data/val_in_distribution_deck{deck_index}_samples": int(
+                        f"data/val_in_distribution_{deck_label(deck_index, train_cfg.top_deck_names)}_samples": int(
                             in_distribution_mask.sum()
                         ),
-                        f"data/val_in_distribution_expert_deck{deck_index}_samples": int(
+                        f"data/val_in_distribution_expert_{deck_label(deck_index, train_cfg.top_deck_names)}_samples": int(
                             in_distribution_expert_mask.sum()
                         ),
-                        f"data/val_latest_deck{deck_index}_samples": int(
+                        f"data/val_latest_{deck_label(deck_index, train_cfg.top_deck_names)}_samples": int(
                             latest_mask.sum()
                         ),
-                        f"data/val_latest_expert_deck{deck_index}_samples": int(
+                        f"data/val_latest_expert_{deck_label(deck_index, train_cfg.top_deck_names)}_samples": int(
                             latest_expert_mask.sum()
                         ),
                     }
@@ -1519,6 +1529,7 @@ def main() -> None:
                         "val_latest",
                         splits.latest_top_deck_masks,
                         splits.latest_expert_top_deck_masks,
+                        train_cfg.top_deck_names,
                     ),
                 },
             ),
@@ -1532,6 +1543,7 @@ def main() -> None:
                         "val_in_distribution",
                         splits.in_distribution_top_deck_masks,
                         splits.in_distribution_expert_top_deck_masks,
+                        train_cfg.top_deck_names,
                     ),
                 },
             ),

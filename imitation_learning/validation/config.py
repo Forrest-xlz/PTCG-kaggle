@@ -36,6 +36,7 @@ class ValidationSettings:
     isolation_deck_data: Path
     isolation_selections: dict[str, Path]
     top_decks: tuple[tuple[int, ...], ...]
+    top_deck_names: tuple[str, ...] = ()
 
 
 def _mapping(value: Any, name: str) -> Mapping[str, Any]:
@@ -195,23 +196,8 @@ def load_settings(path: Path = CONFIG_PATH) -> ValidationSettings:
         if raw_selections[name] is not None
     }
 
-    raw_top_decks = _required(train, "top_decks", "train")
-    if not isinstance(raw_top_decks, list) or not raw_top_decks:
-        raise ValueError("train.top_decks must be a non-empty list")
-    top_decks: list[tuple[int, ...]] = []
-    for index, raw_deck in enumerate(raw_top_decks, start=1):
-        if not isinstance(raw_deck, list) or len(raw_deck) != 60:
-            raise ValueError(f"train.top_decks[{index}] must contain 60 cards")
-        if any(
-            isinstance(card_id, bool)
-            or not isinstance(card_id, int)
-            or card_id < 0
-            for card_id in raw_deck
-        ):
-            raise ValueError(
-                f"train.top_decks[{index}] must contain non-negative card IDs"
-            )
-        top_decks.append(tuple(raw_deck))
+    from validation.deck_names import parse_top_decks
+    top_decks, top_deck_names = parse_top_decks(_required(train, "top_decks", "train"))
 
     return ValidationSettings(
         version_name=version_name,
@@ -245,5 +231,6 @@ def load_settings(path: Path = CONFIG_PATH) -> ValidationSettings:
             "train.isolation_validation.deck_data",
         ),
         isolation_selections=selections,
-        top_decks=tuple(top_decks),
+        top_decks=tuple(tuple(deck) for deck in top_decks),
+        top_deck_names=top_deck_names,
     )

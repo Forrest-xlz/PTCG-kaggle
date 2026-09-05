@@ -69,6 +69,13 @@ def _load_selected_decks(
             deck = _parse_deck(row["card_ids"], source)
             key = stable_deck_key(deck)
             keys.add(key)
+            if str(namespace).endswith("top_deck_archetype_isolation") and "name" in row:
+                name = row["name"]
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError(f"{path}:{row_number} requires a non-empty name")
+                if any(c in name for c in '/\\()\n\r'):
+                    raise ValueError(f"Invalid isolation name: {name!r}")
+                selected.setdefault(f"{namespace}_deck({name.strip()})", set()).add(key)
             label = str(row.get("deck_id", key))
             labels.setdefault(key, set()).add(label)
         selected[str(namespace)] = keys
