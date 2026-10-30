@@ -1,0 +1,17 @@
+# Experiment branches and W&B runs
+
+The repository keeps a small set of named experiment snapshots alongside `main`. A branch records the implementation available for an experiment; **the W&B run config and its recorded Git commit identify the actual training invocation**. Several experiments changed settings without creating a new branch, so one branch can correspond to several runs. The checked-in [write-up](../kaggle_writeup.md) and [CE report](solution-experiment-results.md) explain the comparisons.
+
+| Branch | Former ref / source commit | Experiment | Representative W&B runs |
+|---|---|---|---|
+| `exp/E001-data-model-scaling` | `baseline`, `d7a5f0e` | V1 Tiny/Small/Base models and replay fractions | [Tiny full](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/34onyy62), [Small 1%](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/f1ecq0x8), [Small full](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/izjmqifz), [Base full](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/erqfsfu1) |
+| `exp/E002-effect-context-card` | `ver_1.4.0`, `99fd69e` | Effect and context-card option features | [With both roles](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8kju2961), [matched control](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/no12vhhe) |
+| `exp/E003-three-action-history` | `ver_1.4.3`, `efd3292` | Off/basic/structural/full history encodings | [Full](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/hcfee8qy), [basic](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/thosp9qs), [off](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/msrhj27e) |
+| `exp/E004-geglu-dropout` | `ver_1.4.5`, `0420d38` | GELU/GEGLU and dropout | [GELU](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/xg77g879), [GEGLU](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/dmae120r), [full dropout](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8gj1gsxn) |
+| `exp/E005-bc-holdout-control` | `origin/ver_1.6.1`, `c8940d2` | Mature BC pipeline and multitask control | [Pure BC control](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/dxinbrdj) |
+| `exp/E006-multitask-auxiliary` | `ver_1.13.0`, `025bcc4` | CLS representation and auxiliary next-decision, opponent-deck, prize tasks | [Multitask](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8o9qul5p) |
+| `exp/E007-full-data-training` | `origin/ver_final_0`, `b4aca2f` | Full-data BC training workflow | [3+3 full-data run](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/owgh6x7l), [4+4 full-data run](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/13nt1b23) |
+
+The final two checkpoints are documented by [submission.ipynb](../submission.ipynb) and [kaggle_writeup.md](../kaggle_writeup.md). The two listed full-data W&B runs record Git commit `63b022c...`, which is **not present among the local branch heads**; the `E007` branch is the available full-data training code snapshot, not an asserted byte-for-byte source of those checkpoints.
+
+The W&B project is [ptcg_bc](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc). Experiment figures use four CE series: `train/ema_loss`, `val_in_distribution/loss`, `val_latest/loss`, and `val_latest_expert/loss`.

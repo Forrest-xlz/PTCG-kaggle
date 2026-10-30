@@ -2,6 +2,9 @@
 
 Start with the [quick-start guide](../imitation_learning/README.md). These documents describe the current implementation, not historical development plans, migration steps, or unverified experimental conclusions.
 
+For the submitted competition solution and its evidence, see the [full write-up](../kaggle_writeup.md) and [experiment results](solution-experiment-results.md).
+The [experiment branch map](experiment-branches.md) connects retained branch snapshots to representative W&B runs.
+
 | Guide | Contents |
 |---|---|
 | [Data pipeline](data-pipeline.md) | Replays, extraction, caches, formats, and rebuilding |

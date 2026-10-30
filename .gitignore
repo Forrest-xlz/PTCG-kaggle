@@ -9,6 +9,8 @@ replay_episodes/
 output/
 outputs/
 *.pt
+archive*.zip
+submission.tar.gz
 
 # Python caches
 __pycache__/
