@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="800" viewBox="0 0 1440 800" role="img" aria-labelledby="title desc">
+  <title id="title">Final PTCG behavior-cloning Transformer architecture</title>
+  <desc id="desc">Visible game state and three previous actions become encoder tokens. Current select question and legal options become candidate action queries. A cross-attention-only decoder scores each candidate. Two models of different depths average their probabilities before a legality mask and argmax.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/></marker>
+    <style>
+      text{font-family:Arial,Helvetica,sans-serif;fill:#17233b} .title{font-size:27px;font-weight:700} .sub{font-size:15px;fill:#475569} .label{font-size:18px;font-weight:700} .body{font-size:15px} .small{font-size:13px;fill:#475569} .box{stroke-width:2;rx:14} .arrow{fill:none;stroke:#475569;stroke-width:2.5;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1440" height="800" fill="#f8fafc"/>
+  <text x="55" y="54" class="title">Final policy: state encoder + legal-action cross-attention decoder</text>
+  <text x="55" y="82" class="sub">Shared feature design; model A has 3 encoder + 3 decoder layers, model B has 4 + 4 layers. Both use width 512 and 8 heads.</text>
+
+  <rect x="45" y="125" width="350" height="130" class="box" fill="#dbeafe" stroke="#60a5fa"/>
+  <text x="68" y="159" class="label">Visible observation</text>
+  <text x="68" y="189" class="body">Bench × 16 · Active × 2 · summaries</text>
+  <text x="68" y="215" class="body">discards · own hand / deck · stadium</text>
+  <text x="68" y="237" class="small">No opponent hidden hand or prize identities</text>
+
+  <rect x="45" y="302" width="350" height="123" class="box" fill="#dbeafe" stroke="#60a5fa"/>
+  <text x="68" y="337" class="label">Previous three actions</text>
+  <text x="68" y="366" class="body">option features → per-action MLP</text>
+  <text x="68" y="392" class="body">chronological concat → sequence MLP</text>
+
+  <rect x="495" y="175" width="333" height="202" class="box" fill="#e0e7ff" stroke="#818cf8"/>
+  <text x="521" y="210" class="label">State token construction</text>
+  <text x="521" y="242" class="body">weighted embedding bags + dense MLPs</text>
+  <text x="521" y="269" class="body">static card / attack projections</text>
+  <text x="521" y="296" class="body">26 base tokens + 1 history token</text>
+  <text x="521" y="326" class="small">mask absent Bench / missing history</text>
+  <text x="521" y="350" class="small">LayerNorm + embedding dropout</text>
+
+  <rect x="924" y="198" width="421" height="128" class="box" fill="#e0e7ff" stroke="#818cf8"/>
+  <text x="951" y="234" class="label">Transformer state encoder</text>
+  <text x="951" y="264" class="body">self-attention → GEGLU FFN · PostNorm</text>
+  <text x="951" y="291" class="small">3 layers (A) or 4 layers (B); state memory</text>
+
+  <rect x="45" y="499" width="350" height="123" class="box" fill="#dcfce7" stroke="#4ade80"/>
+  <text x="68" y="534" class="label">Select question + legal options</text>
+  <text x="68" y="563" class="body">type / context; card, attack, position,</text>
+  <text x="68" y="589" class="body">static and dynamic option features</text>
+
+  <rect x="495" y="467" width="333" height="188" class="box" fill="#dcfce7" stroke="#4ade80"/>
+  <text x="521" y="502" class="label">Candidate action queries</text>
+  <text x="521" y="532" class="body">embed each engine option once</text>
+  <text x="521" y="558" class="body">sum options in each legal combination</text>
+  <text x="521" y="585" class="body">up to 64 candidate actions</text>
+  <text x="521" y="620" class="small">one query vector per candidate</text>
+
+  <rect x="924" y="444" width="421" height="137" class="box" fill="#fef3c7" stroke="#fbbf24"/>
+  <text x="951" y="480" class="label">Action decoder + linear scorer</text>
+  <text x="951" y="510" class="body">query cross-attends to encoded state</text>
+  <text x="951" y="537" class="body">GEGLU FFN → one logit / candidate</text>
+  <text x="951" y="562" class="small">No candidate-to-candidate self-attention</text>
+
+  <rect x="924" y="654" width="421" height="105" class="box" fill="#fee2e2" stroke="#fb7185"/>
+  <text x="951" y="689" class="label">Final submission decision</text>
+  <text x="951" y="718" class="body">softmax A/B → 50:50 mean → KO mask → argmax</text>
+  <text x="951" y="742" class="small">No value head or search loop</text>
+
+  <path class="arrow" d="M 395 190 H 480"/><path class="arrow" d="M 395 363 H 447 Q 468 363 480 330"/>
+  <path class="arrow" d="M 828 277 H 909"/><path class="arrow" d="M 395 560 H 480"/>
+  <path class="arrow" d="M 828 561 H 909"/><path class="arrow" d="M 1135 326 V 429"/>
+  <path class="arrow" d="M 1135 581 V 639"/>
+</svg>
