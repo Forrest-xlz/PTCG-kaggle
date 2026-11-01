@@ -231,13 +231,13 @@ Adding dropout to GEGLU raised training CE by 0.0880 but lowered the three valid
 
 ![Activation and dropout CE comparisons](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/04_activation_dropout.png)
 
-### 5. Adding auxiliary tasks brought only small gains
+### 5. Multitask learning helped early, with mixed late results
 
 I wondered whether extra training targets could help the encoder understand game state beyond the immediate action. Inspired partly by the multitask idea in [ExT5](https://arxiv.org/abs/2111.10952), I added predictions for the next decision, the opponent's deck, and the final own prize count.
 
 These three auxiliary losses used weights 0.08, 0.08, and 0.14. I had also considered predicting opponent strength, but did not include it in this run.
 
-Against pure behavior cloning at step 19,980, multitask training improved the four action CE values by 0.0011, 0.0021, 0.0037, and 0.0141. The gain was small and narrowed later in training, so the final checkpoints use the simpler action-only objective.
+Early and mid-training, the multitask model had lower main-task training CE than pure behavior cloning. That lead shrank from about 0.0065 at step 1,080 to 0.0011 at step 19,980. At the shared final step, the four CE measures in the figure were still slightly better for multitask (by 0.0011, 0.0021, 0.0037, and 0.0141), but its top-deck-archetype isolation CE was worse: 0.578 versus 0.563. The late result was mixed rather than a clear win, so I kept the simpler action-only objective for the submission.
 
 ![Multitask versus pure behavior cloning](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/05_multitask.png)
 
