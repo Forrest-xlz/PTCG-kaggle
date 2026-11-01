@@ -7,8 +7,8 @@ Complete histories for all 98 runs are backed up locally in `outputs/solution_an
 and indexed by `outputs/solution_analysis/all_history_manifest.json`.
 
 Keep 22 runs: the six plotted comparisons and the two final training runs.
-Cleanup scope: 76 runs; 1 deleted, 75 still pending.
-The remaining remote deletions require explicit approval of this exact list.
+Cleanup scope: 76 runs; 76 deleted, 0 still pending.
+All nonretained runs were removed from W&B. Their metadata and histories remain in the local backup.
 A `crashed` state alone was not used to decide whether to keep a run.
 Run URLs use permanent IDs, so renaming does not break the write-up links.
 
@@ -39,87 +39,87 @@ Run URLs use permanent IDs, so renaming does not break the write-up links.
 | E007 | [owgh6x7l](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/owgh6x7l) | `E007-final-full-data-3x3` | `ver_final_0_d2_33` |
 | E007 | [13nt1b23](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/13nt1b23) | `E007-final-full-data-4x4` | `ver_final_0_d2_44` |
 
-## Proposed deletions
+## Deleted nonretained runs
 
-The table is the exact deletion scope for review. `Pending` rows remain on W&B.
+The table records the deleted runs; their links no longer resolve on W&B.
 `Latest CE` is the last recorded latest-date CE where present; it is provided to identify
 a run, not as a quality threshold.
 
 | Run ID | Current or former name | Status | State | Steps | Latest CE | Reason |
 |---|---|---|---:|---:|---:|---|
 | [c7rt74i8](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/c7rt74i8) | `ver_` | Deleted | finished | 30 | — | 30 steps; no validation CE |
-| [fv7185bx](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/fv7185bx) | `ver_final_0_d1_33` | Pending | crashed | 22,220 | — | superseded full-data training run |
-| [v2saapwi](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/v2saapwi) | `ver_final_0_d1_44` | Pending | crashed | 22,040 | — | superseded full-data training run |
-| [onv84ct6](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/onv84ct6) | `ver_1.16.0` | Pending | crashed | 5,720 | 0.7356 | exploratory variant outside the retained comparisons |
-| [rm0nyfg8](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/rm0nyfg8) | `value_v1` | Pending | crashed | 3,240 | — | incomplete run; no latest-date validation CE |
-| [ccolfre1](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/ccolfre1) | `expert_classifier_1` | Pending | crashed | 1,460 | — | incomplete run; no latest-date validation CE |
-| [1d5895of](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/1d5895of) | `ver_1.15.0` | Pending | crashed | 3,160 | 0.7515 | exploratory variant outside the retained comparisons |
-| [a7dtzcqf](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/a7dtzcqf) | `ver_1.6.5_d3_33_15_0.15` | Pending | crashed | 19,060 | 0.7070 | exploratory variant outside the retained comparisons |
-| [tos45t7i](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/tos45t7i) | `ver_final_0_33` | Pending | finished | 22,690 | — | superseded full-data training run |
-| [6rwnymph](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/6rwnymph) | `ver_1.9.1` | Pending | finished | 15,890 | 0.6996 | exploratory variant outside the retained comparisons |
-| [mi6k4dux](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/mi6k4dux) | `ver_1.6.4` | Pending | finished | 16,810 | 0.6909 | exploratory variant outside the retained comparisons |
-| [fa1bsnvd](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/fa1bsnvd) | `ver_1.9.0` | Pending | crashed | 15,660 | 0.6986 | exploratory variant outside the retained comparisons |
-| [vd8mlojl](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/vd8mlojl) | `ver_1.6.3_add_6.20_6.26` | Pending | finished | 20,560 | 0.6943 | exploratory variant outside the retained comparisons |
-| [xeevh5ge](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/xeevh5ge) | `ver_1.11.0` | Pending | crashed | 550 | 0.8425 | exploratory variant outside the retained comparisons |
-| [sfdmrkye](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/sfdmrkye) | `ver_1.6.3_lr_1.5e-4` | Pending | finished | 18,625 | 0.6860 | exploratory variant outside the retained comparisons |
-| [4kafwse0](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/4kafwse0) | `ver_1.6.3_lr_6e-4` | Pending | crashed | 1,490 | 0.7901 | exploratory variant outside the retained comparisons |
-| [8g316lpz](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8g316lpz) | `ver_1.6.2_53_0.6` | Pending | crashed | 2,000 | 0.7540 | exploratory variant outside the retained comparisons |
-| [g6aq5i0r](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/g6aq5i0r) | `ver_1.9.0` | Pending | crashed | 4,320 | 0.7293 | exploratory variant outside the retained comparisons |
-| [z9cygoth](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/z9cygoth) | `finetune_deck1_indistribution_0.01` | Pending | finished | 595 | 0.9333 | exploratory variant outside the retained comparisons |
-| [91kkpnoj](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/91kkpnoj) | `finetune_deck1` | Pending | crashed | 520 | 0.7209 | exploratory variant outside the retained comparisons |
-| [ecywffe5](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/ecywffe5) | `ver_1.7.0_33_only_deck_expert_weights_0` | Pending | crashed | 12,360 | 0.6957 | exploratory variant outside the retained comparisons |
-| [jm674nwr](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/jm674nwr) | `ver_1.7.0_33_gpt_baseline` | Pending | finished | 16,650 | 0.8029 | exploratory variant outside the retained comparisons |
-| [jm6s3iho](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/jm6s3iho) | `ver_1.6.2_44_0.6` | Pending | finished | 18,625 | 0.7059 | exploratory variant outside the retained comparisons |
-| [e64atih3](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/e64atih3) | `ver_1.6.2_44` | Pending | finished | 18,875 | 0.6976 | exploratory variant outside the retained comparisons |
-| [javodeq0](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/javodeq0) | `ver_1.6.1_1.0` | Pending | crashed | 18,200 | 0.6908 | exploratory variant outside the retained comparisons |
-| [aw3zs5gl](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/aw3zs5gl) | `ver_1.6.1_4_4` | Pending | crashed | 4,220 | 0.7312 | exploratory variant outside the retained comparisons |
-| [xu3q8tz9](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/xu3q8tz9) | `ver_1.6.0_resume` | Pending | finished | 18,525 | 0.6924 | exploratory variant outside the retained comparisons |
-| [kjg7umq8](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/kjg7umq8) | `ver_1.6.0` | Pending | crashed | 10,110 | 0.6904 | exploratory variant outside the retained comparisons |
-| [d6rku2vf](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/d6rku2vf) | `ver_1.4.5_geglu_dropout_without_softmax` | Pending | finished | 12,160 | 0.6955 | exploratory variant outside the retained comparisons |
-| [jjgf3gtf](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/jjgf3gtf) | `ver_1.4.5_geglu_dropout_all` | Pending | finished | 4,440 | 0.6942 | exploratory variant outside the retained comparisons |
-| [23jk0uwa](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/23jk0uwa) | `ver_1.4.5` | Pending | finished | 270 | — | 270 steps; no validation CE |
-| [80kxcquv](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/80kxcquv) | `ver_1.4.4_only_dynamic` | Pending | crashed | 2,680 | 0.6985 | exploratory variant outside the retained comparisons |
-| [sw2e7jpo](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/sw2e7jpo) | `ver_1.4.4_only_pre_evol` | Pending | finished | 1,020 | 0.7776 | exploratory variant outside the retained comparisons |
-| [c5fky1mi](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/c5fky1mi) | `ver_1.4.3_full_22` | Pending | crashed | 4,320 | 0.6930 | exploratory variant outside the retained comparisons |
-| [46y842oz](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/46y842oz) | `ver_1.4.3_basic_13` | Pending | finished | 810 | 0.7883 | exploratory variant outside the retained comparisons |
-| [7w0mlaja](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/7w0mlaja) | `ver_1.4.3_basic_22` | Pending | crashed | 890 | 0.7694 | exploratory variant outside the retained comparisons |
-| [7s303sv6](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/7s303sv6) | `ver_1.4.2_only_position_and_index_ablation` | Pending | finished | 12,610 | 0.7396 | exploratory variant outside the retained comparisons |
-| [24yjij7o](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/24yjij7o) | `ver_1.4.2_only_tool_energy_index_ablation` | Pending | finished | 210 | — | 210 steps; no validation CE |
-| [fyyinx2t](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/fyyinx2t) | `ver_1.4.2_only_inplay_index_ablation` | Pending | finished | 270 | — | 270 steps; no validation CE |
-| [7e4n6axe](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/7e4n6axe) | `ver_1.4.2_only_index_ablation` | Pending | finished | 270 | — | 270 steps; no validation CE |
-| [tg3qoip3](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/tg3qoip3) | `ver_1.4.2_only_relative_position_ablation` | Pending | finished | 330 | 0.8509 | exploratory variant outside the retained comparisons |
-| [0tkbxll6](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/0tkbxll6) | `ver_1.4.2_all_fasle_ablation` | Pending | finished | 190 | — | 190 steps; no validation CE |
-| [mwhjy2ck](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/mwhjy2ck) | `ver_1.4.2_tool_energy_index_ablation` | Pending | finished | 270 | — | 270 steps; no validation CE |
-| [9p2zz8ap](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/9p2zz8ap) | `ver_1.4.2_inplay_index_ablation` | Pending | finished | 310 | 0.8506 | exploratory variant outside the retained comparisons |
-| [hp7euxcs](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/hp7euxcs) | `ver_1.4.2_index_ablation` | Pending | finished | 640 | 0.8004 | exploratory variant outside the retained comparisons |
-| [549y93b8](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/549y93b8) | `ver_1.4.2_relative_position_ablation` | Pending | finished | 900 | 0.8013 | exploratory variant outside the retained comparisons |
-| [3cwebo9b](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/3cwebo9b) | `ver_1.4.2_mlp31` | Pending | crashed | 7,110 | 0.6979 | exploratory variant outside the retained comparisons |
-| [3jmz4ldw](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/3jmz4ldw) | `ver_1.4.2_mlp22` | Pending | finished | 850 | 0.7894 | exploratory variant outside the retained comparisons |
-| [hu7k9nur](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/hu7k9nur) | `ver_1.4.1_mlp0` | Pending | finished | 450 | 0.8812 | exploratory variant outside the retained comparisons |
-| [rgpmb6d0](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/rgpmb6d0) | `ver_1.4.1_mlp1` | Pending | finished | 270 | — | 270 steps; no validation CE |
-| [asszmhwt](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/asszmhwt) | `ver_1.4.1_mlp2` | Pending | finished | 330 | 0.8902 | exploratory variant outside the retained comparisons |
-| [atbfpt2y](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/atbfpt2y) | `ver_1.3.7_encoder2_option0` | Pending | crashed | 270 | — | 270 steps; no validation CE |
-| [n2bht5j9](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/n2bht5j9) | `ver_1.3.7_encoder1_option0` | Pending | finished | 140 | — | 140 steps; no validation CE |
-| [8yprl0rs](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8yprl0rs) | `ver_1.3.6_residual_false_mlp2_option_mlp1` | Pending | crashed | 3,780 | 0.7283 | exploratory variant outside the retained comparisons |
-| [526cghc4](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/526cghc4) | `ver_1.3.6_residual_false_mlp2_option` | Pending | finished | 1,140 | 0.7911 | exploratory variant outside the retained comparisons |
-| [kit08kse](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/kit08kse) | `ver_1.3.6_residual_true_mlp4` | Pending | finished | 1,080 | 0.7916 | exploratory variant outside the retained comparisons |
-| [3ivpqaoz](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/3ivpqaoz) | `ver_1.3.6_residual_false_mlp1` | Pending | finished | 1,370 | 0.7798 | exploratory variant outside the retained comparisons |
-| [c0fcm9eu](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/c0fcm9eu) | `ver_1.3.6_residual_false_mlp3` | Pending | finished | 3,240 | 0.7524 | exploratory variant outside the retained comparisons |
-| [kp780yny](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/kp780yny) | `ver_1.3.5_313_42` | Pending | crashed | 5,780 | 0.7554 | exploratory variant outside the retained comparisons |
-| [x66lrjpm](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/x66lrjpm) | `ver_1.3.5_313_region_card_mlp` | Pending | finished | 6,480 | 0.7552 | exploratory variant outside the retained comparisons |
-| [2fu5x5pa](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/2fu5x5pa) | `ver_1.3.5_313` | Pending | finished | 8,810 | 0.7490 | exploratory variant outside the retained comparisons |
-| [butr1use](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/butr1use) | `ver_1.3.5_222` | Pending | finished | 10,260 | 0.7608 | exploratory variant outside the retained comparisons |
-| [vv5mogjq](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/vv5mogjq) | `ver_1.3.5_no_54card` | Pending | finished | 8,810 | 0.7580 | exploratory variant outside the retained comparisons |
-| [9t5til3g](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/9t5til3g) | `ver_1.3.4.1` | Pending | finished | 11,070 | 0.8058 | exploratory variant outside the retained comparisons |
-| [5drw0va0](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/5drw0va0) | `ver_1.3.4` | Pending | finished | 1,950 | 0.7911 | exploratory variant outside the retained comparisons |
-| [ru60136x](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/ru60136x) | `ver_1.3.3.2` | Pending | finished | 2,970 | 0.7699 | exploratory variant outside the retained comparisons |
-| [05mv925p](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/05mv925p) | `ver_1.3.3.1` | Pending | finished | 3,310 | 0.7650 | exploratory variant outside the retained comparisons |
-| [rp2jof8y](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/rp2jof8y) | `ver_1.3.3` | Pending | finished | 5,670 | 0.7539 | exploratory variant outside the retained comparisons |
-| [2dnerc61](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/2dnerc61) | `ver_1.3.2.1` | Pending | crashed | 8,290 | 0.7509 | exploratory variant outside the retained comparisons |
-| [etsmxplx](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/etsmxplx) | `ver_1.3.2` | Pending | crashed | 3,510 | 0.7673 | exploratory variant outside the retained comparisons |
-| [1kqgfx6l](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/1kqgfx6l) | `ver1.3.1` | Pending | finished | 4,150 | 0.7804 | exploratory variant outside the retained comparisons |
-| [5fq80uhn](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/5fq80uhn) | `ver_1.3.0` | Pending | crashed | 11,880 | 0.7911 | exploratory variant outside the retained comparisons |
-| [0tgypsin](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/0tgypsin) | `ver_1.2.0` | Pending | crashed | 12,150 | 0.9112 | exploratory variant outside the retained comparisons |
-| [mfpqtwwx](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/mfpqtwwx) | `ver_1.1_card_feature_ratio_0.7` | Pending | finished | 13,300 | 0.9260 | exploratory variant outside the retained comparisons |
-| [8o0t4jxw](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8o0t4jxw) | `ver_1.1_card_feature_ratio_0.5` | Pending | finished | 2,330 | 0.8835 | exploratory variant outside the retained comparisons |
-| [yi0b5wu6](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/yi0b5wu6) | `ver_1.1_card_feature_ratio_1.0` | Pending | finished | 9,720 | 0.8811 | exploratory variant outside the retained comparisons |
+| [fv7185bx](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/fv7185bx) | `ver_final_0_d1_33` | Deleted | crashed | 22,220 | — | superseded full-data training run |
+| [v2saapwi](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/v2saapwi) | `ver_final_0_d1_44` | Deleted | crashed | 22,040 | — | superseded full-data training run |
+| [onv84ct6](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/onv84ct6) | `ver_1.16.0` | Deleted | crashed | 5,720 | 0.7356 | exploratory variant outside the retained comparisons |
+| [rm0nyfg8](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/rm0nyfg8) | `value_v1` | Deleted | crashed | 3,240 | — | incomplete run; no latest-date validation CE |
+| [ccolfre1](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/ccolfre1) | `expert_classifier_1` | Deleted | crashed | 1,460 | — | incomplete run; no latest-date validation CE |
+| [1d5895of](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/1d5895of) | `ver_1.15.0` | Deleted | crashed | 3,160 | 0.7515 | exploratory variant outside the retained comparisons |
+| [a7dtzcqf](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/a7dtzcqf) | `ver_1.6.5_d3_33_15_0.15` | Deleted | crashed | 19,060 | 0.7070 | exploratory variant outside the retained comparisons |
+| [tos45t7i](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/tos45t7i) | `ver_final_0_33` | Deleted | finished | 22,690 | — | superseded full-data training run |
+| [6rwnymph](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/6rwnymph) | `ver_1.9.1` | Deleted | finished | 15,890 | 0.6996 | exploratory variant outside the retained comparisons |
+| [mi6k4dux](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/mi6k4dux) | `ver_1.6.4` | Deleted | finished | 16,810 | 0.6909 | exploratory variant outside the retained comparisons |
+| [fa1bsnvd](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/fa1bsnvd) | `ver_1.9.0` | Deleted | crashed | 15,660 | 0.6986 | exploratory variant outside the retained comparisons |
+| [vd8mlojl](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/vd8mlojl) | `ver_1.6.3_add_6.20_6.26` | Deleted | finished | 20,560 | 0.6943 | exploratory variant outside the retained comparisons |
+| [xeevh5ge](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/xeevh5ge) | `ver_1.11.0` | Deleted | crashed | 550 | 0.8425 | exploratory variant outside the retained comparisons |
+| [sfdmrkye](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/sfdmrkye) | `ver_1.6.3_lr_1.5e-4` | Deleted | finished | 18,625 | 0.6860 | exploratory variant outside the retained comparisons |
+| [4kafwse0](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/4kafwse0) | `ver_1.6.3_lr_6e-4` | Deleted | crashed | 1,490 | 0.7901 | exploratory variant outside the retained comparisons |
+| [8g316lpz](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8g316lpz) | `ver_1.6.2_53_0.6` | Deleted | crashed | 2,000 | 0.7540 | exploratory variant outside the retained comparisons |
+| [g6aq5i0r](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/g6aq5i0r) | `ver_1.9.0` | Deleted | crashed | 4,320 | 0.7293 | exploratory variant outside the retained comparisons |
+| [z9cygoth](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/z9cygoth) | `finetune_deck1_indistribution_0.01` | Deleted | finished | 595 | 0.9333 | exploratory variant outside the retained comparisons |
+| [91kkpnoj](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/91kkpnoj) | `finetune_deck1` | Deleted | crashed | 520 | 0.7209 | exploratory variant outside the retained comparisons |
+| [ecywffe5](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/ecywffe5) | `ver_1.7.0_33_only_deck_expert_weights_0` | Deleted | crashed | 12,360 | 0.6957 | exploratory variant outside the retained comparisons |
+| [jm674nwr](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/jm674nwr) | `ver_1.7.0_33_gpt_baseline` | Deleted | finished | 16,650 | 0.8029 | exploratory variant outside the retained comparisons |
+| [jm6s3iho](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/jm6s3iho) | `ver_1.6.2_44_0.6` | Deleted | finished | 18,625 | 0.7059 | exploratory variant outside the retained comparisons |
+| [e64atih3](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/e64atih3) | `ver_1.6.2_44` | Deleted | finished | 18,875 | 0.6976 | exploratory variant outside the retained comparisons |
+| [javodeq0](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/javodeq0) | `ver_1.6.1_1.0` | Deleted | crashed | 18,200 | 0.6908 | exploratory variant outside the retained comparisons |
+| [aw3zs5gl](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/aw3zs5gl) | `ver_1.6.1_4_4` | Deleted | crashed | 4,220 | 0.7312 | exploratory variant outside the retained comparisons |
+| [xu3q8tz9](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/xu3q8tz9) | `ver_1.6.0_resume` | Deleted | finished | 18,525 | 0.6924 | exploratory variant outside the retained comparisons |
+| [kjg7umq8](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/kjg7umq8) | `ver_1.6.0` | Deleted | crashed | 10,110 | 0.6904 | exploratory variant outside the retained comparisons |
+| [d6rku2vf](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/d6rku2vf) | `ver_1.4.5_geglu_dropout_without_softmax` | Deleted | finished | 12,160 | 0.6955 | exploratory variant outside the retained comparisons |
+| [jjgf3gtf](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/jjgf3gtf) | `ver_1.4.5_geglu_dropout_all` | Deleted | finished | 4,440 | 0.6942 | exploratory variant outside the retained comparisons |
+| [23jk0uwa](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/23jk0uwa) | `ver_1.4.5` | Deleted | finished | 270 | — | 270 steps; no validation CE |
+| [80kxcquv](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/80kxcquv) | `ver_1.4.4_only_dynamic` | Deleted | crashed | 2,680 | 0.6985 | exploratory variant outside the retained comparisons |
+| [sw2e7jpo](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/sw2e7jpo) | `ver_1.4.4_only_pre_evol` | Deleted | finished | 1,020 | 0.7776 | exploratory variant outside the retained comparisons |
+| [c5fky1mi](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/c5fky1mi) | `ver_1.4.3_full_22` | Deleted | crashed | 4,320 | 0.6930 | exploratory variant outside the retained comparisons |
+| [46y842oz](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/46y842oz) | `ver_1.4.3_basic_13` | Deleted | finished | 810 | 0.7883 | exploratory variant outside the retained comparisons |
+| [7w0mlaja](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/7w0mlaja) | `ver_1.4.3_basic_22` | Deleted | crashed | 890 | 0.7694 | exploratory variant outside the retained comparisons |
+| [7s303sv6](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/7s303sv6) | `ver_1.4.2_only_position_and_index_ablation` | Deleted | finished | 12,610 | 0.7396 | exploratory variant outside the retained comparisons |
+| [24yjij7o](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/24yjij7o) | `ver_1.4.2_only_tool_energy_index_ablation` | Deleted | finished | 210 | — | 210 steps; no validation CE |
+| [fyyinx2t](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/fyyinx2t) | `ver_1.4.2_only_inplay_index_ablation` | Deleted | finished | 270 | — | 270 steps; no validation CE |
+| [7e4n6axe](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/7e4n6axe) | `ver_1.4.2_only_index_ablation` | Deleted | finished | 270 | — | 270 steps; no validation CE |
+| [tg3qoip3](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/tg3qoip3) | `ver_1.4.2_only_relative_position_ablation` | Deleted | finished | 330 | 0.8509 | exploratory variant outside the retained comparisons |
+| [0tkbxll6](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/0tkbxll6) | `ver_1.4.2_all_fasle_ablation` | Deleted | finished | 190 | — | 190 steps; no validation CE |
+| [mwhjy2ck](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/mwhjy2ck) | `ver_1.4.2_tool_energy_index_ablation` | Deleted | finished | 270 | — | 270 steps; no validation CE |
+| [9p2zz8ap](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/9p2zz8ap) | `ver_1.4.2_inplay_index_ablation` | Deleted | finished | 310 | 0.8506 | exploratory variant outside the retained comparisons |
+| [hp7euxcs](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/hp7euxcs) | `ver_1.4.2_index_ablation` | Deleted | finished | 640 | 0.8004 | exploratory variant outside the retained comparisons |
+| [549y93b8](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/549y93b8) | `ver_1.4.2_relative_position_ablation` | Deleted | finished | 900 | 0.8013 | exploratory variant outside the retained comparisons |
+| [3cwebo9b](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/3cwebo9b) | `ver_1.4.2_mlp31` | Deleted | crashed | 7,110 | 0.6979 | exploratory variant outside the retained comparisons |
+| [3jmz4ldw](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/3jmz4ldw) | `ver_1.4.2_mlp22` | Deleted | finished | 850 | 0.7894 | exploratory variant outside the retained comparisons |
+| [hu7k9nur](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/hu7k9nur) | `ver_1.4.1_mlp0` | Deleted | finished | 450 | 0.8812 | exploratory variant outside the retained comparisons |
+| [rgpmb6d0](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/rgpmb6d0) | `ver_1.4.1_mlp1` | Deleted | finished | 270 | — | 270 steps; no validation CE |
+| [asszmhwt](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/asszmhwt) | `ver_1.4.1_mlp2` | Deleted | finished | 330 | 0.8902 | exploratory variant outside the retained comparisons |
+| [atbfpt2y](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/atbfpt2y) | `ver_1.3.7_encoder2_option0` | Deleted | crashed | 270 | — | 270 steps; no validation CE |
+| [n2bht5j9](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/n2bht5j9) | `ver_1.3.7_encoder1_option0` | Deleted | finished | 140 | — | 140 steps; no validation CE |
+| [8yprl0rs](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8yprl0rs) | `ver_1.3.6_residual_false_mlp2_option_mlp1` | Deleted | crashed | 3,780 | 0.7283 | exploratory variant outside the retained comparisons |
+| [526cghc4](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/526cghc4) | `ver_1.3.6_residual_false_mlp2_option` | Deleted | finished | 1,140 | 0.7911 | exploratory variant outside the retained comparisons |
+| [kit08kse](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/kit08kse) | `ver_1.3.6_residual_true_mlp4` | Deleted | finished | 1,080 | 0.7916 | exploratory variant outside the retained comparisons |
+| [3ivpqaoz](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/3ivpqaoz) | `ver_1.3.6_residual_false_mlp1` | Deleted | finished | 1,370 | 0.7798 | exploratory variant outside the retained comparisons |
+| [c0fcm9eu](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/c0fcm9eu) | `ver_1.3.6_residual_false_mlp3` | Deleted | finished | 3,240 | 0.7524 | exploratory variant outside the retained comparisons |
+| [kp780yny](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/kp780yny) | `ver_1.3.5_313_42` | Deleted | crashed | 5,780 | 0.7554 | exploratory variant outside the retained comparisons |
+| [x66lrjpm](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/x66lrjpm) | `ver_1.3.5_313_region_card_mlp` | Deleted | finished | 6,480 | 0.7552 | exploratory variant outside the retained comparisons |
+| [2fu5x5pa](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/2fu5x5pa) | `ver_1.3.5_313` | Deleted | finished | 8,810 | 0.7490 | exploratory variant outside the retained comparisons |
+| [butr1use](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/butr1use) | `ver_1.3.5_222` | Deleted | finished | 10,260 | 0.7608 | exploratory variant outside the retained comparisons |
+| [vv5mogjq](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/vv5mogjq) | `ver_1.3.5_no_54card` | Deleted | finished | 8,810 | 0.7580 | exploratory variant outside the retained comparisons |
+| [9t5til3g](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/9t5til3g) | `ver_1.3.4.1` | Deleted | finished | 11,070 | 0.8058 | exploratory variant outside the retained comparisons |
+| [5drw0va0](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/5drw0va0) | `ver_1.3.4` | Deleted | finished | 1,950 | 0.7911 | exploratory variant outside the retained comparisons |
+| [ru60136x](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/ru60136x) | `ver_1.3.3.2` | Deleted | finished | 2,970 | 0.7699 | exploratory variant outside the retained comparisons |
+| [05mv925p](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/05mv925p) | `ver_1.3.3.1` | Deleted | finished | 3,310 | 0.7650 | exploratory variant outside the retained comparisons |
+| [rp2jof8y](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/rp2jof8y) | `ver_1.3.3` | Deleted | finished | 5,670 | 0.7539 | exploratory variant outside the retained comparisons |
+| [2dnerc61](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/2dnerc61) | `ver_1.3.2.1` | Deleted | crashed | 8,290 | 0.7509 | exploratory variant outside the retained comparisons |
+| [etsmxplx](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/etsmxplx) | `ver_1.3.2` | Deleted | crashed | 3,510 | 0.7673 | exploratory variant outside the retained comparisons |
+| [1kqgfx6l](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/1kqgfx6l) | `ver1.3.1` | Deleted | finished | 4,150 | 0.7804 | exploratory variant outside the retained comparisons |
+| [5fq80uhn](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/5fq80uhn) | `ver_1.3.0` | Deleted | crashed | 11,880 | 0.7911 | exploratory variant outside the retained comparisons |
+| [0tgypsin](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/0tgypsin) | `ver_1.2.0` | Deleted | crashed | 12,150 | 0.9112 | exploratory variant outside the retained comparisons |
+| [mfpqtwwx](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/mfpqtwwx) | `ver_1.1_card_feature_ratio_0.7` | Deleted | finished | 13,300 | 0.9260 | exploratory variant outside the retained comparisons |
+| [8o0t4jxw](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8o0t4jxw) | `ver_1.1_card_feature_ratio_0.5` | Deleted | finished | 2,330 | 0.8835 | exploratory variant outside the retained comparisons |
+| [yi0b5wu6](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/yi0b5wu6) | `ver_1.1_card_feature_ratio_1.0` | Deleted | finished | 9,720 | 0.8811 | exploratory variant outside the retained comparisons |
