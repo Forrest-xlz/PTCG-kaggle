@@ -15,6 +15,6 @@
 
 ## 模型结构与 EDA
 
-[最终模型结构图](model_architecture.svg)展示 26 个状态 token、三步历史 token、候选动作 query、无候选间自注意力的交叉注意力 decoder，以及两模型概率集成。详细解释见[完整 write-up](../../kaggle_writeup.md)。
+[最终模型结构图 PNG](model_architecture.png)（[SVG](model_architecture.svg)）展示 26 个状态 token、三步历史 token、各类特征投影、候选动作组合、编码器与解码器内部结构，以及两模型概率集成。详细解释见[完整 write-up](../../kaggle_writeup.md)。
 
 EDA 图从 `imitation_learning/outputs/` 复制到此处，便于在 GitHub 上阅读；原始生成脚本位于 `imitation_learning/eda/` 和 `imitation_learning/eda/deck_eda.ipynb`。其中包括[精确卡组覆盖](eda/top_deck_coverage.png)、[同 archetype 变体覆盖](eda/top_deck_archetype_coverage.png)、[使用率及胜率时间趋势](eda/archetype_share_and_win_rate.png)、[高分段卡组切换](eda/archetype_sankey.png)、[对局关系矩阵](eda/archetype_matchup_matrix.png)和[队伍推理耗时](eda/score_filtered_startup_vs_action.png)。
