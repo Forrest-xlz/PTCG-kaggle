@@ -1,8 +1,8 @@
-# Data Pipeline and Feature Cache
+# Replay data and feature cache
 
 ## Input resources
 
-The default replay directory is `replay_episodes/` at the repository root. Extractors process ZIP archives, with dates parsed as `month.day`. This date representation has no year component; do not mix archives from different years with the same month and day.
+The extractors read dated ZIP files from the repository-level `replay_episodes/` directory. Dates use `month.day` without a year, so archives from different years cannot share the same month and day.
 
 Expert filtering reads `episode_id`, `min_score`, `sum_score`, and `agent_count` from the single `manifest.csv` in each ZIP. It requires two participants and reconstructs the other score as `sum_score - min_score`. Missing dates, duplicate dated archives, and invalid manifests are errors, not zero-sample observations.
 
@@ -16,7 +16,7 @@ Feature construction requires the competition `cg` package. Set `cg_path` in `cf
 | `python -m extraction.training_samples` | `cfg/extract_training_samples.yaml` | `data/training/` |
 | `python -m training.build_feature_cache` | `cfg/build_feature_cache.yaml` | `data/training_cache/` |
 
-Each extractor writes a data shard and metadata per ZIP and skips completed, valid shards. `workers` controls parallelism, `force` controls rebuilding, and `limit_members` supports small checks. ZIP decompression and JSON parsing consume both CPU and memory; increasing workers is not always beneficial.
+Each extractor writes data and metadata per ZIP and skips completed shards. `workers` controls parallelism, `force` rebuilds shards, and `limit_members` supports small test runs.
 
 Use separate output directories for smoke tests and update the cache input accordingly. For full extraction, restore `limit_members: null` and use a fresh full-data output directory or explicitly rebuild. Do not mix test and production artifacts.
 
@@ -48,4 +48,4 @@ Compact arrays reduce storage and memory requirements, and training tensors are 
 - Old winner-only JSONL or an incompatible extraction schema: extract again, then rebuild.
 - New or replaced replay ZIPs: rerun the relevant extractor, check compatibility, and use force when needed.
 
-Training, standalone validation, and EDA must use compatible data ranges. A directory's existence does not prove completeness. Generated datasets and model artifacts are excluded from Git by default.
+Use compatible replay ranges for training, standalone validation, and EDA. Generated datasets and model files are excluded from Git by default.

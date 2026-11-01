@@ -1,37 +1,19 @@
-# Inference Export and Kaggle Submission
+# Kaggle submission
 
-## Export an inference checkpoint
+## Final notebook
 
-Edit the constants at the top of `imitation_learning/training/export_inference.py`:
+[submission.ipynb](../submission.ipynb) is the competition submission. It loads the 3+3-layer `final_d2_33.pt` checkpoint and the 4+4-layer `final_d2_44.pt` checkpoint. The files are stored locally in `archive (3).zip` and `archive (2).zip`, respectively. Upload the checkpoint files and competition `cg` package as Kaggle Datasets, then set their paths in the notebook's parameter cell.
 
-- CHECKPOINT_PATH: an existing, trusted training checkpoint.
-- OUTPUT_PATH: destination; None generates a default inference filename beside the source.
-- PRECISION: fp16, bf16, or fp32.
+The notebook uses the fixed 60-card Festival Lead deck. At each decision, both models score the same legal candidates. Their FP32 softmax probabilities are averaged equally; the damage-counter KO eligibility mask is applied before choosing the highest-scoring remaining action. Running the notebook creates `/kaggle/working/submission.tar.gz`.
 
-Run from imitation_learning:
+## Exporting another checkpoint
+
+For a new model, edit `CHECKPOINT_PATH`, `OUTPUT_PATH`, and `PRECISION` in `imitation_learning/training/export_inference.py`. From `imitation_learning/`, run:
 
 ```bash
 python training/export_inference.py
 ```
 
-Export retains model and config, removes training-only state such as the optimizer, and converts weight precision. The script reports source and destination sizes. Example paths do not imply a checkpoint exists locally; update them before running. Inference files cannot be used for training resume.
+The exporter keeps model weights and config while removing optimizer and other training state. The resulting file is for inference, not training resume. The configurable [submission template](../imitation_learning/kaggle_submission_imitation_agent.ipynb) supports a different checkpoint or deck; it is separate from the final notebook above.
 
-## Kaggle notebook
-
-Use [kaggle_submission_imitation_agent.ipynb](../imitation_learning/kaggle_submission_imitation_agent.ipynb):
-
-1. Upload the exported model as a Kaggle Dataset.
-2. Prepare a Dataset containing the competition cg directory.
-3. Attach both Datasets to the notebook.
-4. Set MODEL_PATH, CG_PATH, and the complete 60-card DECK in its initial configuration.
-5. Run cells in order to generate `/kaggle/working/submission.tar.gz`.
-
-Width, depth, normalization, static-card projections, and action-history settings are reconstructed from checkpoint config rather than configured twice. The submission notebook embeds inference code, so verify compatibility after changing training-side features or architecture.
-
-## Checks and interpretation
-
-- Load only trusted checkpoints; PyTorch files may contain executable pickle payloads.
-- Verify card IDs, engine resources, model paths, and inference precision against the target environment.
-- Offline CE/Top-k accuracy is not game win rate; inference and game-level checks are still needed.
-- A full_data model may have seen samples reconstructed by standalone validation; those results are not independent test performance.
-- This document does not claim a final competition ranking for any notebook or checkpoint.
+Check that checkpoint features, card IDs, engine resources, and inference paths match the Kaggle environment. Offline action CE and Top-k accuracy do not measure game win rate. A full-data model may have seen samples reconstructed by standalone validation, so those samples are not an independent holdout.

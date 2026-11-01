@@ -40,7 +40,7 @@ I considered reinforcement learning at the start. Self-play could eventually imp
 
 [*Kickstarting Deep Reinforcement Learning*](https://arxiv.org/pdf/1803.03835) reinforced this choice. It combines guidance from previously trained expert policies with an RL objective, reducing the teachers' influence as the student improves. In its multi-teacher DMLab-30 experiment, the student reached a specified level of performance in 9.58× fewer environment frames than training from scratch. The lesson I took was to establish useful behavior from strong examples first, while leaving room for later improvement through self-play. For this competition I completed the imitation stage; the final agent does not include RL training.
 
-The [original AlphaGo](https://research.google/pubs/mastering-the-game-of-go-with-deep-neural-networks-and-tree-search/) and [AlphaStar](https://deepmind.google/blog/alphastar-mastering-the-real-time-strategy-game-starcraft-ii) systems also began with recorded play before improving through RL. I focused on the demonstration-learning stage because the competition provided a large replay archive.
+The [original AlphaGo](https://www.nature.com/articles/nature16961) and [AlphaStar](https://www.nature.com/articles/s41586-019-1724-z) systems also began with recorded play before improving through RL. I focused on the demonstration-learning stage because the competition provided a large replay archive.
 
 The model learns to predict the demonstrated legal action. I used action CE to compare training choices while keeping in mind that several actions may be reasonable in the same position and a few critical turns can decide a game.
 
@@ -186,7 +186,7 @@ Lower CE means better action prediction. These plots show training and validatio
 
 ## Experiments that shaped the solution
 
-The table summarizes matched W&B comparisons at the last step shared by each pair. Negative CE differences favor the variant. Curves, values, and run links are in the [experiment report](https://github.com/Forrest-xlz/PTCG-kaggle/blob/main/docs/solution-experiment-results.md).
+The table compares matched W&B runs at the last step shared by each pair. Negative CE differences favor the variant. The figures below show the four CE curves for each experiment.
 
 | Variant − control | Shared step | Train CE Δ | In-distribution CE Δ | Latest-date CE Δ | Latest expert CE Δ |
 |---|---:|---:|---:|---:|---:|
@@ -256,8 +256,17 @@ Earlier validation runs favored ensembling on several subsets, so I combined the
 
 ---
 
-## Sources and experiment details
+## Sources
 
-- [Competition description and evaluation](https://www.kaggle.com/competitions/pokemon-tcg-ai-battle/overview/evaluation); [Pokémon TCG rulebook](https://www.pokemon.com/static-assets/content-assets/cms2/pdf/trading-card-game/rulebook/par_rulebook_en.pdf).
-- [Exact experiment values, curves, and W&B run links](https://github.com/Forrest-xlz/PTCG-kaggle/blob/main/docs/solution-experiment-results.md).
-- [GPT generative pretraining](https://cdn.openai.com/research-covers/language-unsupervised/language_understanding_paper.pdf), [GPT-2 multitask behavior](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf), and [Kickstarting Deep Reinforcement Learning](https://arxiv.org/pdf/1803.03835).
+Competition and rules: [Kaggle competition](https://www.kaggle.com/competitions/pokemon-tcg-ai-battle/overview/evaluation) and [Pokémon TCG rulebook](https://www.pokemon.com/static-assets/content-assets/cms2/pdf/trading-card-game/rulebook/par_rulebook_en.pdf).
+
+Papers that informed this solution:
+
+- Radford et al., [*Improving Language Understanding by Generative Pre-Training*](https://cdn.openai.com/research-covers/language-unsupervised/language_understanding_paper.pdf) (2018).
+- Radford et al., [*Language Models are Unsupervised Multitask Learners*](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf) (2019).
+- Schmitt et al., [*Kickstarting Deep Reinforcement Learning*](https://arxiv.org/abs/1803.03835) (2018).
+- Silver et al., [*Mastering the game of Go with deep neural networks and tree search*](https://www.nature.com/articles/nature16961) (2016).
+- Vinyals et al., [*Grandmaster level in StarCraft II using multi-agent reinforcement learning*](https://www.nature.com/articles/s41586-019-1724-z) (2019).
+- Kaplan et al., [*Scaling Laws for Neural Language Models*](https://arxiv.org/abs/2001.08361) (2020).
+- Shazeer, [*GLU Variants Improve Transformer*](https://arxiv.org/abs/2002.05202) (2020).
+- Aribandi et al., [*ExT5: Towards Extreme Multi-Task Scaling for Transfer Learning*](https://arxiv.org/abs/2111.10952) (2021).

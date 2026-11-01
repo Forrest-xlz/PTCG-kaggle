@@ -1,4 +1,4 @@
-# Training and Validation
+# Training and validation
 
 ## Configuration and entrypoint
 
@@ -14,7 +14,7 @@
 | Loser augmentation dates | Exclude latest date | May include latest date |
 | Model, optimizer, and checkpoint logic | Shared | Shared |
 
-Full-data mode does not unconditionally use every action from both players. Result filtering, loser augmentation, and `train_replay_ratio` still apply. A full-data checkpoint evaluated on reconstructed holdout sets may have seen those samples during training; this is not unseen-data generalization performance.
+Full-data mode still applies result filtering, loser augmentation, and `train_replay_ratio`. Its checkpoint may have seen samples later reconstructed for validation, so those samples are not an independent holdout.
 
 ## Holdout split order
 
@@ -78,7 +78,7 @@ AdamW supports learning_rate, weight_decay, beta1, and beta2. Learning rate uses
 - bf16: autocast without a scaler; CUDA execution requires compatible hardware.
 - Model parameters and training checkpoints remain FP32; export precision is configured separately.
 
-With WandB enabled, checkpoints and history go to local-output beside the run's files directory, without automatically uploading model artifacts. Otherwise, train.output is used. Review the default online setting; disable WandB if no account is configured.
+With W&B enabled, checkpoints and history are written locally beside the run's files directory; model checkpoints are not uploaded automatically. Otherwise, `train.output` is used.
 
 ## Resume
 

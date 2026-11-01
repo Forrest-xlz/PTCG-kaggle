@@ -1,10 +1,8 @@
 # Project Documentation
 
-Start with the [quick-start guide](../imitation_learning/README.md). These documents describe the current implementation, not historical development plans, migration steps, or unverified experimental conclusions.
+Start with the [quick-start guide](../imitation_learning/README.md) to prepare data and run training.
 
-For the submitted competition solution and its evidence, see the [full write-up](../kaggle_writeup.md) and [experiment results](solution-experiment-results.md).
-The [experiment branch map](experiment-branches.md) connects retained branch snapshots to representative W&B runs.
-The [W&B run curation](wandb-run-curation.md) lists the 22 named key runs and cleanup status for the other 76 runs.
+The [solution write-up](../kaggle_writeup.md) contains the competition reasoning, figures, and experiment results. The [experiment branch map](experiment-branches.md) links the retained code snapshots to all 22 W&B runs.
 
 | Guide | Contents |
 |---|---|
@@ -14,4 +12,4 @@ The [W&B run curation](wandb-run-curation.md) lists the 22 named key runs and cl
 | [EDA](eda.md) | Entrypoints, configurations, metric definitions, and outputs |
 | [Inference submission](submission.md) | Checkpoint export, Kaggle notebook, and evaluation caveats |
 
-Run all documented commands from `imitation_learning/`. See [cfg](../imitation_learning/cfg/) for the complete parameter lists and the corresponding modules for implementation details. Preserve the YAML configuration, data range, and checkpoint for each experiment; a branch name alone is not sufficient to identify a result.
+Run the documented commands from `imitation_learning/`. Configuration files are in [cfg](../imitation_learning/cfg/). For an experiment, save its YAML, replay range, and checkpoint together; a branch name alone does not identify a trained model.

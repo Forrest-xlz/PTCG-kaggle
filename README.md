@@ -61,7 +61,7 @@ The actual final artifact is [submission.ipynb](submission.ipynb). Its parameter
 
 ### Experiments and results
 
-The [write-up](kaggle_writeup.md) follows the competition reasoning from literature and replay EDA through data selection, validation, model design, experiments, and the submitted agent. Three [model diagrams](docs/figures/README.md) explain state tokens, action queries, and the two-model ensemble; six EDA figures cover deck coverage, changing archetypes, matchups, and replay timing. The [experiment report](docs/solution-experiment-results.md) provides W&B run links, exact comparison values, and six figure groups for data scale, model scale, action history, activation/dropout, multitask learning, and effect/context-card features. Each experiment figure shows **training CE, in-distribution CE, latest-date CE, and latest-date expert CE**. PNG and SVG versions are indexed in [docs/figures](docs/figures/README.md).
+The [write-up](kaggle_writeup.md) covers the competition strategy, replay EDA, model, experiments, and final agent. The [figure index](docs/figures/README.md) links the model diagrams, EDA charts, and experiment curves. The [experiment branch map](docs/experiment-branches.md) links the seven retained code snapshots to all 22 W&B runs.
 
 The strongest recovered history comparison was full three-action history versus no history: at their last common evaluation, latest-date CE was lower by **0.0328**. Data scaling exposed a clear failure mode: a Small model trained on 1% of replays reached low training CE while its latest-date CE rose. Other comparisons are mixed or small; the write-up reports their limits. **Offline action imitation CE is not battle win rate.** The two final full-data checkpoints do not have a verified like-for-like single-model-versus-ensemble win-rate result in this repository.
 
@@ -75,9 +75,8 @@ The strongest recovered history comparison was full three-action history versus 
 | [submission.ipynb](submission.ipynb) | Final two-model Kaggle submission notebook |
 | [imitation_learning/](imitation_learning/) | Extraction, feature caching, training, validation, analysis, and model code |
 | [imitation_learning/cfg/](imitation_learning/cfg/) | YAML settings for the project workflows |
-| [docs/](docs/README.md) | Technical guides, experiment report, and figures |
-| [Experiment branches](docs/experiment-branches.md) | Kept branch snapshots and their representative W&B runs |
-| [W&B run curation](docs/wandb-run-curation.md) | Key run names and the reviewed cleanup inventory |
+| [docs/](docs/README.md) | Technical guides, branch-to-run map, and figures |
+| [Experiment branches](docs/experiment-branches.md) | Retained branch snapshots and all 22 W&B runs |
 | [export_wandb_runs.py](export_wandb_runs.py) | Optional W&B run metadata export |
 
 The [project documentation index](docs/README.md) is the starting point for implementation details. Branch names record development history; use the linked W&B run configuration and checkpoint when interpreting an experiment.

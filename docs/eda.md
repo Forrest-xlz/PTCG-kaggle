@@ -1,6 +1,6 @@
-# EDA and Data Coverage
+# Replay EDA
 
-EDA entrypoints live in `imitation_learning/eda/`; reusable logic lives in `analysis/`. Validation selection is training preparation and uses `training/select_validation_decks.py`; see [training and validation](training-validation.md).
+Run the EDA entrypoints from `imitation_learning/eda/`; shared analysis code is in `imitation_learning/analysis/`. Validation-deck selection is part of training preparation and is covered in [training and validation](training-validation.md).
 
 ## Deck EDA
 
@@ -27,9 +27,9 @@ Definitions:
 - changed_slots: card slots changed relative to the top deck, accounting for duplicates; zero means an exact match.
 - weighted_jaccard: count-aware deck similarity.
 
-Only same-archetype comparisons against configured top decks are computed, not all-pairs similarity. Raw CSV dates may exceed cache dates; inspect context. Summing per-deck replay counts does not yield unique archetype replay counts. max_samples and repeated epochs affect exposure, not these training-pool counts.
+Variant similarity is calculated against configured top decks within the same archetype. Per-deck replay counts can overlap, so their sum is not a unique archetype count. Check `coverage_context.json` when replay CSV and cache date ranges differ.
 
-Fixed chart and CSV filenames are overwritten. Low counts indicate potential coverage risks, not proof of a model bottleneck. Combine them with independent validation or data-scaling experiments using a fixed validation set.
+Rerunning EDA replaces charts and CSVs with the same names. Low replay counts flag coverage gaps to examine alongside validation curves.
 
 ## Deck Trends
 
