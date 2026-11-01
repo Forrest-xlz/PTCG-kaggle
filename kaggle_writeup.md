@@ -102,9 +102,9 @@ The EDA therefore led to four concrete modeling choices: use broad replay covera
 
 I represent the observation as game-state tokens and the legal choices as action tokens. This keeps the board objects separate while allowing each candidate action to inspect the entire visible state. The tables show the **final** feature layout; the diagram below shows how those features enter the Transformer.
 
-### State tokens: from V1 to V2
+### State tokens
 
-The first state design had **24 tokens**: eight Bench positions for each side, two Active Pokémon, two player summaries, own hand, own deck, Stadium, and global information. Each region accumulated learned categorical embeddings and value-weighted numeric embeddings. This was a way to give the Transformer persistent, interpretable entities. It also imposed a useful inductive bias: an Active Pokémon can attend to its energy and damage context, while player summaries can exchange information with the board. The V1 layout was a development step, not the final feature schema; the later model uses **26 base tokens** with separate discard regions and richer summaries. The comparison plots for early Tiny/Small/Base scale trials were produced with V1, which is why their absolute CE is not a final-checkpoint metric.
+The submitted models encode the visible game as **26 state tokens** plus one token for the previous three actions. Separate tokens for Bench slots, Active Pokémon, player summaries, discard piles, hand, deck, Stadium, and global information let the encoder attend across game entities while preserving where each feature came from. For example, an Active Pokémon can attend to its attached energy and damage context alongside the opponent's board.
 
 | Final state-token indices | Region | Information represented |
 |---|---|---|
@@ -120,7 +120,7 @@ The card-bearing regions use weighted embedding bags plus static card features; 
 
 ### Legal-action option tokens
 
-In V2 I treated each decision as a **question with candidate answers**. The engine's `select` context identifies what kind of choice is being requested; an option carries its type, candidate/target card IDs, attack ID, area and relation, numeric positions, and available static and dynamic card/attack features. This matters in a card game because the same card identity can mean different things when it is a source, target, effect, or context card, and because the legal set changes at every decision. The implementation sums learned and projected feature channels into a 512-dimensional option vector, then applies configured region/option MLPs. Candidate combinations are explicitly enumerated and formed by summing their constituent option vectors. When no option is selected, a learned no-action vector is used. The policy scores at most 64 enumerated legal combinations.
+I treat each decision as a **question with candidate answers**. The engine's `select` context identifies what kind of choice is being requested; an option carries its type, candidate/target card IDs, attack ID, area and relation, numeric positions, and available static and dynamic card/attack features. This matters in a card game because the same card identity can mean different things when it is a source, target, effect, or context card, and because the legal set changes at every decision. The implementation sums learned and projected feature channels into a 512-dimensional option vector, then applies configured region/option MLPs. Candidate combinations are explicitly enumerated and formed by summing their constituent option vectors. When no option is selected, a learned no-action vector is used. The policy scores at most 64 enumerated legal combinations.
 
 | Option feature group | What it tells the model | Encoding |
 |---|---|---|
