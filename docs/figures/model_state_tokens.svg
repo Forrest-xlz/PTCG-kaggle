@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="812.88pt" height="480.744pt" viewBox="0 0 812.88 480.744" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-11-02T02:13:26.790464</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.11.0, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 480.744
+L 812.88 480.744
+L 812.88 0
+L 0 0
+z
+" style="fill: #f7f9fc"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 50.436 152.7768
+L 249.084 152.7768
+Q 256.896 152.7768 256.896 145.0152
+L 256.896 95.6736
+Q 256.896 87.912 249.084 87.912
+L 50.436 87.912
+Q 42.624 87.912 42.624 95.6736
+L 42.624 145.0152
+Q 42.624 152.7768 50.436 152.7768
+z
+" clip-path="url(#p71fd0eda85)" style="fill: #e8f2ff; stroke: #4489d1; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 276.426 152.7768
+L 475.074 152.7768
+Q 482.886 152.7768 482.886 145.0152
+L 482.886 95.6736
+Q 482.886 87.912 475.074 87.912
+L 276.426 87.912
+Q 268.614 87.912 268.614 95.6736
+L 268.614 145.0152
+Q 268.614 152.7768 276.426 152.7768
+z
+" clip-path="url(#p71fd0eda85)" style="fill: #e8f2ff; stroke: #4489d1; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 502.416 152.7768
+L 762.444 152.7768
+Q 770.256 152.7768 770.256 145.0152
+L 770.256 95.6736
+Q 770.256 87.912 762.444 87.912
+L 502.416 87.912
+Q 494.604 87.912 494.604 95.6736
+L 494.604 145.0152
+Q 494.604 152.7768 502.416 152.7768
+z
+" clip-path="url(#p71fd0eda85)" style="fill: #e8f2ff; stroke: #4489d1; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 50.436 233.1648
+L 249.084 233.1648
+Q 256.896 233.1648 256.896 225.4032
+L 256.896 176.0616
+Q 256.896 168.3 249.084 168.3
+L 50.436 168.3
+Q 42.624 168.3 42.624 176.0616
+L 42.624 225.4032
+Q 42.624 233.1648 50.436 233.1648
+z
+" clip-path="url(#p71fd0eda85)" style="fill: #e8f2ff; stroke: #4489d1; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 276.426 233.1648
+L 475.074 233.1648
+Q 482.886 233.1648 482.886 225.4032
+L 482.886 176.0616
+Q 482.886 168.3 475.074 168.3
+L 276.426 168.3
+Q 268.614 168.3 268.614 176.0616
+L 268.614 225.4032
+Q 268.614 233.1648 276.426 233.1648
+z
+" clip-path="url(#p71fd0eda85)" style="fill: #e8f2ff; stroke: #4489d1; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 502.416 233.1648
+L 762.444 233.1648
+Q 770.256 233.1648 770.256 225.4032
+L 770.256 176.0616
+Q 770.256 168.3 762.444 168.3
+L 502.416 168.3
+Q 494.604 168.3 494.604 176.0616
+L 494.604 225.4032
+Q 494.604 233.1648 502.416 233.1648
+z
+" clip-path="url(#p71fd0eda85)" style="fill: #e8f2ff; stroke: #4489d1; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 153.666 327.4128
+L 659.214 327.4128
+Q 667.026 327.4128 667.026 319.6512
+L 667.026 270.3096
+Q 667.026 262.548 659.214 262.548
+L 153.666 262.548
+Q 145.854 262.548 145.854 270.3096
+L 145.854 319.6512
+Q 145.854 327.4128 153.666 327.4128
+z
+" clip-path="url(#p71fd0eda85)" style="fill: #f0eaff; stroke: #8063d4; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 50.436 435.5208
+L 483.444 435.5208
+Q 491.256 435.5208 491.256 427.7592
+L 491.256 366.2208
+Q 491.256 358.4592 483.444 358.4592
+L 50.436 358.4592
+Q 42.624 358.4592 42.624 366.2208
+L 42.624 427.7592
+Q 42.624 435.5208 50.436 435.5208
+z
+" clip-path="url(#p71fd0eda85)" style="fill: #e9f7ed; stroke: #3ca367; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 530.316 435.5208
+L 762.444 435.5208
+Q 770.256 435.5208 770.256 427.7592
+L 770.256 366.2208
+Q 770.256 358.4592 762.444 358.4592
+L 530.316 358.4592
+Q 522.504 358.4592 522.504 366.2208
+L 522.504 427.7592
+Q 522.504 435.5208 530.316 435.5208
+z
+" clip-path="url(#p71fd0eda85)" style="fill: #fff1df; stroke: #d68b24; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_1">
+    <text style="font-weight: 700; font-size: 21px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="43.74" y="45.656719" transform="rotate(-0 43.74 45.656719)">1  Build the state memory</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #52627a" x="43.74" y="62.831803" transform="rotate(-0 43.74 62.831803)">26 current-state tokens + one token for the previous three actions</text>
+   </g>
+   <g id="text_3">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="53.784" y="111.998925" transform="rotate(-0 53.784 111.998925)">Bench · tokens 0–15</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #52627a" x="53.784" y="133.853912" transform="rotate(-0 53.784 133.853912)">8 own slots + 8 opponent slots</text>
+   </g>
+   <g id="text_5">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="279.774" y="111.998925" transform="rotate(-0 279.774 111.998925)">Active · tokens 16–17</text>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #52627a" x="279.774" y="134.073912" transform="rotate(-0 279.774 134.073912)">Own and opponent Pokémon</text>
+   </g>
+   <g id="text_7">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="505.764" y="111.998925" transform="rotate(-0 505.764 111.998925)">Player summaries · tokens 18–19</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #52627a" x="505.764" y="133.853912" transform="rotate(-0 505.764 133.853912)">Hand, deck, prizes, and other counts</text>
+   </g>
+   <g id="text_9">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="53.784" y="192.386925" transform="rotate(-0 53.784 192.386925)">Discard · tokens 20–21</text>
+   </g>
+   <g id="text_10">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #52627a" x="53.784" y="213.290975" transform="rotate(-0 53.784 213.290975)">Known cards in each discard pile</text>
+   </g>
+   <g id="text_11">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="279.774" y="192.386925" transform="rotate(-0 279.774 192.386925)">Zones · tokens 22–24</text>
+   </g>
+   <g id="text_12">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #52627a" x="279.774" y="213.749569" transform="rotate(-0 279.774 213.749569)">Own hand, deck, and Stadium</text>
+   </g>
+   <g id="text_13">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="505.764" y="192.386925" transform="rotate(-0 505.764 192.386925)">Global · token 25</text>
+   </g>
+   <g id="text_14">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #52627a" x="505.764" y="215.307537" transform="rotate(-0 505.764 215.307537)">Turn and current selection context</text>
+   </g>
+   <g id="text_15">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="157.014" y="286.634925" transform="rotate(-0 157.014 286.634925)">State-token construction</text>
+   </g>
+   <g id="text_16">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #52627a" x="157.014" y="308.489912" transform="rotate(-0 157.014 308.489912)">Card embedding bags + static features; summary MLPs; region MLPs → width 512</text>
+   </g>
+   <g id="patch_11">
+    <path d="M 149.76 236.166965
+Q 149.76 247.858414 149.76 257.649205
+" style="fill: none; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+    <path d="M 152.56 252.049205
+L 149.76 257.649205
+L 146.96 252.049205
+z
+" style="fill: #71839e; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 375.75 236.166965
+Q 375.75 247.858414 375.75 257.649205
+" style="fill: none; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+    <path d="M 378.55 252.049205
+L 375.75 257.649205
+L 372.95 252.049205
+z
+" style="fill: #71839e; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+   </g>
+   <g id="patch_13">
+    <path d="M 632.43 236.166965
+Q 632.43 247.858414 632.43 257.649205
+" style="fill: none; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+    <path d="M 635.23 252.049205
+L 632.43 257.649205
+L 629.63 252.049205
+z
+" style="fill: #71839e; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+   </g>
+   <g id="text_17">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="53.784" y="382.546125" transform="rotate(-0 53.784 382.546125)">History · token 26</text>
+   </g>
+   <g id="text_18">
+    <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(53.784 404.020737)">Previous 3 actions → sum each action's option vectors → action MLP</text>
+    <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(53.784 418.330737)">Concatenate in order → sequence MLP → one 512-dimensional token</text>
+   </g>
+   <g id="text_19">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="533.664" y="382.546125" transform="rotate(-0 533.664 382.546125)">Encoder input · [27, 512]</text>
+   </g>
+   <g id="text_20">
+    <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(533.664 404.020737)">26 state tokens + history token</text>
+    <text style="font-size: 10.6px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(533.664 418.330737)">Mask empty Bench and absent history</text>
+   </g>
+   <g id="patch_14">
+    <path d="M 493.138569 397.2672
+Q 506.32111 397.2672 517.602992 397.2672
+" style="fill: none; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+    <path d="M 512.002992 394.4672
+L 517.602992 397.2672
+L 512.002992 400.0672
+z
+" style="fill: #71839e; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+   </g>
+   <g id="patch_15">
+    <path d="M 665.91 330.410566
+Q 665.91 342.933501 665.91 353.555777
+" style="fill: none; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+    <path d="M 668.71 347.955777
+L 665.91 353.555777
+L 663.11 347.955777
+z
+" style="fill: #71839e; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="p71fd0eda85">
+   <rect x="15.84" y="15.84" width="781.2" height="449.064"/>
+  </clipPath>
+ </defs>
+</svg>

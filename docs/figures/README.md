@@ -15,6 +15,14 @@
 
 ## 模型结构与 EDA
 
-[最终模型结构图 PNG](model_architecture.png)（[SVG](model_architecture.svg)）展示 26 个状态 token、三步历史 token、各类特征投影、候选动作组合、编码器与解码器内部结构，以及两模型概率集成。详细解释见[完整 write-up](../../kaggle_writeup.md)。
+最终模型结构分为三张图，可在[完整 write-up](../../kaggle_writeup.md)中按流程阅读：
+
+| 流程 | PNG | SVG |
+|---|---|---|
+| 26 个状态 token 与三步历史 token | [PNG](model_state_tokens.png) | [SVG](model_state_tokens.svg) |
+| 合法选项编码与候选动作 query | [PNG](model_action_tokens.png) | [SVG](model_action_tokens.svg) |
+| Encoder、Decoder 与双模型集成 | [PNG](model_policy_ensemble.png) | [SVG](model_policy_ensemble.svg) |
+
+图像由 [build_model_diagrams.py](build_model_diagrams.py) 生成。
 
 EDA 图从 `imitation_learning/outputs/` 复制到此处，便于在 GitHub 上阅读；原始生成脚本位于 `imitation_learning/eda/` 和 `imitation_learning/eda/deck_eda.ipynb`。其中包括[精确卡组覆盖](eda/top_deck_coverage.png)、[同 archetype 变体覆盖](eda/top_deck_archetype_coverage.png)、[使用率及胜率时间趋势](eda/archetype_share_and_win_rate.png)、[高分段卡组切换](eda/archetype_sankey.png)、[对局关系矩阵](eda/archetype_matchup_matrix.png)和[队伍推理耗时](eda/score_filtered_startup_vs_action.png)。

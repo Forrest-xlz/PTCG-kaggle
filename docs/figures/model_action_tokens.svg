@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="812.88pt" height="447.48pt" viewBox="0 0 812.88 447.48" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-11-02T02:13:27.037652</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.11.0, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 447.48
+L 812.88 447.48
+L 812.88 0
+L 0 0
+z
+" style="fill: #f7f9fc"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 50.436 155.5488
+L 246.294 155.5488
+Q 254.106 155.5488 254.106 147.7872
+L 254.106 85.14
+Q 254.106 77.3784 246.294 77.3784
+L 50.436 77.3784
+Q 42.624 77.3784 42.624 85.14
+L 42.624 147.7872
+Q 42.624 155.5488 50.436 155.5488
+z
+" clip-path="url(#p3f065ccb25)" style="fill: #e8f2ff; stroke: #4489d1; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 282.006 155.5488
+L 497.394 155.5488
+Q 505.206 155.5488 505.206 147.7872
+L 505.206 85.14
+Q 505.206 77.3784 497.394 77.3784
+L 282.006 77.3784
+Q 274.194 77.3784 274.194 85.14
+L 274.194 147.7872
+Q 274.194 155.5488 282.006 155.5488
+z
+" clip-path="url(#p3f065ccb25)" style="fill: #e9f7ed; stroke: #3ca367; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 533.106 155.5488
+L 762.444 155.5488
+Q 770.256 155.5488 770.256 147.7872
+L 770.256 85.14
+Q 770.256 77.3784 762.444 77.3784
+L 533.106 77.3784
+Q 525.294 77.3784 525.294 85.14
+L 525.294 147.7872
+Q 525.294 155.5488 533.106 155.5488
+z
+" clip-path="url(#p3f065ccb25)" style="fill: #f0eaff; stroke: #8063d4; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 50.436 280.2888
+L 260.244 280.2888
+Q 268.056 280.2888 268.056 272.5272
+L 268.056 216.5328
+Q 268.056 208.7712 260.244 208.7712
+L 50.436 208.7712
+Q 42.624 208.7712 42.624 216.5328
+L 42.624 272.5272
+Q 42.624 280.2888 50.436 280.2888
+z
+" clip-path="url(#p3f065ccb25)" style="fill: #e8f2ff; stroke: #4489d1; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 301.536 280.2888
+L 514.134 280.2888
+Q 521.946 280.2888 521.946 272.5272
+L 521.946 216.5328
+Q 521.946 208.7712 514.134 208.7712
+L 301.536 208.7712
+Q 293.724 208.7712 293.724 216.5328
+L 293.724 272.5272
+Q 293.724 280.2888 301.536 280.2888
+z
+" clip-path="url(#p3f065ccb25)" style="fill: #f0eaff; stroke: #8063d4; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 555.426 280.2888
+L 762.444 280.2888
+Q 770.256 280.2888 770.256 272.5272
+L 770.256 216.5328
+Q 770.256 208.7712 762.444 208.7712
+L 555.426 208.7712
+Q 547.614 208.7712 547.614 216.5328
+L 547.614 272.5272
+Q 547.614 280.2888 555.426 280.2888
+z
+" clip-path="url(#p3f065ccb25)" style="fill: #fff1df; stroke: #d68b24; stroke-width: 1.65; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_1">
+    <text style="font-weight: 700; font-size: 21px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="43.74" y="47.319919" transform="rotate(-0 43.74 47.319919)">2  Build candidate action queries</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #52627a" x="43.74" y="64.495003" transform="rotate(-0 43.74 64.495003)">Encode options once, then combine them into the currently legal actions</text>
+   </g>
+   <g id="text_3">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="53.784" y="101.465325" transform="rotate(-0 53.784 101.465325)">Current selection</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(53.784 123.130125)">Selection type and context</text>
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(53.784 137.710125)">Legal option list; min/max choices</text>
+   </g>
+   <g id="text_5">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="285.354" y="101.465325" transform="rotate(-0 285.354 101.465325)">Each offered option</text>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(285.354 123.130125)">Card, attack, target, area, relation</text>
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(285.354 137.710125)">Position and current game features</text>
+   </g>
+   <g id="text_7">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="536.454" y="101.465325" transform="rotate(-0 536.454 101.465325)">Option token · [512]</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(536.454 122.559563)">11 categorical + 5 numeric channels</text>
+    <text style="font-size: 10.2px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(536.454 136.329563)">Static/dynamic projections → token MLP</text>
+   </g>
+   <g id="patch_8">
+    <path d="M 257.105114 116.7408
+Q 263.871235 116.7408 268.736698 116.7408
+" style="fill: none; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+    <path d="M 263.136698 113.9408
+L 268.736698 116.7408
+L 263.136698 119.5408
+z
+" style="fill: #71839e; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 508.205114 116.7408
+Q 514.971235 116.7408 519.836698 116.7408
+" style="fill: none; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+    <path d="M 514.236698 113.9408
+L 519.836698 116.7408
+L 514.236698 119.5408
+z
+" style="fill: #71839e; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+   </g>
+   <g id="text_9">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="53.784" y="232.858125" transform="rotate(-0 53.784 232.858125)">Enumerate legal actions</text>
+   </g>
+   <g id="text_10">
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(53.784 254.522925)">One or several options per action</text>
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(53.784 269.102925)">Keep at most 64 candidates</text>
+   </g>
+   <g id="text_11">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="304.884" y="232.858125" transform="rotate(-0 304.884 232.858125)">Combine option tokens</text>
+   </g>
+   <g id="text_12">
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(304.884 254.522925)">Sum selected options per candidate</text>
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(304.884 269.102925)">Learned vector for an empty choice</text>
+   </g>
+   <g id="text_13">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #14213d" x="558.774" y="232.858125" transform="rotate(-0 558.774 232.858125)">Action queries · [A, 512]</text>
+   </g>
+   <g id="text_14">
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(558.774 254.522925)">LayerNorm + dropout</text>
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; fill: #52627a" transform="translate(558.774 269.102925)">One query per legal action</text>
+   </g>
+   <g id="patch_10">
+    <path d="M 644.569301 156.202548
+Q 528.36298 182.160004 414.011603 207.703115
+" style="fill: none; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+    <path d="M 420.087318 209.214963
+L 414.011603 207.703115
+L 418.866511 203.749651
+z
+" style="fill: #71839e; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 271.056817 244.8072
+Q 280.612183 244.8072 288.266892 244.8072
+" style="fill: none; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+    <path d="M 282.666892 242.0072
+L 288.266892 244.8072
+L 282.666892 247.6072
+z
+" style="fill: #71839e; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 524.946817 244.8072
+Q 534.502183 244.8072 542.156892 244.8072
+" style="fill: none; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+    <path d="M 536.556892 242.0072
+L 542.156892 244.8072
+L 536.556892 247.6072
+z
+" style="fill: #71839e; stroke: #71839e; stroke-width: 1.7; stroke-linecap: round"/>
+   </g>
+   <g id="text_15">
+    <text style="font-size: 11.5px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #52627a" x="49.32" y="342.936" transform="rotate(-0 49.32 342.936)">A ≤ 64; each candidate is scored against the same state memory in the decoder.</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="p3f065ccb25">
+   <rect x="15.84" y="15.84" width="781.2" height="415.8"/>
+  </clipPath>
+ </defs>
+</svg>

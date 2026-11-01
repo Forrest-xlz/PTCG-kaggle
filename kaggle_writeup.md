@@ -100,7 +100,7 @@ Together, the EDA pushed me toward broad replay coverage, whole-game and latest-
 
 ## Game representation and model architecture
 
-I represent the observation as game-state tokens and the legal choices as action tokens. This keeps the board objects separate while allowing each candidate action to inspect the entire visible state. The tables show the final feature layout; the diagram below shows how those features enter the Transformer.
+I represent the observation as game-state tokens and the legal choices as action tokens. The three diagrams below show how state, action options, and the final Transformer fit together.
 
 ### State tokens
 
@@ -118,6 +118,10 @@ The submitted models encode the visible game as 26 state tokens plus one token f
 
 The card-bearing regions use weighted embedding bags plus static card features; dense player/global summaries use separate MLPs. Region-specific token MLPs then bring the resulting representations into the shared 512-dimensional space. Empty Bench slots and an absent history token are masked in attention. Hidden opponent cards are never supplied as known card identities.
 
+The history token summarizes the previous three selected actions: option vectors within each action are combined, then the three action vectors are mapped to one token.
+
+![State and three-action history become 27 encoder tokens](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/model_state_tokens.png)
+
 ### Legal-action option tokens
 
 I treat each decision as a question with candidate answers. The engine's `select` context identifies what kind of choice is being requested; an option carries its type, candidate/target card IDs, attack ID, area and relation, numeric positions, and available static and dynamic card/attack features. This matters in a card game because the same card identity can mean different things when it is a source, target, effect, or context card, and because the legal set changes at every decision. The implementation sums learned and projected feature channels into a 512-dimensional option vector, then applies configured region/option MLPs. Candidate combinations are explicitly enumerated and formed by summing their constituent option vectors. When no option is selected, a learned no-action vector is used. The policy scores at most 64 enumerated legal combinations.
@@ -130,21 +134,19 @@ I treat each decision as a question with candidate answers. The engine's `select
 | Dynamic Pokémon and attack features | The relevant Pokémon's current state and attack matchup | Separate projections, zero when unavailable |
 | Multi-option action | The set of options selected together | Sum their option tokens; use a learned vector for an empty choice |
 
-I also encoded an option's position in the offered list. This can help imitate replay players who favor the first of several similar choices. The effect/context-card experiment later in the write-up tested whether adding more card context helped the policy.
+I also encoded an option's position in the offered list. This can help imitate replay players who favor the first of several similar choices.
+
+![Legal options become candidate action queries](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/model_action_tokens.png)
 
 ### Model architecture: encoder and candidate-query decoder
 
-![Detailed architecture of the submitted two-model behavior-cloning policy](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/model_architecture.png)
+![Encoder, candidate-query decoder, and two-model ensemble](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/model_policy_ensemble.png)
 
 The state path produces 27 contextual tokens: 26 current-state tokens and one history token. The option path produces one query for each enumerated legal action. Both paths use the same representation in the 3+3-layer and 4+4-layer models.
 
 The encoder self-attends over the visible game entities. The decoder starts from one query per legal candidate action and cross-attends to the same encoded state at each decoder layer. There is deliberately no self-attention among candidate actions. A candidate's score can depend on the entire visible board, while the score for one candidate does not depend on which other candidates happen to be placed beside it in the decoder tensor. The last linear layer returns one logit per action. During BC training, cross-entropy compares these logits with the demonstrated action; during inference, invalid enumerations are masked and the surviving probabilities are compared.
 
 Scoring the current legal options avoids a fixed output class for every possible card combination. The same state–action interaction can be used across different decision menus.
-
-### Using the previous three actions
-
-Short action sequences often form a combination: the next choice can depend on the card or target selected immediately before it. The model encodes the previous three actions, sums the options within each action, and combines the three action vectors into one history token. The final model uses the richest `full` history setting, including card, attack, static, and dynamic features. The history experiment below showed lower CE on all four tracked measures.
 
 ### Final model configuration
 
@@ -193,7 +195,6 @@ The table summarizes matched W&B comparisons at the last step shared by each pai
 | GEGLU − GELU | 9,720 | −0.0379 | +0.0021 | +0.0116 | +0.0024 |
 | Full dropout − dropout off | 9,990 | +0.0880 | −0.0115 | −0.0253 | −0.0082 |
 | Multitask − pure BC | 19,980 | −0.0011 | −0.0021 | −0.0037 | −0.0141 |
-| effect/contextCard roles − no roles | 5,400 | −0.0015 | −0.0107 | +0.0026 | −0.0040 |
 
 Each row compares one experiment with its own control.
 
@@ -215,13 +216,13 @@ On the full replay pool, Small improved over Tiny at their shared step 11,340: t
 
 I also tried a Base model. The early scale runs helped choose a workable model size; later experiments added the richer features and action history used by the final models.
 
-### 3. Recent action history carried useful decision context
+### 3. The three-action history token improved prediction
 
 I compared no history, basic history, and a fuller encoding of the previous three actions. At step 9,720, full history improved training, in-distribution, latest-date, and latest-date expert CE by 0.0088, 0.0216, 0.0328, and 0.0204 over no history. It also beat basic history on all four measures, so I kept the full history token.
 
 ![Three-action history encodings](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/03_action_history.png)
 
-### 4. Dropout helped validation more than a new activation
+### 4. Dropout improved validation CE
 
 I tested GEGLU after reading [*GLU Variants Improve Transformer*](https://arxiv.org/abs/2002.05202), then compared it with GELU on the replay splits.
 
@@ -231,45 +232,15 @@ Adding dropout to GEGLU raised training CE by 0.0880 but lowered the three valid
 
 ![Activation and dropout CE comparisons](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/04_activation_dropout.png)
 
-### 5. Multitask learning helped early, with mixed late results
+### 5. Auxiliary tasks helped the model
 
 I wondered whether extra training targets could help the encoder understand game state beyond the immediate action. Inspired partly by the multitask idea in [ExT5](https://arxiv.org/abs/2111.10952), I added predictions for the next decision, the opponent's deck, and the final own prize count.
 
 These three auxiliary losses used weights 0.08, 0.08, and 0.14. I had also considered predicting opponent strength, but did not include it in this run.
 
-Early and mid-training, the multitask model had lower main-task training CE than pure behavior cloning. That lead shrank from about 0.0065 at step 1,080 to 0.0011 at step 19,980. At the shared final step, the four CE measures in the figure were still slightly better for multitask (by 0.0011, 0.0021, 0.0037, and 0.0141), but its top-deck-archetype isolation CE was worse: 0.578 versus 0.563. The late result was mixed rather than a clear win, so I kept the simpler action-only objective for the submission.
+Early and mid-training, the auxiliary tasks gave the model a larger main-task CE advantage over pure behavior cloning. That lead shrank from about 0.0065 at step 1,080 to 0.0011 at step 19,980. At the shared final step, the four CE measures in the figure were still slightly better for multitask (by 0.0011, 0.0021, 0.0037, and 0.0141), while its top-deck-archetype isolation CE was worse: 0.578 versus 0.563. The final submission uses action-only training. A promising next experiment is to give auxiliary tasks more weight early, then gradually decay their weights toward zero so late training concentrates on action prediction.
 
 ![Multitask versus pure behavior cloning](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/05_multitask.png)
-
-### 6. Extra card features had mixed results
-
-I tested extra IDs and static features for the card causing an effect and its context card. At step 5,400, training, in-distribution, and latest-date expert CE improved by 0.0015, 0.0107, and 0.0040, but latest-date CE worsened by 0.0026. The mixed result did not make these extra fields a priority for the final model.
-
-![Effect and context-card feature comparison](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/07_effect_context.png)
-
-One possible explanation is that more card IDs help the model remember familiar cards without improving how it handles new combinations.
-
----
-
-## Decisions and ideas that did not become the final method
-
-### Deck-specific fine-tuning did not help
-
-I tried a language-model-style path: learn broadly from many games, then specialize on the strongest deck or players. Deck-specific fine-tuning worsened the validation groups I checked, including the target deck. I therefore kept broad training and left deck-specific fine-tuning, heavy expert oversampling, and expert-identity conditioning out of the submission.
-
-The target deck had far fewer selected games than the most common decks in the EDA. Keeping the broad replay pool gave the final models more card interactions and opponent situations to learn from.
-
-### Deck choice and opponents also mattered
-
-The matchup chart showed why a strong policy still needs a sensible deck: Festival Lead performed differently against Grimmsnarl, Alakazam, and Dragapult. As opponents changed decks, the challenge changed too. I considered following high-score teams' deck choices to anticipate the meta, but the submitted agent uses one Festival Lead deck throughout.
-
-I also considered that early results might change an agent's rating band and thus the opponents it faces later. This remained an idea rather than a strategy in the final submission.
-
-### What I would test next: actual games
-
-My next step would be to play candidate models against a fixed mix of decks and opponents, then review the turns that changed the result. Action CE helped me iterate, but an agent ultimately has to win games. This would show whether better history features, deck specialization, or a larger model actually improve play.
-
-I would then revisit the original BC-to-RL idea: start self-play from the replay-trained policy and compare it with the same fixed opponents. That would test whether reinforcement learning can improve on the imitation starting point.
 
 ---
 
@@ -280,14 +251,6 @@ After choosing the setup, I trained the final 3+3- and 4+4-layer policies on the
 At inference, both models score the same enumerated legal actions. I apply softmax to each model's FP32 logits, average their probability vectors equally, apply the damage-counter KO eligibility mask, and take the highest-scoring remaining action. The agent retains the previous three actions between decisions and uses a fixed 60-card Festival Lead deck. It does not run a search loop.
 
 Earlier validation runs favored ensembling on several subsets, so I combined the two final models.
-
----
-
-## What I learned
-
-Broad replay coverage mattered most: a model trained on 1% of selected replays fit its training actions well but struggled on recent games. The previous-three-action token helped across all four CE measures, and dropout improved validation despite a higher training loss. I used the larger Transformer setup and combined two model depths for the final submission.
-
-The main lesson was to learn game decisions from diverse replays first, then use recent and expert games to check whether the policy transfers. The next improvement should be measured in actual battles, with self-play RL as a possible continuation of the replay-trained policy.
 
 ---
 
