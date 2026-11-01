@@ -4,6 +4,7 @@ Start with the [quick-start guide](../imitation_learning/README.md). These docum
 
 For the submitted competition solution and its evidence, see the [full write-up](../kaggle_writeup.md) and [experiment results](solution-experiment-results.md).
 The [experiment branch map](experiment-branches.md) connects retained branch snapshots to representative W&B runs.
+The [W&B run curation](wandb-run-curation.md) lists the 22 named key runs and cleanup status for the other 76 runs.
 
 | Guide | Contents |
 |---|---|

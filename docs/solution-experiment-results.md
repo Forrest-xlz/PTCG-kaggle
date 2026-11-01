@@ -40,7 +40,7 @@ Small 的 1% run 训练 CE 最终约 0.399，但最新日期 CE 随训练升至�
 
 **图注：** 固定为完整 V1 训练划分，对比 Tiny（128 维，1+1 层）、Small（512 维，3+3 层）和 Base（768 维，6+6 层）。横轴为累计处理的训练动作样本。
 
-实验：[model_v1_data_full_model_small_pretrained / izjmqifz](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/izjmqifz)；对照：[model_v1_data_full_model_tiny_pretrained / 34onyy62](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/34onyy62)。四项指标共同记录的最后时点为 **optimizer_step=11,340**。
+实验：[E001-data-scale-small-100pct / izjmqifz](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/izjmqifz)；对照：[E001-data-scale-tiny-100pct / 34onyy62](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/34onyy62)。四项指标共同记录的最后时点为 **optimizer_step=11,340**。
 
 | 指标 | 实验 | 对照 | 差值（实验−对照） |
 |---|---:|---:|---:|
@@ -59,7 +59,7 @@ Tiny 与 Small 均使用 batch 4,096。Small 在这四项 CE 上均较低，但�
 
 **图注：** 比较无历史、Basic、Structural、Full 四种编码；各曲线截在共同训练进度 9,720 step。Full 在这四项 CE 上优于无历史对照。
 
-实验：[ver_1.4.3_full_12 / hcfee8qy](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/hcfee8qy)；对照：[ver_1.4.2_mlp32 / msrhj27e](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/msrhj27e)。四项指标共同记录的最后时点为 **optimizer_step=9,720**。
+实验：[E003-action-history-full / hcfee8qy](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/hcfee8qy)；对照：[E003-action-history-off / msrhj27e](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/msrhj27e)。四项指标共同记录的最后时点为 **optimizer_step=9,720**。
 
 | 指标 | 实验 | 对照 | 差值（实验−对照） |
 |---|---:|---:|---:|
@@ -80,7 +80,7 @@ Full 相对 Basic 的四项 CE 差值分别为 −0.0046、−0.0082、−0.0119
 
 ### GEGLU 与 GELU
 
-实验：[ver_1.4.5_geglu / dmae120r](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/dmae120r)；对照：[ver_1.4.5_gelu / xg77g879](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/xg77g879)。四项指标共同记录的最后时点为 **optimizer_step=9,720**。
+实验：[E004-activation-geglu-no-dropout / dmae120r](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/dmae120r)；对照：[E004-activation-gelu / xg77g879](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/xg77g879)。四项指标共同记录的最后时点为 **optimizer_step=9,720**。
 
 | 指标 | 实验 | 对照 | 差值（实验−对照） |
 |---|---:|---:|---:|
@@ -93,7 +93,7 @@ GEGLU 训练 CE 优势明显，但三项验证 CE 在这一共同点略高。ReL
 
 ### Dropout
 
-实验：[ver_1.4.5_geglu_dropout_full / 8gj1gsxn](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8gj1gsxn)；对照：[ver_1.4.5_geglu / dmae120r](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/dmae120r)。四项指标共同记录的最后时点为 **optimizer_step=9,990**。
+实验：[E004-geglu-full-dropout / 8gj1gsxn](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8gj1gsxn)；对照：[E004-activation-geglu-no-dropout / dmae120r](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/dmae120r)。四项指标共同记录的最后时点为 **optimizer_step=9,990**。
 
 | 指标 | 实验 | 对照 | 差值（实验−对照） |
 |---|---:|---:|---:|
@@ -112,7 +112,7 @@ GEGLU 训练 CE 优势明显，但三项验证 CE 在这一共同点略高。ReL
 
 **图注：** 纯 BC 与带 CLS 状态表示及辅助任务的 BC 对比；共同截止 19,980 step。辅助权重分别为 next decision 0.08、opponent deck 0.08、final own prize 0.14。
 
-实验：[ver_1.13.0 / 8o9qul5p](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8o9qul5p)；对照：[ver_1.6.5_d3_33_baseline / dxinbrdj](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/dxinbrdj)。四项指标共同记录的最后时点为 **optimizer_step=19,980**。
+实验：[E006-multitask-auxiliary / 8o9qul5p](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8o9qul5p)；对照：[E005-pure-bc-multitask-control / dxinbrdj](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/dxinbrdj)。四项指标共同记录的最后时点为 **optimizer_step=19,980**。
 
 对照核查：在导出的纯 BC run 中，`dxinbrdj` 与多任务 run 的模型主配置、训练配置及训练/验证样本数最接近；两者均选中 16,646,116 个训练动作，分布内与最新日期验证动作数分别为 874,261 和 389,814。模型差异是多任务的 CLS token 与辅助预测头。缓存 schema 从 16 升至 17，增加了辅助任务标签字段。另一条接近的纯 BC run `a7dtzcqf` 使用不同的败局采样比例，不适合作为这一实验的对照。
 
@@ -133,7 +133,7 @@ GEGLU 训练 CE 优势明显，但三项验证 CE 在这一共同点略高。ReL
 
 **图注：** 比较是否同时加入 effect 与 contextCard 角色 ID 及对应静态卡牌投影；共同截止 5,400 step。
 
-实验：[ver_1.4.0 / 8kju2961](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8kju2961)；对照：[ver_1.3.6_residual_false_mlp2 / no12vhhe](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/no12vhhe)。四项指标共同记录的最后时点为 **optimizer_step=5,400**。
+实验：[E002-effect-context-enabled / 8kju2961](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/8kju2961)；对照：[E002-effect-context-control / no12vhhe](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/no12vhhe)。四项指标共同记录的最后时点为 **optimizer_step=5,400**。
 
 | 指标 | 实验 | 对照 | 差值（实验−对照） |
 |---|---:|---:|---:|

@@ -77,6 +77,7 @@ The strongest recovered history comparison was full three-action history versus 
 | [imitation_learning/cfg/](imitation_learning/cfg/) | YAML settings for the project workflows |
 | [docs/](docs/README.md) | Technical guides, experiment report, and figures |
 | [Experiment branches](docs/experiment-branches.md) | Kept branch snapshots and their representative W&B runs |
+| [W&B run curation](docs/wandb-run-curation.md) | Key run names and the reviewed cleanup inventory |
 | [export_wandb_runs.py](export_wandb_runs.py) | Optional W&B run metadata export |
 
 The [project documentation index](docs/README.md) is the starting point for implementation details. Branch names record development history; use the linked W&B run configuration and checkpoint when interpreting an experiment.
