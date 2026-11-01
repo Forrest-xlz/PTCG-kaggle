@@ -208,6 +208,8 @@ I trained early Tiny (128 width, 1+1 layers) and Small (512 width, 3+3 layers) m
 
 With 1% of replays, Small reached training CE 0.3985 but latest-date CE 2.1403. With the full replay pool, training CE was 0.6312 and latest-date CE 0.9156. The smaller dataset was easier to memorize but transferred much worse to recent games. This convinced me to keep broad replay coverage even when it made training CE higher. ([1% run](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/f1ecq0x8); [full-replay run](https://forge.coreweave.com/wandb/xlz1014361885-tokyo/ptcg_bc/runs/izjmqifz))
 
+As I moved to a much larger and more diverse replay pool, I noticed that training loss and validation performance often improved together: train CE fell, validation CE fell, and action accuracy rose. My interpretation was that the model had enough varied situations to learn reusable card interactions and decision patterns, rather than only memorize individual replays. This gave me more confidence to keep expanding the data and model while watching the validation curves.
+
 ### 2. A larger model improved action prediction
 
 On the full replay pool, Small improved over Tiny at their shared step 11,340: training CE −0.3064, in-distribution CE −0.0933, latest-date CE −0.0060, and latest-date expert CE −0.0335. The largest gains were in training and familiar validation games, but the result encouraged me to explore larger models.
