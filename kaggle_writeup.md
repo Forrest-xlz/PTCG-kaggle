@@ -46,7 +46,13 @@ The training objective is the CE of the demonstrated legal action. It is a usefu
 
 ### Replay selection and stronger players' losses
 
-The replay extractor keeps each player's actions and the game result. Winner actions form the core training set. I also included some losing-player actions when **both players were strong enough to pass the daily score cutoff**. In a game with hidden cards and random draws, a strong player can make a good decision and still lose. Keeping these games exposes the model to difficult, losing positions that a winner-only dataset may miss.
+The decision I ultimately care about is the action that gives the best chance of winning from the information currently available:
+
+$$a^*(o)=\underset{a\in\mathcal A(o)}{\arg\max}\;P(\mathrm{win}\mid o,a).$$
+
+Here $o$ is the visible state and $\mathcal A(o)$ is the set of legal actions. The game result is a noisy signal about an earlier choice: hidden cards, future draws, coin tosses, and the opponent's responses can cause a player to lose even after choosing a strong action. That makes some actions in lost games relevant to the same goal as actions in won games. I expected these useful losing-game decisions to be more common among higher-scoring players, so I used score as a condition for including them rather than treating every loss alike.
+
+The replay extractor keeps each player's actions and the game result. Winner actions form the core behavior-cloning data. I additionally included losing-player actions from games in which **both players passed the daily score cutoff**. Requiring two strong participants focuses this augmentation on competitive games, while retaining difficult, losing positions that a winner-only dataset may miss. Behavior cloning learns to predict these demonstrated choices; the win-probability expression above describes the strategic goal behind the data selection, not a win-probability label available for every action.
 
 I limited this augmentation to the newest **25 eligible dates** and used a daily top-player fraction of **6%** to define the cutoff. Recent high-level games were especially relevant while the competing agents and deck choices were changing. The expert validation subset uses its own cutoff, so it answers a different question from the rule that admits losing-player actions.
 
@@ -62,7 +68,7 @@ The EDA changed which data I trusted, which holdouts I built, and how I interpre
 
 ![Exact top-deck replay coverage: raw, training and expert-training replays](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/eda/top_deck_coverage.png)
 
-The exact-deck coverage chart counts **unique replays**, in three increasingly selective pools: all raw replays, selected training replays, and expert-qualified training replays. This is a necessary check before trusting a narrow deck-specific CE score. The largest exact Grimmsnarl deck has **63,433 raw / 34,571 training / 3,640 expert-training replays**, whereas the exact Festival Lead deck has **1,570 / 671 / 226**. Those counts are replay counts, not action counts; the companion CSV also records action samples. A highly frequent deck can dominate ordinary training and aggregate validation, while a target deck with only hundreds of selected games yields noisier specialized conclusions. This motivated named top-deck subsets, minimum coverage requirements for isolation splits, and caution about fine-tuning a broad model on a small exact deck.
+The exact-deck coverage chart counts **unique replays**, in three increasingly selective pools: all raw replays, selected training replays, and expert-qualified training replays. This is a necessary check before trusting a narrow deck-specific CE score. The largest exact Grimmsnarl deck has **63,433 raw / 34,571 training / 3,640 expert-training replays**, whereas the exact Festival Lead deck has **1,570 / 671 / 226**. A highly frequent deck can dominate ordinary training and aggregate validation, while a target deck with only hundreds of selected games yields noisier specialized conclusions. This motivated named top-deck subsets, minimum coverage requirements for isolation splits, and caution about fine-tuning a broad model on a small exact deck.
 
 ![Same-archetype variants by changed card slots and replay coverage](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/eda/top_deck_archetype_coverage.png)
 
@@ -92,21 +98,45 @@ The EDA therefore led to four concrete modeling choices: use broad replay covera
 
 ---
 
-## Representation and policy model
+## Game representation and model architecture
 
-![Detailed architecture of the submitted two-model behavior-cloning policy](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/model_architecture.png)
+I represent the observation as game-state tokens and the legal choices as action tokens. This keeps the board objects separate while allowing each candidate action to inspect the entire visible state. The tables show the **final** feature layout; the diagram below shows how those features enter the Transformer.
 
-The diagram shows the two paths that meet in every decision: visible state and recent actions form the encoder memory, while the current legal options form action queries. The decoder scores each query against that state memory. The two final models share this structure and differ only in Transformer depth.
-
-### From V1 state tokens to V2 action-aware features
+### State tokens: from V1 to V2
 
 The first state design had **24 tokens**: eight Bench positions for each side, two Active Pokémon, two player summaries, own hand, own deck, Stadium, and global information. Each region accumulated learned categorical embeddings and value-weighted numeric embeddings. This was a way to give the Transformer persistent, interpretable entities. It also imposed a useful inductive bias: an Active Pokémon can attend to its energy and damage context, while player summaries can exchange information with the board. The V1 layout was a development step, not the final feature schema; the later model uses **26 base tokens** with separate discard regions and richer summaries. The comparison plots for early Tiny/Small/Base scale trials were produced with V1, which is why their absolute CE is not a final-checkpoint metric.
 
+| Final state-token indices | Region | Information represented |
+|---|---|---|
+| 0–7, 8–15 | Own and opponent Bench | Individual Pokémon slots, attached cards, status, and appearance state |
+| 16–17 | Own and opponent Active | Current Pokémon and its attached cards and state |
+| 18–19 | Player summaries | Hand, deck, prize, and other player-level quantities; own and opponent inputs use separate projections |
+| 20–21 | Own and opponent discard | Known discarded-card identities |
+| 22–24 | Own hand, own remaining deck, Stadium | Known hand and public Stadium cards; deck information is an estimate from the submitted list and observed cards |
+| 25 | Global and selection summary | Turn and current selection information, projected from numeric and one-hot fields |
+| 26 | Recent-action history | One token summarizing the previous three choices; appended to the 26 base tokens |
+
+The card-bearing regions use weighted embedding bags plus static card features; dense player/global summaries use separate MLPs. Region-specific token MLPs then bring the resulting representations into the shared **512-dimensional** space. Empty Bench slots and an absent history token are masked in attention. Hidden opponent cards are never supplied as known card identities.
+
+### Legal-action option tokens
+
 In V2 I treated each decision as a **question with candidate answers**. The engine's `select` context identifies what kind of choice is being requested; an option carries its type, candidate/target card IDs, attack ID, area and relation, numeric positions, and available static and dynamic card/attack features. This matters in a card game because the same card identity can mean different things when it is a source, target, effect, or context card, and because the legal set changes at every decision. The implementation sums learned and projected feature channels into a 512-dimensional option vector, then applies configured region/option MLPs. Candidate combinations are explicitly enumerated and formed by summing their constituent option vectors. When no option is selected, a learned no-action vector is used. The policy scores at most 64 enumerated legal combinations.
+
+| Option feature group | What it tells the model | Encoding |
+|---|---|---|
+| 11 categorical fields | Option type, selection context, candidate/target card, attack, number/count, player relation, areas, special condition | Learned embeddings |
+| 5 numeric fields | Card/Tool/Energy/in-play indices and relative position in the offered option list | Normalized values through an MLP |
+| Static card and attack features | Properties of the referenced cards and attack | Feature projections added to the option token |
+| Dynamic Pokémon and attack features | The relevant Pokémon's current state and attack matchup | Separate projections, zero when unavailable |
+| Multi-option action | The set of options selected together | Sum their option tokens; use a learned vector for an empty choice |
 
 The numeric position fields are also a possible shortcut: replay-generating agents may systematically choose the first of equivalent options. I suspected that relative position could raise imitation accuracy without changing game strength. I did not establish a controlled game-level test of that hypothesis, so the feature remains an implementation detail rather than a claimed performance mechanism. Likewise, the effect/context-card experiment later in this write-up gave mixed validation signals; having access to more observable information did not guarantee better transfer to a new card family.
 
-### Why an encoder and a candidate-query decoder?
+### Model architecture: encoder and candidate-query decoder
+
+![Detailed architecture of the submitted two-model behavior-cloning policy](https://raw.githubusercontent.com/Forrest-xlz/PTCG-kaggle/main/docs/figures/model_architecture.png)
+
+The state path produces **27 contextual tokens**: 26 current-state tokens and one history token. The option path produces one query for each enumerated legal action. Both paths use the same representation in the 3+3-layer and 4+4-layer models.
 
 The encoder self-attends over the visible game entities. The decoder starts from one query per legal candidate action and **cross-attends to the same encoded state at each decoder layer**. There is deliberately **no self-attention among candidate actions**. A candidate's score can depend on the entire visible board, while the score for one candidate does not depend on which other candidates happen to be placed beside it in the decoder tensor. The last linear layer returns one logit per action. During BC training, cross-entropy compares these logits with the demonstrated action; during inference, invalid enumerations are masked and the surviving probabilities are compared.
 
